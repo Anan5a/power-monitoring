@@ -1,5 +1,6 @@
 #include "coulomb_counter.h"
 #include "settings_manager.h"
+#include "sensor_manager.h"
 #include <Arduino.h>
 
 static float accumulated_mAh[4] = {0};
@@ -17,8 +18,16 @@ void update_coulomb_counter(const SensorData& data, float dt_seconds) {
         data.ina3221_current[0], data.ina3221_current[1],
         data.ina3221_current[2], data.ina226_current
     };
+    float shunt_v[4] = {
+        ina3221_getShuntVoltage(0),
+        ina3221_getShuntVoltage(1),
+        ina3221_getShuntVoltage(2),
+        ina226_getShuntVoltage()
+    };
+
     for (uint8_t ch = 0; ch < 4; ch++) {
-        accumulated_mAh[ch] += currents[ch] * dt_seconds / 3600.0f;
+        int8_t direction = (shunt_v[ch] < 0.0f) ? 1 : -1;  // neg shunt = charging = +mAh
+        accumulated_mAh[ch] += currents[ch] * dt_seconds / 3600.0f * (float)direction;
     }
     if (millis() - last_persist_ms >= 300000) {
         for (uint8_t ch = 0; ch < 4; ch++) settings_save_coulomb_mAh(ch, accumulated_mAh[ch]);

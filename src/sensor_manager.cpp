@@ -71,3 +71,19 @@ SensorData read_sensors() {
 
     return d;
 }
+
+#if ENABLE_INA3221
+float ina3221_getShuntVoltage(uint8_t ch) {
+    return ina3221.getShuntVoltage(ch);
+}
+#else
+float ina3221_getShuntVoltage(uint8_t) { return 0.0f; }
+#endif
+
+#if ENABLE_INA226
+float ina226_getShuntVoltage() {
+    return ina226.getShuntVoltage();
+}
+#else
+float ina226_getShuntVoltage() { return 0.0f; }
+#endif

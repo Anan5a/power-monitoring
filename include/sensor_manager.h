@@ -17,6 +17,9 @@ struct SensorData {
     float ads1115_volts[4];
 };
 
+float ina3221_getShuntVoltage(uint8_t ch);
+float ina226_getShuntVoltage();
+
 void init_sensors();
 SensorData read_sensors();
 
