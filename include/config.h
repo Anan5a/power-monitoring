@@ -25,6 +25,28 @@
 #define ENABLE_INA226    1
 #define ENABLE_ADS1115   1
 
+// INA3221 calibration: voltage offset (V) and current gain multiplier per channel
+#define INA3221_V_OFFSET_CH0  0.0f
+#define INA3221_V_OFFSET_CH1  0.0f
+#define INA3221_V_OFFSET_CH2  0.0f
+#define INA3221_I_GAIN_CH0    1.0f
+#define INA3221_I_GAIN_CH1    1.0f
+#define INA3221_I_GAIN_CH2    1.0f
+
+// INA226 calibration: voltage offset (V) and current gain multiplier
+#define INA226_V_OFFSET   0.0f
+#define INA226_I_GAIN     1.0f
+
+// ADS1115 calibration: voltage offset (V) and multiplier per channel
+#define ADS1115_OFFSET_CH0  0.0f
+#define ADS1115_OFFSET_CH1  0.0f
+#define ADS1115_OFFSET_CH2  0.0f
+#define ADS1115_OFFSET_CH3  0.0f
+#define ADS1115_GAIN_CH0   1.0f
+#define ADS1115_GAIN_CH1   1.0f
+#define ADS1115_GAIN_CH2   1.0f
+#define ADS1115_GAIN_CH3   1.0f
+
 // I2C device addresses (must be unique on the bus)
 #define INA3221_ADDR    0x40
 #define INA226_ADDR     0x41

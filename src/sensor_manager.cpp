@@ -44,21 +44,28 @@ SensorData read_sensors() {
 
 #if ENABLE_INA3221
     for (uint8_t ch = 0; ch < 3; ch++) {
-        d.ina3221_busV[ch]    = ina3221.getBusVoltage(ch);
-        d.ina3221_current[ch] = ina3221.getCurrentAmps(ch);
+        float v = ina3221.getBusVoltage(ch);
+        float i = ina3221.getCurrentAmps(ch);
+        float v_off = (ch == 0) ? INA3221_V_OFFSET_CH0 : (ch == 1) ? INA3221_V_OFFSET_CH1 : INA3221_V_OFFSET_CH2;
+        float i_gain = (ch == 0) ? INA3221_I_GAIN_CH0 : (ch == 1) ? INA3221_I_GAIN_CH1 : INA3221_I_GAIN_CH2;
+        d.ina3221_busV[ch] = v + v_off;
+        d.ina3221_current[ch] = i * i_gain;
     }
 #endif
 
 #if ENABLE_INA226
-    d.ina226_busV    = ina226.getBusVoltage();
-    d.ina226_current = ina226.getCurrent();
+    d.ina226_busV    = ina226.getBusVoltage() + INA226_V_OFFSET;
+    d.ina226_current = ina226.getCurrent() * INA226_I_GAIN;
     d.ina226_power   = ina226.getPower();
 #endif
 
 #if ENABLE_ADS1115
     for (uint8_t ch = 0; ch < 4; ch++) {
         int16_t raw = ads1115.readADC_SingleEnded(ch);
-        d.ads1115_volts[ch] = ads1115.computeVolts(raw);
+        float v = ads1115.computeVolts(raw);
+        float v_off = (ch == 0) ? ADS1115_OFFSET_CH0 : (ch == 1) ? ADS1115_OFFSET_CH1 : (ch == 2) ? ADS1115_OFFSET_CH2 : ADS1115_OFFSET_CH3;
+        float v_gain = (ch == 0) ? ADS1115_GAIN_CH0 : (ch == 1) ? ADS1115_GAIN_CH1 : (ch == 2) ? ADS1115_GAIN_CH2 : ADS1115_GAIN_CH3;
+        d.ads1115_volts[ch] = (v + v_off) * v_gain;
     }
 #endif
 
