@@ -20,6 +20,11 @@
 #define I2C_SDA         21
 #define I2C_SCL         22
 
+// Hardware enable/disable (set to 0 to disable a sensor block)
+#define ENABLE_INA3221   1
+#define ENABLE_INA226    1
+#define ENABLE_ADS1115   1
+
 // I2C device addresses (must be unique on the bus)
 #define INA3221_ADDR    0x40
 #define INA226_ADDR     0x41
