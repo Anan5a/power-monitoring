@@ -48,6 +48,31 @@ void settings_save_http_enabled(bool enabled) {
     prefs.putBool("http_en", enabled);
 }
 
+bool settings_load_supabase_url(char* url, size_t buf_len) {
+    if (!prefs.isKey("supa_url")) return false;
+    strlcpy(url, prefs.getString("supa_url", "").c_str(), buf_len);
+    return true;
+}
+void settings_save_supabase_url(const char* url) {
+    prefs.putString("supa_url", url);
+}
+bool settings_load_supabase_service_key(char* key, size_t buf_len) {
+    if (!prefs.isKey("supa_key")) return false;
+    strlcpy(key, prefs.getString("supa_key", "").c_str(), buf_len);
+    return true;
+}
+void settings_save_supabase_service_key(const char* key) {
+    prefs.putString("supa_key", key);
+}
+bool settings_load_supabase_device_key(char* key, size_t buf_len) {
+    if (!prefs.isKey("supa_dev")) return false;
+    strlcpy(key, prefs.getString("supa_dev", "").c_str(), buf_len);
+    return true;
+}
+void settings_save_supabase_device_key(const char* key) {
+    prefs.putString("supa_dev", key);
+}
+
 uint8_t settings_load_relay_count() {
     return prefs.getUChar("relay_count", 0);
 }
@@ -103,7 +128,7 @@ void settings_save_battery(uint8_t channel, const BatteryConfig* in) {
 }
 
 uint32_t settings_load_ble_pin() {
-    return prefs.getUInt("ble_pin", 0);
+    return prefs.getUInt("ble_pin", 123456);
 }
 void settings_save_ble_pin(uint32_t pin) {
     prefs.putUInt("ble_pin", pin);

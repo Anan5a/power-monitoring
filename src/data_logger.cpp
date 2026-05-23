@@ -30,6 +30,16 @@ static uint32_t entry_count = 0;
 static int16_t last_v[4] = {}, last_i[4] = {}, last_p[4] = {};
 static uint32_t last_ts = 0;
 static bool have_base = false;
+static time_t epoch_offset = 0;
+
+void log_set_epoch(time_t epoch) {
+    epoch_offset = epoch - millis() / 1000;
+    Serial.printf("Log: epoch offset set, time %s", ctime(&epoch));
+}
+
+time_t log_to_epoch(uint32_t timestamp_ms) {
+    return epoch_offset + timestamp_ms / 1000;
+}
 
 static inline size_t next_pos(size_t pos, size_t n) {
     size_t np = pos + n;
@@ -146,7 +156,7 @@ size_t log_pop_batch(uint8_t* out_buf, size_t out_len) {
 
 bool log_peek_latest(LogSnapshot* out) {
     if (!have_base) return false;
-    out->timestamp_ms = last_ts;
+    out->timestamp_s = epoch_offset + last_ts / 1000;
     for (int ch = 0; ch < 4; ch++) {
         out->voltage[ch] = last_v[ch] / 1000.0f;
         out->current[ch] = last_i[ch] / 1000.0f;

@@ -3,10 +3,11 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <time.h>
 #include "sensor_manager.h"
 
 struct LogSnapshot {
-    uint32_t timestamp_ms;
+    uint32_t timestamp_s;    // epoch seconds
     float voltage[4];
     float current[4];
     float power[4];
@@ -14,6 +15,8 @@ struct LogSnapshot {
 
 void init_data_logger();
 void log_sample(const SensorData& data, uint32_t timestamp_ms);
+void log_set_epoch(time_t epoch);
+time_t log_to_epoch(uint32_t timestamp_ms);
 
 size_t log_pop_batch(uint8_t* out_buf, size_t out_len);
 bool log_peek_latest(LogSnapshot* out);

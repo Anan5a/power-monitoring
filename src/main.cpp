@@ -10,6 +10,7 @@
 #include "ble_provisioner.h"
 
 static unsigned long last1s = 0;
+static unsigned long last5min = 0;
 static unsigned long last5s = 0;
 
 static void print_sensor_data(const SensorData& data) {
@@ -101,6 +102,7 @@ void setup() {
     init_sensors();
     init_display();
     init_connectivity();
+    log_set_epoch(get_epoch_time());
     init_data_logger();
     init_coulomb_counter();
     init_relays();
@@ -112,17 +114,23 @@ void setup() {
 void loop() {
     unsigned long now = millis();
 
-    if (now - last1s >= 1000) {
+    SensorData data;
+    if (now - last1s >= FAST_SAMPLE_INTERVAL_MS) {
         last1s = now;
-        SensorData data = read_sensors();
+        data = read_sensors();
         log_sample(data, now);
-        update_coulomb_counter(data, 1.0f);
+        update_coulomb_counter(data, FAST_SAMPLE_INTERVAL_MS / 1000.0f);
         evaluate_relays(data);
+    }
+
+    if (now - last5min >= 300000) {
+        last5min = now;
+        publish_data_supabase(data);
     }
 
     if (now - last5s >= SAMPLE_INTERVAL_MS) {
         last5s = now;
-        SensorData data = read_sensors();
+        data = read_sensors();
         float total_power = 0;
         for (int ch = 0; ch < 3; ch++) total_power += data.ina3221_busV[ch] * data.ina3221_current[ch];
         total_power += data.ina226_power;

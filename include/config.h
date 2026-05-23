@@ -28,6 +28,7 @@
 
 // Sampling and display timing
 #define SAMPLE_INTERVAL_MS  5000
+#define FAST_SAMPLE_INTERVAL_MS 500
 #define DISPLAY_INTERVAL_MS 1000
 
 // BLE settings

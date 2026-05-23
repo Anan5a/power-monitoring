@@ -3,33 +3,67 @@
 #include "settings_manager.h"
 #include "data_logger.h"
 #include "ble_provisioner.h"
+#include "coulomb_counter.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <BlynkSimpleEsp32.h>
 #include <HTTPClient.h>
+#include <time.h>
 
 static WiFiClient wifiClient;
 static PubSubClient mqtt(wifiClient);
 
 static char ip_str[16] = "0.0.0.0";
 
+static bool skip_network = false;
+
+static time_t epoch_time = 0;
+
+static void sync_time() {
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    struct tm ti = {};
+    if (getLocalTime(&ti, 5000)) {
+        epoch_time = mktime(&ti);
+        char buf[32];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &ti);
+        Serial.print("NTP time: "); Serial.println(buf);
+    } else {
+        Serial.println("NTP sync failed");
+    }
+}
+
 static void connect_wifi() {
     char ssid[64], pass[64];
     if (settings_load_wifi(ssid, pass, sizeof(ssid))) {
         WiFi.begin(ssid, pass);
     } else {
-        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        // Use compile-time defaults only if they look real (not placeholder)
+        if (strlen(WIFI_SSID) > 5 && strcmp(WIFI_SSID, "YOUR_SSID") != 0) {
+            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        } else {
+            Serial.println("WiFi: no credentials — offline mode");
+            skip_network = true;
+            return;
+        }
     }
-    while (WiFi.status() != WL_CONNECTED) {
+    int attempts = 20; // ~10 seconds timeout
+    while (WiFi.status() != WL_CONNECTED && attempts-- > 0) {
         delay(500);
         Serial.print(".");
     }
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("\nWiFi: connection failed — offline mode");
+        skip_network = true;
+        return;
+    }
     strlcpy(ip_str, WiFi.localIP().toString().c_str(), sizeof(ip_str));
     Serial.println("\nWiFi connected");
+    sync_time();
 }
 
 static void connect_mqtt() {
+    if (skip_network) return;
     while (!mqtt.connected()) {
         if (mqtt.connect("power-monitor-esp32")) {
             Serial.println("MQTT connected");
@@ -42,6 +76,7 @@ static void connect_mqtt() {
 }
 
 const char* get_local_ip_str() { return ip_str; }
+time_t get_epoch_time() { return epoch_time; }
 
 void publish_data_http(const SensorData& data, const char* json_buffer, size_t json_len) {
     if (!settings_load_http_enabled()) return;
@@ -61,6 +96,11 @@ void publish_data_http(const SensorData& data, const char* json_buffer, size_t j
 void init_connectivity() {
     connect_wifi();
 
+    if (skip_network) {
+        Serial.println("Network: offline mode active");
+        return;
+    }
+
     mqtt.setServer(MQTT_BROKER, MQTT_PORT);
     connect_mqtt();
 
@@ -73,6 +113,7 @@ void init_connectivity() {
 }
 
 void loop_connectivity() {
+    if (skip_network) return;
     if (!mqtt.connected()) {
         connect_mqtt();
     }
@@ -109,6 +150,8 @@ void publish_log_batch() {
 }
 
 void publish_data(const SensorData& data) {
+    if (skip_network) return;
+
     JsonDocument doc;
 
     JsonArray ina3221Arr = doc["ina3221"].to<JsonArray>();
@@ -146,4 +189,74 @@ void publish_data(const SensorData& data) {
     Blynk.virtualWrite(V5, data.ads1115_volts[0]);
 
     ble_notify_sensor_data(buffer, len);
+}
+
+void publish_data_supabase(const SensorData& data) {
+    char supabase_url[128], service_key[128], device_key[64];
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
+    if (!settings_load_supabase_service_key(service_key, sizeof(service_key))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+
+    HTTPClient http;
+    http.begin(String(supabase_url) + "/rest/v1/rpc/insert_telemetry");
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", service_key);
+    http.addHeader("Authorization", "Bearer " + String(service_key));
+
+    uint32_t ms = millis();
+    time_t epoch_s = (epoch_time > 0) ? epoch_time + ms / 1000 : time(nullptr);
+
+    JsonDocument doc;
+    doc["p_device_key"] = device_key;
+
+    JsonObject payload = doc["p_payload"].to<JsonObject>();
+    for (uint8_t i = 0; i < 3; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "ina3221_v%d", i);
+        payload[key] = data.ina3221_busV[i];
+        snprintf(key, sizeof(key), "ina3221_i%d", i);
+        payload[key] = data.ina3221_current[i];
+    }
+    payload["ina226_v"] = data.ina226_busV;
+    payload["ina226_i"] = data.ina226_current;
+    payload["ina226_p"] = data.ina226_power;
+    for (uint8_t i = 0; i < 4; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "ads1115_%d", i);
+        payload[key] = data.ads1115_volts[i];
+    }
+    for (uint8_t i = 0; i < 4; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "coulomb_mah%d", i);
+        payload[key] = get_coulomb_mAh(i);
+    }
+    for (uint8_t i = 0; i < 4; i++) {
+        BatteryConfig bat;
+        if (settings_load_battery(i, &bat) && bat.capacity_mAh > 0) {
+            float soc = bat.initial_soc_pct + (get_coulomb_mAh(i) / bat.capacity_mAh) * 100.0f;
+            soc = soc < 0 ? 0 : soc > 100 ? 100 : soc;
+            char key[16];
+            snprintf(key, sizeof(key), "soc_pct%d", i);
+            payload[key] = soc;
+        }
+    }
+    payload["log_entries"] = log_entries_count();
+    payload["log_overflow"] = log_has_overflow_file();
+    payload["log_overflow_bytes"] = log_overflow_file_size();
+
+    JsonObject metadata = doc["p_metadata"].to<JsonObject>();
+    metadata["rssi"] = WiFi.RSSI();
+    metadata["vcc"] = analogRead(0) / 4095.0f * 3.3f;
+    metadata["uptime_s"] = millis() / 1000;
+
+    doc["p_recorded_at"] = (uint32_t)epoch_s;
+
+    char buffer[1024];
+    size_t len = serializeJson(doc, buffer);
+
+    int rc = http.POST((uint8_t*)buffer, len);
+    http.end();
+    if (rc != 200 && rc != 201 && rc != 204) {
+        Serial.print("Supabase publish failed: "); Serial.println(rc);
+    }
 }

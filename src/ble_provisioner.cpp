@@ -4,6 +4,7 @@
 #include "sensor_manager.h"
 #include "data_logger.h"
 #include "coulomb_counter.h"
+#include "connectivity_manager.h"
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -21,7 +22,10 @@ static void handle_command(const char* json);
 
 class ProvServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) { bleClientConnected = true; }
-    void onDisconnect(BLEServer* pServer) { bleClientConnected = false; }
+    void onDisconnect(BLEServer* pServer) {
+        bleClientConnected = false;
+        BLEDevice::startAdvertising();
+    }
 };
 
 class CmdCallbacks : public BLECharacteristicCallbacks {
@@ -205,6 +209,42 @@ static void handle_command(const char* json) {
         char buf[128];
         serializeJson(resp, buf);
         send_response(buf);
+    } else if (strcmp(cmd, "set_supabase") == 0) {
+        if (!check_pin(doc)) return;
+        settings_save_supabase_url(doc["url"] | "");
+        settings_save_supabase_service_key(doc["service_key"] | "");
+        settings_save_supabase_device_key(doc["device_key"] | "");
+        send_response("{\"ok\":true,\"msg\":\"supabase_saved\"}");
+    } else if (strcmp(cmd, "get_supabase") == 0) {
+        if (!check_pin(doc)) return;
+        char url[128] = "", service_key[128] = "", device_key[64] = "";
+        JsonDocument resp;
+        bool has_url = settings_load_supabase_url(url, sizeof(url));
+        bool has_skey = settings_load_supabase_service_key(service_key, sizeof(service_key));
+        bool has_dkey = settings_load_supabase_device_key(device_key, sizeof(device_key));
+        if (has_url && has_skey && has_dkey) {
+            resp["ok"] = true;
+            resp["url"] = url;
+            resp["service_key"] = "***";
+            resp["device_key"] = device_key;
+        } else {
+            resp["ok"] = false;
+            resp["error"] = "supabase_not_configured";
+        }
+        char buf[384];
+        serializeJson(resp, buf);
+        send_response(buf);
+    } else if (strcmp(cmd, "get_device_info") == 0) {
+        if (!check_pin(doc)) return;
+        JsonDocument resp;
+        resp["ok"] = true;
+        resp["uptime_s"] = millis() / 1000;
+        char ip[16] = "0.0.0.0";
+        strlcpy(ip, get_local_ip_str(), sizeof(ip));
+        resp["ip"] = ip;
+        char buf[256];
+        serializeJson(resp, buf);
+        send_response(buf);
     } else if (strcmp(cmd, "factory_reset") == 0) {
         if (!check_pin(doc)) return;
         settings_factory_reset();
@@ -250,6 +290,7 @@ void init_ble_provisioner() {
     pAdvertising->setScanResponse(true);
     pAdvertising->setMinPreferred(0x06);
     BLEDevice::startAdvertising();
+    Serial.println("BLE advertising as 'PowerMonitor'");
 }
 
 void loop_ble_provisioner() {
