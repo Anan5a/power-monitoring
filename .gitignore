@@ -1,2 +1,4 @@
 .pio
 node_modules/
+.remember/
+min_spiffs.csv
