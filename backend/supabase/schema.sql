@@ -1,0 +1,336 @@
+-- Enable pg_cron for scheduled maintenance
+create extension if not exists pg_cron;
+
+---------------------------------------------------------------
+-- 1. User profiles (extends auth.users)
+---------------------------------------------------------------
+create table public.profiles (
+    id uuid primary key references auth.users(id) on delete cascade,
+    display_name text,
+    created_at timestamptz default now()
+);
+
+---------------------------------------------------------------
+-- 2. Device registry
+---------------------------------------------------------------
+create table public.devices (
+    id uuid default gen_random_uuid() primary key,
+    user_id uuid not null references public.profiles(id) on delete cascade,
+    device_name text not null,
+    device_type text not null default 'generic',
+    device_key text unique not null,
+    is_online boolean default false,
+    last_seen_at timestamptz default now(),
+    created_at timestamptz default now()
+);
+
+create index idx_devices_user_id on public.devices (user_id);
+create index idx_devices_device_key on public.devices (device_key);
+
+---------------------------------------------------------------
+-- 3. Device profiles — defines which payload fields to chart per device type
+---------------------------------------------------------------
+create table public.device_profiles (
+    id bigint generated always as identity primary key,
+    device_type text unique not null,
+    label text not null,
+    fields jsonb not null default '[]'
+);
+
+---------------------------------------------------------------
+-- 4. Telemetry — raw readings (hot, 7-day rolling retention)
+---------------------------------------------------------------
+create table public.telemetry_live (
+    id bigint generated always as identity primary key,
+    device_id text not null,
+    recorded_at timestamptz default now() not null,
+    payload jsonb not null default '{}',
+    metadata jsonb default '{}'
+);
+
+alter table public.telemetry_live replica identity full;
+drop publication if exists supabase_realtime;
+create publication supabase_realtime for table public.telemetry_live, public.devices, public.telemetry_archive;
+
+create index idx_telemetry_live_device_time
+    on public.telemetry_live (device_id, recorded_at desc);
+create index idx_telemetry_live_recorded_at
+    on public.telemetry_live (recorded_at desc);
+
+---------------------------------------------------------------
+-- 5. Daily archive (cold, indefinite) — aggregates all numeric payload fields
+---------------------------------------------------------------
+create table public.telemetry_archive (
+    id bigint generated always as identity primary key,
+    device_id text not null,
+    log_date date not null,
+    sample_count bigint not null,
+    payload_agg jsonb not null default '{}',
+    constraint unique_device_date unique(device_id, log_date)
+);
+
+create index idx_telemetry_archive_device_date
+    on public.telemetry_archive (device_id, log_date desc);
+
+---------------------------------------------------------------
+-- 6. Relay states (for power-monitor device type)
+---------------------------------------------------------------
+create table public.relay_states (
+    id bigint generated always as identity primary key,
+    device_key text not null references public.devices(device_key) on delete cascade,
+    relay_index smallint not null,
+    gpio_pin smallint not null,
+    is_energized boolean default false,
+    last_tripped_at timestamptz,
+    constraint unique_relay unique(device_key, relay_index)
+);
+
+---------------------------------------------------------------
+-- Triggers
+---------------------------------------------------------------
+
+-- Auto-create profile when user signs up
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer as $$
+begin
+    insert into public.profiles (id, display_name)
+    values (
+        new.id,
+        coalesce(
+            new.raw_user_meta_data->>'display_name',
+            split_part(new.email, '@', 1)
+        )
+    );
+    return new;
+end;
+$$;
+
+create trigger on_auth_user_created
+    after insert on auth.users
+    for each row execute function public.handle_new_user();
+
+-- Auto-update last_seen_at and is_online on telemetry insert
+create or replace function public.handle_telemetry_insert()
+returns trigger language plpgsql security definer as $$
+begin
+    update public.devices
+    set last_seen_at = now(), is_online = true
+    where device_key = new.device_id;
+    return new;
+end;
+$$;
+
+create trigger on_telemetry_insert
+    after insert on public.telemetry_live
+    for each row execute function public.handle_telemetry_insert();
+
+---------------------------------------------------------------
+-- Row Level Security
+---------------------------------------------------------------
+alter table public.profiles enable row level security;
+alter table public.devices enable row level security;
+alter table public.device_profiles enable row level security;
+alter table public.telemetry_live enable row level security;
+alter table public.telemetry_archive enable row level security;
+alter table public.relay_states enable row level security;
+
+-- Profiles: users manage own profile
+create policy "own_profile" on public.profiles
+    for all to authenticated using (id = auth.uid());
+
+-- Devices: users full access to own devices
+create policy "own_devices" on public.devices
+    for all to authenticated using (user_id = auth.uid());
+
+-- Device profiles: all authenticated can read (for UI dropdown)
+create policy "read_device_profiles" on public.device_profiles
+    for select to authenticated using (true);
+
+-- Telemetry live: users read own device data only
+-- (device_id = device_key which maps to user_id via devices table)
+create policy "own_telemetry_select" on public.telemetry_live
+    for select to authenticated
+    using (
+        exists (
+            select 1 from public.devices d
+            join public.profiles p on p.id = d.user_id
+            where d.device_key = telemetry_live.device_id
+              and p.id = auth.uid()
+        )
+    );
+
+-- Telemetry archive: same auth pattern
+create policy "own_archive_select" on public.telemetry_archive
+    for select to authenticated
+    using (
+        exists (
+            select 1 from public.devices d
+            join public.profiles p on p.id = d.user_id
+            where d.device_key = telemetry_archive.device_id
+              and p.id = auth.uid()
+        )
+    );
+
+-- Relay states: users manage own relays
+create policy "own_relays" on public.relay_states
+    for all to authenticated
+    using (
+        exists (
+            select 1 from public.devices d
+            join public.profiles p on p.id = d.user_id
+            where d.device_key = relay_states.device_key
+              and p.id = auth.uid()
+        )
+    );
+
+---------------------------------------------------------------
+-- Secure RPC: ESP32 inserts telemetry (no auth.uid() needed)
+-- This is called by the ESP32 using service_role key.
+-- The function validates device_key belongs to a real user before inserting.
+-- Accepts optional p_recorded_at (Unix epoch seconds) for accurate measurement timestamps.
+---------------------------------------------------------------
+create or replace function public.insert_telemetry(
+    p_device_key text,
+    p_payload jsonb,
+    p_metadata jsonb default '{}',
+    p_recorded_at bigint default null
+) returns void language plpgsql security definer as $$
+begin
+    -- Verify device_key exists
+    if not exists (
+        select 1 from public.devices
+        where device_key = p_device_key
+    ) then
+        raise exception 'Invalid device_key';
+    end if;
+
+    insert into public.telemetry_live (device_id, payload, metadata, recorded_at)
+    values (
+        p_device_key,
+        p_payload,
+        p_metadata,
+        case
+            when p_recorded_at is not null then to_timestamp(p_recorded_at)::timestamptz
+            else now()
+        end
+    );
+end;
+$$;
+
+-- No direct insert allowed; ESP32 must use the RPC
+create policy "no_direct_insert" on public.telemetry_live
+    for insert to authenticated using (false);
+
+---------------------------------------------------------------
+-- pg_cron: Daily maintenance at midnight UTC
+-- Adaptive retention: keeps at least 7 days, targets 80% storage capacity
+---------------------------------------------------------------
+create or replace function public.archive_and_purge_telemetry()
+returns void language plpgsql security definer as $$
+declare
+    yd date := current_date - interval '1 day';
+    row_ct bigint;
+    size_mb numeric;
+    cutoff_ts timestamptz;
+begin
+    -- Step 1: Archive yesterday's telemetry into daily aggregates
+    insert into public.telemetry_archive (device_id, log_date, sample_count, payload_agg)
+    select
+        device_id,
+        yd,
+        count(id),
+        jsonb_object(array_agg(key || '_avg'), array_agg(avg_val::text))
+    from (
+        select
+            t.device_id,
+            (each(t.payload)).key,
+            avg((each(t.payload)).value::numeric) as avg_val
+        from public.telemetry_live t
+        where t.recorded_at >= yd and t.recorded_at < current_date
+        group by t.device_id, (each(t.payload)).key
+    ) sub
+    group by device_id
+    on conflict (device_id, log_date) do nothing;
+
+    get diagnostics row_ct = row_count;
+
+    -- Step 2: Compute retention based on actual storage used
+    -- Free tier limit = 500 MB. Target to keep us well under it.
+    -- Check total row count and approx storage
+    select into size_mb
+        pg_total_relation_size('public.telemetry_live') / (1024 * 1024);
+
+    -- If using > 80% of 500 MB (400 MB), start pruning
+    -- Each row is roughly 100-200 bytes with typical payload
+    -- 80% capacity ≈ 2M rows. Prune oldest 10% beyond minimum 7 days.
+    if size_mb > 400 then
+        -- Calculate cutoff: keep at least 7 days, prune oldest beyond that
+        -- until we're under 350 MB (70%)
+        select recorded_at into cutoff_ts
+        from public.telemetry_live
+        order by recorded_at asc
+        limit 1;
+
+        -- Keep minimum 7 days, delete oldest entries until under threshold
+        while size_mb > 350 and cutoff_ts < current_timestamp - interval '7 days' loop
+            delete from public.telemetry_live
+            where recorded_at <= cutoff_ts
+              and recorded_at < current_timestamp - interval '7 days';
+
+            -- Move cutoff forward
+            select recorded_at into cutoff_ts
+            from public.telemetry_live
+            order by recorded_at asc
+            limit 1;
+
+            select pg_total_relation_size('public.telemetry_live') / (1024 * 1024) into size_mb;
+            exit when cutoff_ts is null;
+        end loop;
+    end if;
+
+    -- Step 3: Mark devices offline if no telemetry in last 24 hours
+    update public.devices d
+    set is_online = false
+    where d.last_seen_at < current_timestamp - interval '1 day';
+end;
+$$;
+
+select cron.schedule(
+    'telemetry-maintenance',
+    '0 0 * * *',
+    'select public.archive_and_purge_telemetry()'
+);
+
+---------------------------------------------------------------
+-- Seed data: power-monitor device profile
+---------------------------------------------------------------
+insert into public.device_profiles (device_type, label, fields) values (
+    'power-monitor',
+    'Power Monitor v2',
+    '[
+        {"key": "ina3221_v0", "label": "Ch0 Voltage", "unit": "V", "chart": true},
+        {"key": "ina3221_i0", "label": "Ch0 Current", "unit": "A", "chart": true},
+        {"key": "ina3221_v1", "label": "Ch1 Voltage", "unit": "V", "chart": true},
+        {"key": "ina3221_i1", "label": "Ch1 Current", "unit": "A", "chart": true},
+        {"key": "ina3221_v2", "label": "Ch2 Voltage", "unit": "V", "chart": true},
+        {"key": "ina3221_i2", "label": "Ch2 Current", "unit": "A", "chart": true},
+        {"key": "ina226_v", "label": "Ch3 Voltage", "unit": "V", "chart": true},
+        {"key": "ina226_i", "label": "Ch3 Current", "unit": "A", "chart": true},
+        {"key": "ina226_p", "label": "Ch3 Power", "unit": "W", "chart": true},
+        {"key": "ads1115_0", "label": "ADC Ch0", "unit": "V", "chart": true},
+        {"key": "ads1115_1", "label": "ADC Ch1", "unit": "V", "chart": false},
+        {"key": "ads1115_2", "label": "ADC Ch2", "unit": "V", "chart": false},
+        {"key": "ads1115_3", "label": "ADC Ch3", "unit": "V", "chart": false},
+        {"key": "coulomb_mah0", "label": "Ch0 mAh", "unit": "mAh", "chart": false},
+        {"key": "coulomb_mah1", "label": "Ch1 mAh", "unit": "mAh", "chart": false},
+        {"key": "coulomb_mah2", "label": "Ch2 mAh", "unit": "mAh", "chart": false},
+        {"key": "coulomb_mah3", "label": "Ch3 mAh", "unit": "mAh", "chart": false},
+        {"key": "soc_pct0", "label": "Ch0 SoC", "unit": "%", "chart": true},
+        {"key": "soc_pct1", "label": "Ch1 SoC", "unit": "%", "chart": true},
+        {"key": "soc_pct2", "label": "Ch2 SoC", "unit": "%", "chart": true},
+        {"key": "soc_pct3", "label": "Ch3 SoC", "unit": "%", "chart": true},
+        {"key": "relay_states", "label": "Relay States", "unit": "", "chart": false},
+        {"key": "log_entries", "label": "Log Entries", "unit": "", "chart": false},
+        {"key": "log_overflow", "label": "Log Overflow", "unit": "", "chart": false}
+    ]'::jsonb
+);
