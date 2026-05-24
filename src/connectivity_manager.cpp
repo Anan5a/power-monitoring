@@ -192,22 +192,24 @@ void publish_data(const SensorData& data) {
 }
 
 void publish_data_supabase(const SensorData& data) {
-    char supabase_url[128], service_key[128], device_key[64];
+    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
-    if (!settings_load_supabase_service_key(service_key, sizeof(service_key))) return;
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
     if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
 
     HTTPClient http;
     http.begin(String(supabase_url) + "/rest/v1/rpc/insert_telemetry");
     http.addHeader("Content-Type", "application/json");
-    http.addHeader("apikey", service_key);
-    http.addHeader("Authorization", "Bearer " + String(service_key));
+    http.addHeader("apikey", anon_key);
+    http.addHeader("Authorization", "Bearer " + String(anon_key));
 
     uint32_t ms = millis();
     time_t epoch_s = (epoch_time > 0) ? epoch_time + ms / 1000 : time(nullptr);
 
     JsonDocument doc;
     doc["p_device_key"] = device_key;
+    doc["p_device_api_key"] = api_key;
 
     JsonObject payload = doc["p_payload"].to<JsonObject>();
     for (uint8_t i = 0; i < 3; i++) {

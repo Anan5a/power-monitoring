@@ -56,13 +56,21 @@ bool settings_load_supabase_url(char* url, size_t buf_len) {
 void settings_save_supabase_url(const char* url) {
     prefs.putString("supa_url", url);
 }
-bool settings_load_supabase_service_key(char* key, size_t buf_len) {
-    if (!prefs.isKey("supa_key")) return false;
-    strlcpy(key, prefs.getString("supa_key", "").c_str(), buf_len);
+bool settings_load_supabase_anon_key(char* key, size_t buf_len) {
+    if (!prefs.isKey("supa_anon")) return false;
+    strlcpy(key, prefs.getString("supa_anon", "").c_str(), buf_len);
     return true;
 }
-void settings_save_supabase_service_key(const char* key) {
-    prefs.putString("supa_key", key);
+void settings_save_supabase_anon_key(const char* key) {
+    prefs.putString("supa_anon", key);
+}
+bool settings_load_supabase_api_key(char* key, size_t buf_len) {
+    if (!prefs.isKey("supa_api")) return false;
+    strlcpy(key, prefs.getString("supa_api", "").c_str(), buf_len);
+    return true;
+}
+void settings_save_supabase_api_key(const char* key) {
+    prefs.putString("supa_api", key);
 }
 bool settings_load_supabase_device_key(char* key, size_t buf_len) {
     if (!prefs.isKey("supa_dev")) return false;

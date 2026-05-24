@@ -10,20 +10,20 @@ Authentication: All endpoints require `apikey` and `Authorization: Bearer <key>`
 
 ### POST `/rest/v1/rpc/insert_telemetry`
 
-Insert a telemetry reading. Called by ESP32 using `service_role` key.
+Insert a telemetry reading. Called by ESP32 using a per-device limited anon key (NOT service_role).
 
 **Headers:**
 ```
 Content-Type: application/json
-apikey: <service_role_key>
-Authorization: Bearer <service_role_key>
-Prefer: return=minimal
+apikey: <per-device anon key>
+Authorization: Bearer <per-device anon key>
 ```
 
 **Body:**
 ```json
 {
   "p_device_key": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "p_device_api_key": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
   "p_payload": {
     "sensor_key": 12.34,
     "another_sensor": 56.78
@@ -38,6 +38,9 @@ Prefer: return=minimal
 ```
 
 | Field | Type | Required | Description |
+|---|---|---|---|
+| `p_device_key` | text | Yes | Device UUID (maps device to user account) |
+| `p_device_api_key` | uuid | Yes | Per-device API key — validates this device can only insert its own data |
 |---|---|---|---|
 | `p_device_key` | text | Yes | Device key from `devices` table |
 | `p_payload` | jsonb | Yes | Any `{key: value}` sensor readings |

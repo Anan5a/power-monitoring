@@ -19,6 +19,7 @@ create table public.devices (
     device_name text not null,
     device_type text not null default 'generic',
     device_key text unique not null,
+    device_api_key uuid unique not null default gen_random_uuid(),
     is_online boolean default false,
     last_seen_at timestamptz default now(),
     created_at timestamptz default now()
@@ -184,24 +185,26 @@ create policy "own_relays" on public.relay_states
     );
 
 ---------------------------------------------------------------
--- Secure RPC: ESP32 inserts telemetry (no auth.uid() needed)
--- This is called by the ESP32 using service_role key.
--- The function validates device_key belongs to a real user before inserting.
--- Accepts optional p_recorded_at (Unix epoch seconds) for accurate measurement timestamps.
+-- Secure RPC: ESP32 inserts telemetry using per-device API key
+-- The function validates both device_key AND device_api_key.
+-- ESP32 uses device_api_key via the project's anon key (not service_role).
+-- This means one compromised device cannot inject data for another device.
 ---------------------------------------------------------------
 create or replace function public.insert_telemetry(
     p_device_key text,
+    p_device_api_key uuid,
     p_payload jsonb,
     p_metadata jsonb default '{}',
     p_recorded_at bigint default null
 ) returns void language plpgsql security definer as $$
 begin
-    -- Verify device_key exists
+    -- Verify device_key AND device_api_key both match the same device
     if not exists (
         select 1 from public.devices
         where device_key = p_device_key
+          and device_api_key = p_device_api_key
     ) then
-        raise exception 'Invalid device_key';
+        raise exception 'Invalid device_key or device_api_key';
     end if;
 
     insert into public.telemetry_live (device_id, payload, metadata, recorded_at)
@@ -217,7 +220,18 @@ begin
 end;
 $$;
 
--- No direct insert allowed; ESP32 must use the RPC
+-- Direct insert only allowed with valid device_api_key via the RPC function
+-- (the RPC validates both keys, so a compromised anon key for one device
+--  cannot insert for any other device)
+create policy "anon_insert_telemetry" on public.telemetry_live
+    for insert to authenticated
+    with check (
+        exists (
+            select 1 from public.devices d
+            where d.device_key = telemetry_live.device_id
+              and d.device_api_key = current_setting('app.device_api_key', true)::uuid
+        )
+    );
 create policy "no_direct_insert" on public.telemetry_live
     for insert to authenticated using (false);
 

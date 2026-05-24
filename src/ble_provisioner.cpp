@@ -212,20 +212,23 @@ static void handle_command(const char* json) {
     } else if (strcmp(cmd, "set_supabase") == 0) {
         if (!check_pin(doc)) return;
         settings_save_supabase_url(doc["url"] | "");
-        settings_save_supabase_service_key(doc["service_key"] | "");
+        settings_save_supabase_anon_key(doc["anon_key"] | "");
+        settings_save_supabase_api_key(doc["api_key"] | "");
         settings_save_supabase_device_key(doc["device_key"] | "");
         send_response("{\"ok\":true,\"msg\":\"supabase_saved\"}");
     } else if (strcmp(cmd, "get_supabase") == 0) {
         if (!check_pin(doc)) return;
-        char url[128] = "", service_key[128] = "", device_key[64] = "";
+        char url[128] = "", anon_key[128] = "", device_key[64] = "", api_key[64] = "";
         JsonDocument resp;
         bool has_url = settings_load_supabase_url(url, sizeof(url));
-        bool has_skey = settings_load_supabase_service_key(service_key, sizeof(service_key));
+        bool has_akey = settings_load_supabase_anon_key(anon_key, sizeof(anon_key));
         bool has_dkey = settings_load_supabase_device_key(device_key, sizeof(device_key));
-        if (has_url && has_skey && has_dkey) {
+        bool has_apikey = settings_load_supabase_api_key(api_key, sizeof(api_key));
+        if (has_url && has_akey && has_dkey && has_apikey) {
             resp["ok"] = true;
             resp["url"] = url;
-            resp["service_key"] = "***";
+            resp["anon_key"] = "***";
+            resp["api_key"] = api_key;
             resp["device_key"] = device_key;
         } else {
             resp["ok"] = false;

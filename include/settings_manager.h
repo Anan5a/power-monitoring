@@ -44,10 +44,12 @@ void settings_save_http_enabled(bool enabled);
 
 bool settings_load_supabase_url(char* url, size_t buf_len);
 void settings_save_supabase_url(const char* url);
-bool settings_load_supabase_service_key(char* key, size_t buf_len);
-void settings_save_supabase_service_key(const char* key);
+bool settings_load_supabase_anon_key(char* key, size_t buf_len);
+void settings_save_supabase_anon_key(const char* key);
 bool settings_load_supabase_device_key(char* key, size_t buf_len);
 void settings_save_supabase_device_key(const char* key);
+bool settings_load_supabase_api_key(char* key, size_t buf_len);
+void settings_save_supabase_api_key(const char* key);
 
 uint8_t settings_load_relay_count();
 bool settings_load_relay(uint8_t idx, RelayRule* out);
