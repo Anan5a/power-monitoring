@@ -110,6 +110,15 @@ void settings_save_calibration(const Calibration* in) {
     prefs.putBytes("cal", in, sizeof(Calibration));
 }
 
+bool settings_load_channel_calibration(ChannelCalibration* out) {
+    if (!prefs.isKey("chan_cal")) return false;
+    size_t len = prefs.getBytes("chan_cal", out, sizeof(ChannelCalibration));
+    return len == sizeof(ChannelCalibration);
+}
+void settings_save_channel_calibration(const ChannelCalibration* in) {
+    prefs.putBytes("chan_cal", in, sizeof(ChannelCalibration));
+}
+
 float settings_load_coulomb_mAh(uint8_t channel) {
     char key[16];
     snprintf(key, sizeof(key), "coul_%d", channel);

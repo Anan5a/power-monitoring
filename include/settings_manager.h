@@ -51,6 +51,14 @@ struct Calibration {
     float ina226_i_gain;
 };
 
+// Per-channel calibration: voltage offset/gain, current offset/gain
+struct ChannelCalibration {
+    float volt_offset_mv[3];   // mV zero offset per voltage channel
+    float volt_gain[3];        // multiplier per voltage channel
+    float curr_offset_ma[3];  // mA offset per current channel (ghost current sub)
+    float curr_gain[3];        // multiplier per current channel
+};
+
 void init_settings();
 
 bool settings_load_wifi(char* ssid, char* pass, size_t buf_len);
@@ -78,6 +86,9 @@ void settings_save_relay(uint8_t idx, const RelayRule* in);
 
 bool settings_load_calibration(Calibration* out);
 void settings_save_calibration(const Calibration* in);
+
+bool settings_load_channel_calibration(ChannelCalibration* out);
+void settings_save_channel_calibration(const ChannelCalibration* in);
 
 float settings_load_coulomb_mAh(uint8_t channel);
 void settings_save_coulomb_mAh(uint8_t channel, float mAh);

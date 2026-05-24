@@ -17,37 +17,37 @@
 #define BLYNK_AUTH_TOKEN    "YOUR_BLYNK_TOKEN"
 
 // I2C bus pins
-#define I2C_SDA         21
-#define I2C_SCL         22
+#define I2C_SDA         16
+#define I2C_SCL         17
+#define I2C_FREQ        50000
 
-// Hardware enable/disable (set to 0 to disable a sensor block)
-#define ENABLE_INA3221   1
-#define ENABLE_INA226    0
-#define ENABLE_ADS1115   1
+// Hardware enable/disable
+#define ENABLE_INA3221         1   // current module 0x40
+#define ENABLE_INA3221_VOLT    1   // voltage module 0x42
+#define ENABLE_INA226          0
+#define ENABLE_ADS1115        0
 
-// INA3221 calibration: voltage offset (V) and current gain multiplier per channel
-#define INA3221_V_OFFSET_CH0  0.0f
-#define INA3221_V_OFFSET_CH1  0.0f
-#define INA3221_V_OFFSET_CH2  0.0f
-#define INA3221_I_GAIN_CH0    1.0f
-#define INA3221_I_GAIN_CH1    1.0f
-#define INA3221_I_GAIN_CH2    1.0f
+// === Voltage divider ratios (hardware fixed) ===
+// ratio = (R_high + R_low) / R_low
+#define VOLT_RATIO_CH0   3.5210f   // battery bank: 300k+119k/119k → 48V max
+#define VOLT_RATIO_CH1  14.2353f   // solar PV: 900k+68k/68k → 200V max
+#define VOLT_RATIO_CH2  14.2353f   // output/load: 900k+68k/68k → 200V max
 
-// INA226 calibration: voltage offset (V) and current gain multiplier
-#define INA226_V_OFFSET   0.0f
-#define INA226_I_GAIN     1.0f
+// === Default calibration (user can override via UI/BLE) ===
+#define CAL_VOLT_OFFSET_MV_CH0  0.0f
+#define CAL_VOLT_OFFSET_MV_CH1  0.0f
+#define CAL_VOLT_OFFSET_MV_CH2  0.0f
+#define CAL_VOLT_GAIN_CH0       1.0f
+#define CAL_VOLT_GAIN_CH1       1.0f
+#define CAL_VOLT_GAIN_CH2       1.0f
+#define CAL_CURR_OFFSET_MA_CH0  0.0f
+#define CAL_CURR_OFFSET_MA_CH1  0.0f
+#define CAL_CURR_OFFSET_MA_CH2  12.0f   // ghost current on CH2
+#define CAL_CURR_GAIN_CH0       1.0f
+#define CAL_CURR_GAIN_CH1       1.0f
+#define CAL_CURR_GAIN_CH2       1.0f
 
-// ADS1115 calibration: voltage offset (V) and multiplier per channel
-#define ADS1115_OFFSET_CH0  0.0f
-#define ADS1115_OFFSET_CH1  0.0f
-#define ADS1115_OFFSET_CH2  0.0f
-#define ADS1115_OFFSET_CH3  0.0f
-#define ADS1115_GAIN_CH0   1.0f
-#define ADS1115_GAIN_CH1   1.0f
-#define ADS1115_GAIN_CH2   1.0f
-#define ADS1115_GAIN_CH3   1.0f
-
-// I2C device addresses (must be unique on the bus)
+// I2C device addresses
 #define INA3221_ADDR    0x40
 #define INA226_ADDR     0x41
 #define ADS1115_ADDR    0x48

@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 struct SensorData {
-    // INA3221: 3-channel bus voltage (V) and current (A)
+    // INA3221 current module (0x40): 3-channel bus voltage (V) and current (A)
     float ina3221_busV[3];
     float ina3221_current[3];
 
@@ -13,14 +13,19 @@ struct SensorData {
     float ina226_current;
     float ina226_power;
 
-    // ADS1115: 4 single-ended channels in volts
+    // Voltage module (0x42) readings: voltage in volts per channel (after divider ratio)
+    // ads1115_volts[0..2] holds scaled voltage (V) for CH0-CH2 when INA3221_VOLT enabled
     float ads1115_volts[4];
 };
 
-float ina3221_getShuntVoltage(uint8_t ch);
-float ina226_getShuntVoltage();
+// Forward declarations for calibration struct (defined in settings_manager.h)
+struct ChannelCalibration;
+bool settings_load_channel_calibration(struct ChannelCalibration* out);
+void settings_save_channel_calibration(const struct ChannelCalibration* in);
 
 void init_sensors();
 SensorData read_sensors();
+float ina3221_getShuntVoltage(uint8_t ch);
+float ina226_getShuntVoltage();
 
 #endif

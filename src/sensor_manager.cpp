@@ -1,33 +1,59 @@
 #include "sensor_manager.h"
+#include "settings_manager.h"
 #include "config.h"
 #include <Wire.h>
 #include <Adafruit_INA3221.h>
 #include <INA226.h>
 #include <Adafruit_ADS1X15.h>
 
-static Adafruit_INA3221 ina3221;
-static INA226 ina226(INA226_ADDR, &Wire);
-static Adafruit_ADS1115 ads1115;
+static Adafruit_INA3221 ina3221;      // 0x40 — current sensing
+static Adafruit_INA3221 ina3221_volt; // 0x42 — voltage sensing (resistor dividers)
 
 static bool wire_started = false;
+
+// Voltage divider ratios (hardware fixed)
+static const float volt_ratios[3] = {
+    VOLT_RATIO_CH0,
+    VOLT_RATIO_CH1,
+    VOLT_RATIO_CH2,
+};
+
+// Active calibration (loaded from NVS or defaults from config.h)
+static ChannelCalibration cal = {
+    .volt_offset_mv = {CAL_VOLT_OFFSET_MV_CH0, CAL_VOLT_OFFSET_MV_CH1, CAL_VOLT_OFFSET_MV_CH2},
+    .volt_gain = {CAL_VOLT_GAIN_CH0, CAL_VOLT_GAIN_CH1, CAL_VOLT_GAIN_CH2},
+    .curr_offset_ma = {CAL_CURR_OFFSET_MA_CH0, CAL_CURR_OFFSET_MA_CH1, CAL_CURR_OFFSET_MA_CH2},
+    .curr_gain = {CAL_CURR_GAIN_CH0, CAL_CURR_GAIN_CH1, CAL_CURR_GAIN_CH2},
+};
 
 void init_sensors() {
     if (!wire_started) {
         Wire.begin(I2C_SDA, I2C_SCL);
+        Wire.setClock(I2C_FREQ);
         wire_started = true;
+    }
+
+    // Load calibration from NVS (falls back to config.h defaults on first boot)
+    ChannelCalibration saved;
+    if (settings_load_channel_calibration(&saved)) {
+        cal = saved;
     }
 
 #if ENABLE_INA3221
     if (!ina3221.begin(INA3221_ADDR, &Wire)) {
-        Serial.println("INA3221 init failed");
+        Serial.println("INA3221 current (0x40) init failed");
     }
-#else
-    Serial.println("INA3221 disabled");
+#endif
+
+#if ENABLE_INA3221_VOLT
+    if (!ina3221_volt.begin(0x42, &Wire)) {
+        Serial.println("INA3221 voltage (0x42) init failed");
+    }
 #endif
 
 #if ENABLE_INA226
     if (!ina226.begin()) {
-        Serial.println("INA226 init failed");
+        Serial.println("INA226 disabled");
     }
 #else
     Serial.println("INA226 disabled");
@@ -37,7 +63,7 @@ void init_sensors() {
     if (!ads1115.begin(ADS1115_ADDR, &Wire)) {
         Serial.println("ADS1115 init failed");
     } else {
-        ads1115.setGain(GAIN_ONE); // +/- 4.096V range
+        ads1115.setGain(GAIN_ONE);
     }
 #else
     Serial.println("ADS1115 disabled");
@@ -45,16 +71,33 @@ void init_sensors() {
 }
 
 SensorData read_sensors() {
-    SensorData d = {};
+    SensorData d = {0};
 
-#if ENABLE_INA3221
+#if ENABLE_INA3221  // Current module 0x40 — shunt voltage → current
     for (uint8_t ch = 0; ch < 3; ch++) {
-        float v = ina3221.getBusVoltage(ch);
-        float i = ina3221.getCurrentAmps(ch);
-        float v_off = (ch == 0) ? INA3221_V_OFFSET_CH0 : (ch == 1) ? INA3221_V_OFFSET_CH1 : INA3221_V_OFFSET_CH2;
-        float i_gain = (ch == 0) ? INA3221_I_GAIN_CH0 : (ch == 1) ? INA3221_I_GAIN_CH1 : INA3221_I_GAIN_CH2;
-        d.ina3221_busV[ch] = v + v_off;
-        d.ina3221_current[ch] = i * i_gain;
+        float raw_mv = ina3221.getBusVoltage(ch);  // mV (int16_t millivolts)
+        float raw_ma = ina3221.getCurrentAmps(ch) * 1000.0f;  // A→mA
+
+        float cal_mv = (raw_mv + cal.volt_offset_mv[ch]) * cal.volt_gain[ch];
+        float cal_ma = raw_ma - cal.curr_offset_ma[ch];
+        cal_ma *= cal.curr_gain[ch];
+
+        // Dead-zone: if current magnitude below threshold, treat as zero
+        if (fabsf(cal_ma) < 5.0f) cal_ma = 0.0f;
+
+        d.ina3221_current[ch] = cal_ma / 1000.0f;  // store as A
+    }
+#endif
+
+#if ENABLE_INA3221_VOLT  // Voltage module 0x42 — bus voltage through resistor dividers
+    for (uint8_t ch = 0; ch < 3; ch++) {
+        float raw_mv = ina3221_volt.getBusVoltage(ch);  // mV from INA3221
+
+        // Apply calibration offset and gain
+        float cal_mv = (raw_mv + cal.volt_offset_mv[ch]) * cal.volt_gain[ch];
+
+        // Apply resistor divider ratio → store as volts
+        d.ads1115_volts[ch] = (cal_mv / 1000.0f) * volt_ratios[ch];
     }
 #endif
 
@@ -68,9 +111,7 @@ SensorData read_sensors() {
     for (uint8_t ch = 0; ch < 4; ch++) {
         int16_t raw = ads1115.readADC_SingleEnded(ch);
         float v = ads1115.computeVolts(raw);
-        float v_off = (ch == 0) ? ADS1115_OFFSET_CH0 : (ch == 1) ? ADS1115_OFFSET_CH1 : (ch == 2) ? ADS1115_OFFSET_CH2 : ADS1115_OFFSET_CH3;
-        float v_gain = (ch == 0) ? ADS1115_GAIN_CH0 : (ch == 1) ? ADS1115_GAIN_CH1 : (ch == 2) ? ADS1115_GAIN_CH2 : ADS1115_GAIN_CH3;
-        d.ads1115_volts[ch] = (v + v_off) * v_gain;
+        d.ads1115_volts[ch] = v;
     }
 #endif
 
