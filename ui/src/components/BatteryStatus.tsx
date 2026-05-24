@@ -1,11 +1,19 @@
-import type { TelemetryPoint, DeviceProfile } from '../lib/types'
+import type { TelemetryPoint, DeviceProfile, BatteryProfile } from '../lib/types'
 
 interface Props {
   data: TelemetryPoint | null
   deviceProfile: DeviceProfile
+  batteryProfiles: BatteryProfile[]
 }
 
-export default function BatteryStatus({ data, deviceProfile }: Props) {
+const CHEM_LABELS: Record<string, string> = {
+  lead_acid: 'Pb',
+  lipol: 'LiPo',
+  liion: 'Li',
+  nimh: 'NiMH',
+}
+
+export default function BatteryStatus({ data, deviceProfile, batteryProfiles }: Props) {
   const socFields = deviceProfile.fields.filter(f => f.key.startsWith('soc_pct'))
   const mAhFields = deviceProfile.fields.filter(f => f.key.startsWith('coulomb_mah'))
 
@@ -20,27 +28,48 @@ export default function BatteryStatus({ data, deviceProfile }: Props) {
     )
   }
 
+  // Build a map from channel index → battery profile
+  const bpByChannel = new Map(batteryProfiles.map(bp => [bp.channel, bp]))
+
+  // Group SoC fields by their channel index
+  const groupByChannel = (fields: typeof socFields) => {
+    return fields.map(field => {
+      const ch = parseInt(field.key.match(/[0-9]+$/)?.[0] ?? 'NaN', 10)
+      const bp = bpByChannel.get(ch)
+      const chemLabel = bp?.chemistry ? (CHEM_LABELS[bp.chemistry] ?? bp.chemistry) : null
+      const name = bp?.name || field.label
+      return { field, ch, bp, chemLabel, name }
+    })
+  }
+
+  const socWithInfo = groupByChannel(socFields)
+  const mAhWithInfo = groupByChannel(mAhFields)
+
   return (
     <div className="bg-white rounded-lg shadow p-4">
       <h3 className="font-semibold text-gray-800 mb-3">Battery / SoC</h3>
       <div className="space-y-3">
-        {socFields.map((field, i) => {
+        {socWithInfo.map(({ field, bp, chemLabel, name }) => {
           const val = data?.payload?.[field.key] ?? 0
           return (
             <div key={field.key}>
               <div className="flex justify-between text-sm mb-1">
-                <span className="text-gray-600">{field.label}</span>
+                <span className="text-gray-600">
+                  {name}
+                  {chemLabel && <span className="ml-1 text-xs bg-gray-100 px-1 rounded">{chemLabel}</span>}
+                  {bp && <span className="ml-1 text-xs text-gray-400">{(bp.capacity_mAh / 1000).toFixed(1)}Ah</span>}
+                </span>
                 <span className="font-medium text-gray-800">{typeof val === 'number' ? val.toFixed(1) : val}%</span>
               </div>
               <SocBar value={typeof val === 'number' ? val : 0} />
             </div>
           )
         })}
-        {mAhFields.map(field => {
+        {mAhWithInfo.map(({ field, name }) => {
           const val = data?.payload?.[field.key] ?? 0
           return (
             <div key={field.key} className="flex justify-between text-sm">
-              <span className="text-gray-600">{field.label}</span>
+              <span className="text-gray-600">{name}</span>
               <span className="font-medium text-gray-800">{typeof val === 'number' ? val.toFixed(1) : val} mAh</span>
             </div>
           )

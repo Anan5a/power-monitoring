@@ -38,7 +38,8 @@ class CmdCallbacks : public BLECharacteristicCallbacks {
 
 static void send_response(const char* msg) {
     if (pRespChar) {
-        pRespChar->setValue(std::string(msg));
+        size_t len = strlen(msg);
+        pRespChar->setValue((uint8_t*)msg, len);
         pRespChar->notify();
     }
 }
@@ -237,15 +238,85 @@ static void handle_command(const char* json) {
         char buf[384];
         serializeJson(resp, buf);
         send_response(buf);
-    } else if (strcmp(cmd, "get_device_info") == 0) {
+    } else if (strcmp(cmd, "set_channel_group") == 0) {
         if (!check_pin(doc)) return;
+        ChannelGroup cg = {};
+        cg.group_id = doc["group_id"] | 0;
+        strlcpy(cg.name, doc["name"] | "", sizeof(cg.name));
+        cg.icon = doc["icon"] | 0;
+        cg.channel_mask = doc["channel_mask"] | 0;
+        settings_save_channel_group(cg.group_id, &cg);
+        send_response("{\"ok\":true,\"msg\":\"group_saved\"}");
+    } else if (strcmp(cmd, "get_channel_group") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t idx = doc["group_id"] | 0;
+        ChannelGroup cg;
+        JsonDocument resp;
+        if (settings_load_channel_group(idx, &cg)) {
+            resp["ok"] = true;
+            resp["group_id"] = cg.group_id;
+            resp["name"] = cg.name;
+            resp["icon"] = cg.icon;
+            resp["channel_mask"] = cg.channel_mask;
+        } else {
+            resp["ok"] = false;
+            resp["error"] = "group_not_found";
+        }
+        char buf[256];
+        serializeJson(resp, buf);
+        send_response(buf);
+    } else if (strcmp(cmd, "set_battery_profile") == 0) {
+        if (!check_pin(doc)) return;
+        BatteryProfile bp = {};
+        bp.channel = doc["channel"] | 0;
+        strlcpy(bp.name, doc["name"] | "", sizeof(bp.name));
+        bp.chemistry = doc["chemistry"] | 0;
+        bp.capacity_mAh = doc["capacity_mAh"] | 0.0f;
+        bp.initial_soc_pct = doc["initial_soc_pct"] | 100.0f;
+        bp.cell_count = doc["cell_count"] | 1.0f;
+        bp.full_voltage = doc["full_voltage"] | 0.0f;
+        bp.cutoff_voltage = doc["cutoff_voltage"] | 0.0f;
+        bp.float_voltage = doc["float_voltage"] | 0.0f;
+        settings_save_battery_profile(bp.channel, &bp);
+        send_response("{\"ok\":true,\"msg\":\"battery_profile_saved\"}");
+    } else if (strcmp(cmd, "get_battery_profile") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        BatteryProfile bp;
+        JsonDocument resp;
+        if (settings_load_battery_profile(ch, &bp)) {
+            resp["ok"] = true;
+            resp["channel"] = bp.channel;
+            resp["name"] = bp.name;
+            resp["chemistry"] = bp.chemistry;
+            resp["capacity_mAh"] = bp.capacity_mAh;
+            resp["initial_soc_pct"] = bp.initial_soc_pct;
+            resp["cell_count"] = bp.cell_count;
+            resp["full_voltage"] = bp.full_voltage;
+            resp["cutoff_voltage"] = bp.cutoff_voltage;
+            resp["float_voltage"] = bp.float_voltage;
+        } else {
+            resp["ok"] = false;
+            resp["error"] = "battery_profile_not_found";
+        }
+        char buf[384];
+        serializeJson(resp, buf);
+        send_response(buf);
+    } else if (strcmp(cmd, "set_channel_name") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        settings_save_channel_name(ch, doc["name"] | "");
+        send_response("{\"ok\":true,\"msg\":\"channel_name_saved\"}");
+    } else if (strcmp(cmd, "get_channel_name") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        char name[24] = "";
+        settings_load_channel_name(ch, name, sizeof(name));
         JsonDocument resp;
         resp["ok"] = true;
-        resp["uptime_s"] = millis() / 1000;
-        char ip[16] = "0.0.0.0";
-        strlcpy(ip, get_local_ip_str(), sizeof(ip));
-        resp["ip"] = ip;
-        char buf[256];
+        resp["channel"] = ch;
+        resp["name"] = name;
+        char buf[128];
         serializeJson(resp, buf);
         send_response(buf);
     } else if (strcmp(cmd, "factory_reset") == 0) {
@@ -308,14 +379,14 @@ void loop_ble_provisioner() {
         doc["overflow"] = log_has_overflow_file();
         char buf[128];
         serializeJson(doc, buf);
-        pStatusChar->setValue(std::string(buf));
+        pStatusChar->setValue((uint8_t*)buf, strlen(buf));
         pStatusChar->notify();
     }
 }
 
 void ble_notify_sensor_data(const char* data, size_t len) {
     if (bleClientConnected && pSensorChar) {
-        pSensorChar->setValue(std::string(data, len));
+        pSensorChar->setValue((uint8_t*)data, len);
         pSensorChar->notify();
     }
 }

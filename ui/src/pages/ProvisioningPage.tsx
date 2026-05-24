@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { useState } from 'react'
 
 const SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b'
@@ -18,7 +19,6 @@ export default function ProvisioningPage() {
   const [supabaseUrl, setSupabaseUrl] = useState('')
   const [serviceRoleKey, setServiceRoleKey] = useState('')
   const [deviceKey, setDeviceKey] = useState('')
-  const [wifiNetworks, setWifiNetworks] = useState<string[]>([])
   const [progress, setProgress] = useState('')
 
   async function connectBLE() {
@@ -40,7 +40,7 @@ export default function ProvisioningPage() {
     }
   }
 
-  async function sendCommand(cmd: BLECommand): Promise<unknown> {
+  async function sendCommand(cmd: BleCommand): Promise<unknown> {
     if (!device?.gatt) throw new Error('Not connected')
     const service = await device.gatt.getPrimaryService(SERVICE_UUID)
     const cmdChar = await service.getCharacteristic(CMD_UUID)

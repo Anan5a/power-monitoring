@@ -4,10 +4,31 @@
 #include <stdint.h>
 #include <stddef.h>
 
+enum BatteryChemistry { BAT_LEAD_ACID = 0, BAT_LIPO, BAT_LIION, BAT_NIMH };
+
 struct BatteryConfig {
     uint8_t channel;          // 0-3
     float capacity_mAh;       // total battery capacity for SoC calc
     float initial_soc_pct;    // SoC at last coulomb reset (0-100)
+};
+
+struct BatteryProfile {
+    uint8_t  channel;          // 0-3
+    char     name[24];          // e.g. "12V Lead Acid"
+    uint8_t  chemistry;        // BatteryChemistry enum
+    float    capacity_mAh;
+    float    initial_soc_pct;
+    float    cell_count;
+    float    full_voltage;     // V per cell * cell_count; 0 = use chemistry default
+    float    cutoff_voltage;
+    float    float_voltage;
+};
+
+struct ChannelGroup {
+    uint8_t  group_id;          // 0-3 (max 4 groups)
+    char     name[24];          // e.g. "Solar Panel"
+    uint8_t  icon;             // 0=solar, 1=battery, 2=load, 3=generic
+    uint8_t  channel_mask;    // bitmask: bit 0 = ch0, bit 1 = ch1, etc.
 };
 
 struct RelayRule {
@@ -63,6 +84,16 @@ void settings_save_coulomb_mAh(uint8_t channel, float mAh);
 
 bool settings_load_battery(uint8_t channel, BatteryConfig* out);
 void settings_save_battery(uint8_t channel, const BatteryConfig* in);
+
+bool settings_load_battery_profile(uint8_t channel, BatteryProfile* out);
+void settings_save_battery_profile(uint8_t channel, const BatteryProfile* in);
+
+uint8_t settings_load_channel_group_count();
+bool settings_load_channel_group(uint8_t idx, ChannelGroup* out);
+void settings_save_channel_group(uint8_t idx, const ChannelGroup* in);
+
+bool settings_load_channel_name(uint8_t channel, char* out, size_t buf_len);
+void settings_save_channel_name(uint8_t channel, const char* name);
 
 uint32_t settings_load_ble_pin();        // 6-digit PIN, 0 = no security
 void settings_save_ble_pin(uint32_t pin);
