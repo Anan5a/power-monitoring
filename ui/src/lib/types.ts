@@ -43,3 +43,36 @@ export interface RelayState {
   is_energized: boolean
   last_tripped_at: string | null
 }
+
+export type BatteryChemistry = 'lead_acid' | 'lipol' | 'liion' | 'nimh'
+
+export interface ChannelGroup {
+  group_id: number
+  name: string
+  icon: number
+  channel_mask: number
+}
+
+export interface ChannelName {
+  channel: number
+  name: string
+}
+
+export interface BatteryProfile {
+  channel: number
+  name: string
+  chemistry: BatteryChemistry
+  capacity_mAh: number
+  initial_soc_pct: number
+  cell_count: number
+  full_voltage: number
+  cutoff_voltage: number
+  float_voltage: number
+}
+
+export interface DeviceChannels {
+  device_key: string
+  channel_groups: ChannelGroup[]
+  channel_names: ChannelName[]
+  battery_profiles: BatteryProfile[]
+}

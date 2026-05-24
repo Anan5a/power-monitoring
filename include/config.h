@@ -22,7 +22,7 @@
 
 // Hardware enable/disable (set to 0 to disable a sensor block)
 #define ENABLE_INA3221   1
-#define ENABLE_INA226    1
+#define ENABLE_INA226    0
 #define ENABLE_ADS1115   1
 
 // INA3221 calibration: voltage offset (V) and current gain multiplier per channel

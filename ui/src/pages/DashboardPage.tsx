@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, fetchDeviceChannels } from '../lib/supabase'
 import { useRealtime } from '../hooks/useRealtime'
-import type { Device, DeviceProfile, TelemetryPoint } from '../lib/types'
+import type { Device, DeviceProfile, TelemetryPoint, DeviceChannels } from '../lib/types'
 import DeviceCard from '../components/DeviceCard'
 import TelemetryChart from '../components/TelemetryChart'
 import ChannelSelector from '../components/ChannelSelector'
@@ -12,6 +12,7 @@ export default function DashboardPage() {
   const [devices, setDevices] = useState<Device[]>([])
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null)
   const [deviceProfile, setDeviceProfile] = useState<DeviceProfile | null>(null)
+  const [deviceChannels, setDeviceChannels] = useState<DeviceChannels | null>(null)
   const [historicalData, setHistoricalData] = useState<TelemetryPoint[]>([])
   const [selectedFields, setSelectedFields] = useState<string[]>([])
   const [loadingDevices, setLoadingDevices] = useState(true)
@@ -46,6 +47,11 @@ export default function DashboardPage() {
     }
   }, [supabase])
 
+  const loadDeviceChannels = useCallback(async (deviceKey: string) => {
+    const channels = await fetchDeviceChannels(deviceKey)
+    setDeviceChannels(channels)
+  }, [])
+
   const loadHistory = useCallback(async (device: Device) => {
     const { data } = await supabase
       .from('telemetry_live')
@@ -61,12 +67,26 @@ export default function DashboardPage() {
     if (!selectedDevice) return
 
     loadDeviceProfile(selectedDevice)
+    loadDeviceChannels(selectedDevice.device_key)
     loadHistory(selectedDevice)
-  }, [selectedDevice, loadDeviceProfile, loadHistory])
+  }, [selectedDevice, loadDeviceProfile, loadDeviceChannels, loadHistory])
 
   const { dataPoints, latestReading } = useRealtime(selectedDevice?.device_key ?? null)
 
-  const chartFields = deviceProfile?.fields.filter(f => selectedFields.includes(f.key)) ?? []
+  // Build merged field list: device_profiles.fields with channel_name overrides
+  const mergedFields = (() => {
+    if (!deviceProfile) return []
+    const overrides = new Map(deviceChannels?.channel_names.map(cn => [cn.channel, cn.name]) ?? [])
+    return deviceProfile.fields.map(f => {
+      const ch = parseInt(f.key.match(/[0-9]+$/)?.[0] ?? 'NaN', 10)
+      if (!isNaN(ch) && overrides.has(ch)) {
+        return { ...f, label: overrides.get(ch)! }
+      }
+      return f
+    })
+  })()
+
+  const chartFields = mergedFields.filter(f => selectedFields.includes(f.key))
 
   if (loadingDevices) {
     return <div className="flex items-center justify-center h-screen text-gray-500">Loading...</div>
@@ -124,14 +144,20 @@ export default function DashboardPage() {
               {selectedDevice.device_type === 'power-monitor' && (
                 <RelayControl deviceKey={selectedDevice.device_key} />
               )}
-              <BatteryStatus data={latestReading} deviceProfile={deviceProfile} />
+              <BatteryStatus
+                data={latestReading}
+                deviceProfile={deviceProfile}
+                batteryProfiles={deviceChannels?.battery_profiles ?? []}
+              />
             </div>
 
             <div className="bg-white rounded-lg shadow p-4 mb-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-semibold text-gray-800">Live Charts</h2>
                 <ChannelSelector
-                  fields={deviceProfile.fields}
+                  fields={mergedFields}
+                  groups={deviceChannels?.channel_groups ?? []}
+                  channelNames={deviceChannels?.channel_names ?? []}
                   selected={selectedFields}
                   onChange={setSelectedFields}
                 />

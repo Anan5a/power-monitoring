@@ -51,7 +51,7 @@ create table public.telemetry_live (
 
 alter table public.telemetry_live replica identity full;
 drop publication if exists supabase_realtime;
-create publication supabase_realtime for table public.telemetry_live, public.devices, public.telemetry_archive;
+create publication supabase_realtime for table public.telemetry_live, public.devices, public.telemetry_archive, public.device_channels;
 
 create index idx_telemetry_live_device_time
     on public.telemetry_live (device_id, recorded_at desc);
@@ -85,6 +85,32 @@ create table public.relay_states (
     last_tripped_at timestamptz,
     constraint unique_relay unique(device_key, relay_index)
 );
+
+---------------------------------------------------------------
+-- Per-device channel configuration: groups, custom names, battery profiles
+-- This allows per-device label overrides and battery chemistry config
+---------------------------------------------------------------
+create table public.device_channels (
+    id bigint generated always as identity primary key,
+    device_key text unique not null references public.devices(device_key) on delete cascade,
+    channel_groups jsonb default '[]',
+    channel_names jsonb default '[]',
+    battery_profiles jsonb default '[]',
+    updated_at timestamptz default now()
+);
+
+alter table public.device_channels replica identity full;
+alter table public.device_channels enable row level security;
+
+create policy "own_device_channels" on public.device_channels
+    for all to authenticated using (
+        exists (
+            select 1 from public.devices d
+            join public.profiles p on p.id = d.user_id
+            where d.device_key = device_channels.device_key
+              and p.id = auth.uid()
+        )
+    );
 
 ---------------------------------------------------------------
 -- Triggers

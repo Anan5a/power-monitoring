@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Wire.h>
 #include "config.h"
 #include "sensor_manager.h"
 #include "display_manager.h"
@@ -41,54 +42,71 @@ static void print_status() {
 }
 
 static void handle_serial_cli() {
-    if (!Serial.available()) return;
-    String line = Serial.readStringUntil('\n');
-    line.trim();
-    if (line.length() == 0) return;
-
-    if (line == "status") {
-        print_status();
-    } else if (line == "sensors") {
-        SensorData data = read_sensors();
-        print_sensor_data(data);
-    } else if (line == "relay status") {
-        uint8_t count = settings_load_relay_count();
-        for (uint8_t i = 0; i < count; i++) {
-            RelayRule rt;
-            if (settings_load_relay(i, &rt)) {
-                int state = digitalRead(rt.gpio_pin);
-                Serial.printf("Relay %d: ch=%d pin=%d state=%d\n", i, rt.channel, rt.gpio_pin, state);
+    static String line;
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') {
+            if (line.length() > 0) {
+                line.trim();
+                if (line == "status") {
+                    print_status();
+                } else if (line == "sensors") {
+                    SensorData data = read_sensors();
+                    print_sensor_data(data);
+                } else if (line == "relay status") {
+                    uint8_t count = settings_load_relay_count();
+                    for (uint8_t i = 0; i < count; i++) {
+                        RelayRule rt;
+                        if (settings_load_relay(i, &rt)) {
+                            int state = digitalRead(rt.gpio_pin);
+                            Serial.printf("Relay %d: ch=%d pin=%d state=%d\n", i, rt.channel, rt.gpio_pin, state);
+                        }
+                    }
+                } else if (line.startsWith("relay ")) {
+                    int idx, st;
+                    if (sscanf(line.c_str(), "relay %d %d", &idx, &st) == 2) {
+                        RelayRule rt;
+                        if (settings_load_relay(idx, &rt)) {
+                            digitalWrite(rt.gpio_pin, st ? (rt.active_high ? HIGH : LOW) : (rt.active_high ? LOW : HIGH));
+                            Serial.printf("Relay %d set to %d\n", idx, st);
+                        } else {
+                            Serial.println("Relay not found");
+                        }
+                    }
+                } else if (line.startsWith("reset coulomb ")) {
+                    int ch;
+                    if (sscanf(line.c_str(), "reset coulomb %d", &ch) == 1 && ch >= 0 && ch <= 3) {
+                        reset_coulomb_counter(ch);
+                        Serial.printf("Coulomb counter ch%d reset\n", ch);
+                    }
+                } else if (line == "flush log") {
+                    size_t flushed = 0;
+                    uint8_t batch[512];
+                    size_t n;
+                    while ((n = log_pop_batch(batch, sizeof(batch))) > 0) {
+                        flushed += n;
+                    }
+                    Serial.printf("Flushed %u bytes from log buffer\n", (unsigned)flushed);
+                } else if (line == "i2c_scan") {
+                    Wire.begin(I2C_SDA, I2C_SCL);
+                    Serial.println("I2C scan:");
+                    for (uint8_t addr = 1; addr < 127; addr++) {
+                        Wire.beginTransmission(addr);
+                        if (Wire.endTransmission() == 0) {
+                            Serial.print("  0x"); Serial.println(addr, HEX);
+                        }
+                    }
+                    Serial.println("done");
+                } else if (line == "help") {
+                    Serial.println("Commands: status, sensors, relay status, relay N 0/1, reset coulomb N, flush log, i2c_scan, help");
+                } else if (line.length() > 0) {
+                    Serial.println("Unknown command. Type 'help'.");
+                }
+                line = "";
             }
+        } else {
+            if (line.length() < 63) line += c;
         }
-    } else if (line.startsWith("relay ")) {
-        int idx, st;
-        if (sscanf(line.c_str(), "relay %d %d", &idx, &st) == 2) {
-            RelayRule rt;
-            if (settings_load_relay(idx, &rt)) {
-                digitalWrite(rt.gpio_pin, st ? (rt.active_high ? HIGH : LOW) : (rt.active_high ? LOW : HIGH));
-                Serial.printf("Relay %d set to %d\n", idx, st);
-            } else {
-                Serial.println("Relay not found");
-            }
-        }
-    } else if (line.startsWith("reset coulomb ")) {
-        int ch;
-        if (sscanf(line.c_str(), "reset coulomb %d", &ch) == 1 && ch >= 0 && ch <= 3) {
-            reset_coulomb_counter(ch);
-            Serial.printf("Coulomb counter ch%d reset\n", ch);
-        }
-    } else if (line == "flush log") {
-        size_t flushed = 0;
-        uint8_t batch[512];
-        size_t n;
-        while ((n = log_pop_batch(batch, sizeof(batch))) > 0) {
-            flushed += n;
-        }
-        Serial.printf("Flushed %u bytes from log buffer\n", (unsigned)flushed);
-    } else if (line == "help") {
-        Serial.println("Commands: status, sensors, relay status, relay N 0/1, reset coulomb N, flush log, help");
-    } else {
-        Serial.println("Unknown command. Type 'help'.");
     }
 }
 

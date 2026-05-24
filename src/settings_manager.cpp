@@ -135,6 +135,52 @@ void settings_save_battery(uint8_t channel, const BatteryConfig* in) {
     prefs.putBytes(key, in, sizeof(BatteryConfig));
 }
 
+bool settings_load_battery_profile(uint8_t channel, BatteryProfile* out) {
+    char key[16];
+    snprintf(key, sizeof(key), "bat_prof_%d", channel);
+    if (!prefs.isKey(key)) return false;
+    if (prefs.getBytesLength(key) != sizeof(BatteryProfile)) return false;
+    prefs.getBytes(key, out, sizeof(BatteryProfile));
+    return true;
+}
+void settings_save_battery_profile(uint8_t channel, const BatteryProfile* in) {
+    char key[16];
+    snprintf(key, sizeof(key), "bat_prof_%d", channel);
+    prefs.putBytes(key, in, sizeof(BatteryProfile));
+}
+
+uint8_t settings_load_channel_group_count() {
+    return prefs.getUChar("chan_grp_count", 0);
+}
+bool settings_load_channel_group(uint8_t idx, ChannelGroup* out) {
+    char key[16];
+    snprintf(key, sizeof(key), "chan_grp_%d", idx);
+    if (!prefs.isKey(key)) return false;
+    if (prefs.getBytesLength(key) != sizeof(ChannelGroup)) return false;
+    prefs.getBytes(key, out, sizeof(ChannelGroup));
+    return true;
+}
+void settings_save_channel_group(uint8_t idx, const ChannelGroup* in) {
+    char key[16];
+    snprintf(key, sizeof(key), "chan_grp_%d", idx);
+    prefs.putBytes(key, in, sizeof(ChannelGroup));
+    uint8_t count = settings_load_channel_group_count();
+    if (idx >= count) prefs.putUChar("chan_grp_count", idx + 1);
+}
+
+bool settings_load_channel_name(uint8_t channel, char* out, size_t buf_len) {
+    char key[16];
+    snprintf(key, sizeof(key), "chan_name_%d", channel);
+    if (!prefs.isKey(key)) return false;
+    strlcpy(out, prefs.getString(key, "").c_str(), buf_len);
+    return true;
+}
+void settings_save_channel_name(uint8_t channel, const char* name) {
+    char key[16];
+    snprintf(key, sizeof(key), "chan_name_%d", channel);
+    prefs.putString(key, name);
+}
+
 uint32_t settings_load_ble_pin() {
     return prefs.getUInt("ble_pin", 123456);
 }
