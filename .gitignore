@@ -1,3 +1,5 @@
 .pio
 node_modules/
 .remember/
+ui/dist/
+ui/package-lock.json
