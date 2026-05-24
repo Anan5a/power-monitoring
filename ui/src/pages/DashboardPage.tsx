@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { useRealtime } from '../hooks/useRealtime'
 import type { Device, DeviceProfile, TelemetryPoint } from '../lib/types'
@@ -32,37 +32,37 @@ export default function DashboardPage() {
     loadDevices()
   }, [])
 
+  const loadDeviceProfile = useCallback(async (device: Device) => {
+    const { data } = await supabase
+      .from('device_profiles')
+      .select('*')
+      .eq('device_type', device.device_type)
+      .single()
+
+    if (data) {
+      setDeviceProfile(data)
+      const defaults = data.fields.filter((f: { key: string; chart: boolean }) => f.chart).map((f: { key: string }) => f.key)
+      setSelectedFields(defaults)
+    }
+  }, [supabase])
+
+  const loadHistory = useCallback(async (device: Device) => {
+    const { data } = await supabase
+      .from('telemetry_live')
+      .select('*')
+      .eq('device_id', device.device_key)
+      .order('recorded_at', { ascending: true })
+      .limit(200)
+
+    if (data) setHistoricalData(data)
+  }, [supabase])
+
   useEffect(() => {
     if (!selectedDevice) return
 
-    async function loadDeviceProfile() {
-      const { data } = await supabase
-        .from('device_profiles')
-        .select('*')
-        .eq('device_type', selectedDevice.device_type)
-        .single()
-
-      if (data) {
-        setDeviceProfile(data)
-        const defaults = data.fields.filter((f: { key: string; chart: boolean }) => f.chart).map((f: { key: string }) => f.key)
-        setSelectedFields(defaults)
-      }
-    }
-
-    async function loadHistory() {
-      const { data } = await supabase
-        .from('telemetry_live')
-        .select('*')
-        .eq('device_id', selectedDevice.device_key)
-        .order('recorded_at', { ascending: true })
-        .limit(200)
-
-      if (data) setHistoricalData(data)
-    }
-
-    loadDeviceProfile()
-    loadHistory()
-  }, [selectedDevice])
+    loadDeviceProfile(selectedDevice)
+    loadHistory(selectedDevice)
+  }, [selectedDevice, loadDeviceProfile, loadHistory])
 
   const { dataPoints, latestReading } = useRealtime(selectedDevice?.device_key ?? null)
 

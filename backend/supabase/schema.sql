@@ -268,37 +268,26 @@ begin
 
     get diagnostics row_ct = row_count;
 
-    -- Step 2: Compute retention based on actual storage used
-    -- Free tier limit = 500 MB. Target to keep us well under it.
-    -- Check total row count and approx storage
-    select into size_mb
-        pg_total_relation_size('public.telemetry_live') / (1024 * 1024);
+    -- Step 2: Adaptive retention based on actual storage used
+    -- Free tier = 500 MB. Start pruning beyond 400 MB (80%).
+    -- Always keep minimum 7 days. Target: stay under 350 MB (70%).
+    select pg_total_relation_size('public.telemetry_live') / (1024 * 1024) into size_mb;
 
-    -- If using > 80% of 500 MB (400 MB), start pruning
-    -- Each row is roughly 100-200 bytes with typical payload
-    -- 80% capacity ≈ 2M rows. Prune oldest 10% beyond minimum 7 days.
     if size_mb > 400 then
-        -- Calculate cutoff: keep at least 7 days, prune oldest beyond that
-        -- until we're under 350 MB (70%)
-        select recorded_at into cutoff_ts
-        from public.telemetry_live
-        order by recorded_at asc
-        limit 1;
-
-        -- Keep minimum 7 days, delete oldest entries until under threshold
-        while size_mb > 350 and cutoff_ts < current_timestamp - interval '7 days' loop
-            delete from public.telemetry_live
-            where recorded_at <= cutoff_ts
-              and recorded_at < current_timestamp - interval '7 days';
-
-            -- Move cutoff forward
+        -- Delete oldest rows in chunks until under threshold or 7-day minimum hit
+        while size_mb > 350 loop
             select recorded_at into cutoff_ts
             from public.telemetry_live
+            where recorded_at < current_timestamp - interval '7 days'
             order by recorded_at asc
             limit 1;
 
-            select pg_total_relation_size('public.telemetry_live') / (1024 * 1024) into size_mb;
             exit when cutoff_ts is null;
+
+            delete from public.telemetry_live
+            where recorded_at <= cutoff_ts;
+
+            select pg_total_relation_size('public.telemetry_live') / (1024 * 1024) into size_mb;
         end loop;
     end if;
 
