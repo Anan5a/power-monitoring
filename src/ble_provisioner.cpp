@@ -38,7 +38,8 @@ class CmdCallbacks : public BLECharacteristicCallbacks {
 
 static void send_response(const char* msg) {
     if (pRespChar) {
-        pRespChar->setValue(std::string(msg));
+        size_t len = strlen(msg);
+        pRespChar->setValue((uint8_t*)msg, len);
         pRespChar->notify();
     }
 }
@@ -378,14 +379,14 @@ void loop_ble_provisioner() {
         doc["overflow"] = log_has_overflow_file();
         char buf[128];
         serializeJson(doc, buf);
-        pStatusChar->setValue(std::string(buf));
+        pStatusChar->setValue((uint8_t*)buf, strlen(buf));
         pStatusChar->notify();
     }
 }
 
 void ble_notify_sensor_data(const char* data, size_t len) {
     if (bleClientConnected && pSensorChar) {
-        pSensorChar->setValue(std::string(data, len));
+        pSensorChar->setValue((uint8_t*)data, len);
         pSensorChar->notify();
     }
 }
