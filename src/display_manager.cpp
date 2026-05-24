@@ -17,8 +17,14 @@ static Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 static uint8_t current_page = 0;
 static unsigned long last_page_switch = 0;
 
+static bool wire_started = false;
+
 void init_display() {
-    if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    if (!wire_started) {
+        Wire.begin(I2C_SDA, I2C_SCL);
+        wire_started = true;
+    }
+    if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR, false)) {
         Serial.println("SSD1306 init failed");
     }
     display.clearDisplay();

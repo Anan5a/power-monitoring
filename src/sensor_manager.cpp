@@ -9,8 +9,13 @@ static Adafruit_INA3221 ina3221;
 static INA226 ina226(INA226_ADDR, &Wire);
 static Adafruit_ADS1115 ads1115;
 
+static bool wire_started = false;
+
 void init_sensors() {
-    Wire.begin(I2C_SDA, I2C_SCL);
+    if (!wire_started) {
+        Wire.begin(I2C_SDA, I2C_SCL);
+        wire_started = true;
+    }
 
 #if ENABLE_INA3221
     if (!ina3221.begin(INA3221_ADDR, &Wire)) {
