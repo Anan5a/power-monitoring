@@ -151,6 +151,11 @@ static void handle_serial_cli() {
                 } else if (line == "relay auto off") {
                     relay_set_auto(false);
                     Serial.println("Relay auto-trip DISABLED");
+                } else if (line == "factory_reset") {
+                    Serial.println("Wiping NVS and rebooting...");
+                    delay(500);
+                    settings_factory_reset();
+                    ESP.restart();
                 } else if (line == "test all sensors") {
                     SensorData d = read_sensors();
                     Serial.println("All sensor channels:");
@@ -170,6 +175,7 @@ static void handle_serial_cli() {
                     Serial.println("  test display        — cycle OLED pages 5x");
                     Serial.println("  relay auto on       — enable auto-trip (off by default)");
                     Serial.println("  relay auto off      — disable auto-trip");
+                    Serial.println("  factory_reset       — wipe all NVS settings, reboot");
                     Serial.println("  reset coulomb N     — reset coulomb counter CH N");
                     Serial.println("  flush log           — flush RAM log buffer");
                     Serial.println("  i2c_scan            — scan I2C bus for devices");
