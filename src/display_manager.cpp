@@ -48,8 +48,12 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
     float v, i, p;
     const char* label;
     if (ch < 3) {
-        v = data.ina3221_busV[ch]; i = data.ina3221_current[ch]; p = v * i;
-        label = (ch == 0) ? "Ch0" : (ch == 1) ? "Ch1" : "Ch2";
+        v = data.ads1115_volts[ch];
+        i = data.ina3221_current[ch]; p = v * i;
+        char name[24] = "";
+        settings_load_channel_name(ch, name, sizeof(name));
+        label = name[0] ? name :
+            (ch == 0) ? "Ch0" : (ch == 1) ? "Ch1" : "Ch2";
     } else {
         v = data.ina226_busV; i = data.ina226_current; p = data.ina226_power;
         label = "Ch3";

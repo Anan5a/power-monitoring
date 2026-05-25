@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { useState } from 'react'
+import { supabase } from '../lib/supabase'
 
 const SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b'
 const CMD_UUID = 'c01afdfc-3cbe-4c26-a1e8-8c71a5f6f2a4'
@@ -11,7 +12,7 @@ interface BleCommand {
 }
 
 export default function ProvisioningPage() {
-  const [step, setStep] = useState(0) // 0=disconnected, 1=scanning, 2=connected, 3=wifi set, 4=supabase set, 5=done
+  const [step, setStep] = useState(0) // 0=disconnected, 1=scanning, 2=connected, 3=wifi set, 4=supabase set, 5=calibration, 6=done
   const [error, setError] = useState('')
   const [device, setDevice] = useState<BluetoothDevice | null>(null)
   const [ssid, setSsid] = useState('')
@@ -20,6 +21,9 @@ export default function ProvisioningPage() {
   const [serviceRoleKey, setServiceRoleKey] = useState('')
   const [deviceKey, setDeviceKey] = useState('')
   const [progress, setProgress] = useState('')
+  const [calChannel, setCalChannel] = useState(0)
+  const [calibration, setCalibration] = useState<Record<string, number>>({})
+  const [storedPin, setStoredPin] = useState('123456')
 
   async function connectBLE() {
     setError('')
@@ -69,7 +73,7 @@ export default function ProvisioningPage() {
     setError('')
     setProgress('Setting WiFi...')
     try {
-      const resp = await sendCommand({ cmd: 'set_wifi', ssid, pass, pin: 123456 }) as { ok?: boolean; error?: string }
+      const resp = await sendCommand({ cmd: 'set_wifi', ssid, pass, pin: storedPin }) as { ok?: boolean; error?: string }
       if (!resp?.ok) throw new Error(resp?.error ?? 'Failed to set WiFi')
       setStep(3)
       setProgress('WiFi configured successfully')
@@ -87,13 +91,61 @@ export default function ProvisioningPage() {
         url: supabaseUrl,
         service_role_key: serviceRoleKey,
         device_key: deviceKey,
-        pin: 123456,
+        pin: storedPin,
       }) as { ok?: boolean; error?: string }
       if (!resp?.ok) throw new Error(resp?.error ?? 'Failed to set Supabase')
       setStep(5)
       setProgress('Device provisioned successfully!')
+      // Fetch the device's stored PIN from Supabase (may have been set on a prior config)
+      try {
+        const { data } = await supabase
+          .from('devices')
+          .select('ble_pin')
+          .eq('device_key', deviceKey)
+          .single()
+        if (data?.ble_pin) setStoredPin(data.ble_pin)
+      } catch { /* use stored default if fetch fails */ }
+      loadCalibration(0)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Supabase setup failed')
+    }
+  }
+
+  async function loadCalibration(ch: number) {
+    try {
+      const resp = await sendCommand({ cmd: 'get_calibration', channel: ch, pin: storedPin }) as {
+        ok?: boolean; volt_offset_mv?: number; volt_gain?: number; curr_offset_ma?: number; curr_gain?: number
+      }
+      if (resp?.ok) {
+        setCalibration({
+          volt_offset_mv: resp.volt_offset_mv ?? 0,
+          volt_gain: resp.volt_gain ?? 1,
+          curr_offset_ma: resp.curr_offset_ma ?? 0,
+          curr_gain: resp.curr_gain ?? 1,
+        })
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function saveCalibration(ch: number, type: number, value: number) {
+    setError('')
+    try {
+      const resp = await sendCommand({ cmd: 'set_calibration', channel: ch, type, value, pin: storedPin }) as { ok?: boolean; error?: string }
+      if (!resp?.ok) throw new Error(resp?.error ?? 'Save failed')
+      await loadCalibration(ch)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Calibration save failed')
+    }
+  }
+
+  async function resetChannelCalibration(ch: number) {
+    setError('')
+    try {
+      const resp = await sendCommand({ cmd: 'reset_calibration', channel: ch, pin: storedPin }) as { ok?: boolean; error?: string }
+      if (!resp?.ok) throw new Error(resp?.error ?? 'Reset failed')
+      await loadCalibration(ch)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Calibration reset failed')
     }
   }
 
@@ -172,6 +224,59 @@ export default function ProvisioningPage() {
         )}
 
         {step === 5 && (
+          <div className="space-y-4">
+            <h2 className="font-semibold text-lg">Step 5: Channel Calibration</h2>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Channel</label>
+              <select value={calChannel} onChange={e => { setCalChannel(Number(e.target.value)); loadCalibration(Number(e.target.value)) }}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 bg-white">
+                <option value={0}>Ch0 — Battery Bank</option>
+                <option value={1}>Ch1 — Solar PV</option>
+                <option value={2}>Ch2 — Output</option>
+              </select>
+            </div>
+            <div className="bg-gray-50 rounded p-3 space-y-2 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="w-36 text-gray-600">volt_offset_mv</span>
+                <input type="number" step="0.01" value={calibration.volt_offset_mv ?? ''} onChange={e => setCalibration(c => ({ ...c, volt_offset_mv: Number(e.target.value) }))}
+                  className="flex-1 rounded-md border border-gray-300 px-2 py-1" />
+                <button onClick={() => saveCalibration(calChannel, 0, calibration.volt_offset_mv ?? 0)}
+                  className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 text-xs">Save</button>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-36 text-gray-600">volt_gain</span>
+                <input type="number" step="0.001" value={calibration.volt_gain ?? ''} onChange={e => setCalibration(c => ({ ...c, volt_gain: Number(e.target.value) }))}
+                  className="flex-1 rounded-md border border-gray-300 px-2 py-1" />
+                <button onClick={() => saveCalibration(calChannel, 1, calibration.volt_gain ?? 1)}
+                  className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 text-xs">Save</button>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-36 text-gray-600">curr_offset_ma</span>
+                <input type="number" step="0.01" value={calibration.curr_offset_ma ?? ''} onChange={e => setCalibration(c => ({ ...c, curr_offset_ma: Number(e.target.value) }))}
+                  className="flex-1 rounded-md border border-gray-300 px-2 py-1" />
+                <button onClick={() => saveCalibration(calChannel, 2, calibration.curr_offset_ma ?? 0)}
+                  className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 text-xs">Save</button>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-36 text-gray-600">curr_gain</span>
+                <input type="number" step="0.001" value={calibration.curr_gain ?? ''} onChange={e => setCalibration(c => ({ ...c, curr_gain: Number(e.target.value) }))}
+                  className="flex-1 rounded-md border border-gray-300 px-2 py-1" />
+                <button onClick={() => saveCalibration(calChannel, 3, calibration.curr_gain ?? 1)}
+                  className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 text-xs">Save</button>
+              </div>
+              <div className="pt-2 border-t border-gray-200">
+                <button onClick={() => resetChannelCalibration(calChannel)}
+                  className="text-red-600 hover:text-red-700 text-xs">Reset this channel</button>
+              </div>
+            </div>
+            <button onClick={() => { setStep(6); setProgress('Done! Go to Dashboard'); }}
+              className="w-full bg-gray-200 text-gray-700 py-2 rounded hover:bg-gray-300">
+              Skip / Continue →
+            </button>
+          </div>
+        )}
+
+        {step === 6 && (
           <div className="text-center">
             <div className="text-6xl mb-4">✓</div>
             <h2 className="text-xl font-bold text-green-600 mb-2">Device Provisioned!</h2>
@@ -186,7 +291,7 @@ export default function ProvisioningPage() {
         )}
 
         <div className="mt-6 text-center text-sm text-gray-500">
-          Default BLE PIN: <code className="bg-gray-100 px-1 rounded">123456</code>
+          Default BLE PIN: <code className="bg-gray-100 px-1 rounded">{storedPin}</code>
         </div>
       </div>
     </div>

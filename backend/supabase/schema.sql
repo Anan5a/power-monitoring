@@ -20,6 +20,7 @@ create table public.devices (
     device_type text not null default 'generic',
     device_key text unique not null,
     device_api_key uuid unique not null default gen_random_uuid(),
+    ble_pin text,
     is_online boolean default false,
     last_seen_at timestamptz default now(),
     created_at timestamptz default now()
@@ -96,6 +97,7 @@ create table public.device_channels (
     channel_groups jsonb default '[]',
     channel_names jsonb default '[]',
     battery_profiles jsonb default '[]',
+    channel_calibration jsonb default '{"volt_offset_mv":[0,0,0],"volt_gain":[1,1,1],"curr_offset_ma":[0,0,0],"curr_gain":[1,1,1]}'::jsonb,
     updated_at timestamptz default now()
 );
 
@@ -111,6 +113,10 @@ create policy "own_device_channels" on public.device_channels
               and p.id = auth.uid()
         )
     );
+
+-- ble_pin readable to device owner (for UI dynamic PIN)
+create policy "own_device_ble_pin" on public.devices
+    for select to authenticated using (user_id = auth.uid());
 
 ---------------------------------------------------------------
 -- Triggers

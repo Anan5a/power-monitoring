@@ -28,4 +28,8 @@ SensorData read_sensors();
 float ina3221_getShuntVoltage(uint8_t ch);
 float ina226_getShuntVoltage();
 
+void sensor_set_calibration(uint8_t ch, uint8_t type, float value);
+void sensor_get_calibration(uint8_t ch, float* volt_offset_mv, float* volt_gain, float* curr_offset_ma, float* curr_gain);
+void sensor_reset_calibration(uint8_t ch);
+
 #endif

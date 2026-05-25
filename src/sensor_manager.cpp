@@ -133,3 +133,29 @@ float ina226_getShuntVoltage() {
 #else
 float ina226_getShuntVoltage() { return 0.0f; }
 #endif
+
+void sensor_set_calibration(uint8_t ch, uint8_t type, float value) {
+    switch (type) {
+        case 0: cal.volt_offset_mv[ch] = value; break;
+        case 1: cal.volt_gain[ch] = value; break;
+        case 2: cal.curr_offset_ma[ch] = value; break;
+        case 3: cal.curr_gain[ch] = value; break;
+        default: return;
+    }
+    settings_save_channel_calibration(&cal);
+}
+
+void sensor_get_calibration(uint8_t ch, float* volt_offset_mv, float* volt_gain, float* curr_offset_ma, float* curr_gain) {
+    *volt_offset_mv = cal.volt_offset_mv[ch];
+    *volt_gain = cal.volt_gain[ch];
+    *curr_offset_ma = cal.curr_offset_ma[ch];
+    *curr_gain = cal.curr_gain[ch];
+}
+
+void sensor_reset_calibration(uint8_t ch) {
+    cal.volt_offset_mv[ch] = 0.0f;
+    cal.volt_gain[ch] = 1.0f;
+    cal.curr_offset_ma[ch] = 0.0f;
+    cal.curr_gain[ch] = 1.0f;
+    settings_save_channel_calibration(&cal);
+}

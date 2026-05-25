@@ -10,6 +10,7 @@ export interface Device {
   device_name: string
   device_type: string
   device_key: string
+  ble_pin?: string
   is_online: boolean
   last_seen_at: string
   created_at: string
@@ -70,9 +71,17 @@ export interface BatteryProfile {
   float_voltage: number
 }
 
+export interface ChannelCalibration {
+  volt_offset_mv: number[]
+  volt_gain: number[]
+  curr_offset_ma: number[]
+  curr_gain: number[]
+}
+
 export interface DeviceChannels {
   device_key: string
   channel_groups: ChannelGroup[]
   channel_names: ChannelName[]
   battery_profiles: BatteryProfile[]
+  channel_calibration?: ChannelCalibration
 }

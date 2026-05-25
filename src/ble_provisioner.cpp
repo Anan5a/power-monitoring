@@ -18,10 +18,21 @@ static BLECharacteristic* pStatusChar = nullptr;
 static BLECharacteristic* pSensorChar = nullptr;
 static bool bleClientConnected = false;
 
+// Rate limiting: track commands per connection window
+#define RATE_WINDOW_MS    10000   // 10-second window
+#define MAX_COMMANDS      10     // max 10 commands per window per connection
+static uint16_t rate_cmd_count = 0;
+static unsigned long rate_window_start = 0;
+static unsigned long rate_last_cmd = 0;
+
 static void handle_command(const char* json);
 
 class ProvServerCallbacks : public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) { bleClientConnected = true; }
+    void onConnect(BLEServer* pServer) {
+        bleClientConnected = true;
+        rate_window_start = millis();
+        rate_cmd_count = 0;
+    }
     void onDisconnect(BLEServer* pServer) {
         bleClientConnected = false;
         BLEDevice::startAdvertising();
@@ -55,7 +66,27 @@ static bool check_pin(JsonDocument& doc) {
     return true;
 }
 
+static bool check_rate_limit() {
+    unsigned long now = millis();
+    if (now - rate_window_start >= RATE_WINDOW_MS) {
+        rate_window_start = now;
+        rate_cmd_count = 0;
+    }
+    if (now - rate_last_cmd < 100) {
+        rate_cmd_count++;
+        if (rate_cmd_count > MAX_COMMANDS) {
+            send_response("{\"ok\":false,\"error\":\"rate_limited\"}");
+            return false;
+        }
+    } else {
+        rate_cmd_count = 0; // reset on slow command (normal usage)
+    }
+    rate_last_cmd = now;
+    return true;
+}
+
 static void handle_command(const char* json) {
+    if (!check_rate_limit()) return;
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
     if (err) { send_response("{\"ok\":false,\"error\":\"bad_json\"}"); return; }
@@ -105,6 +136,7 @@ static void handle_command(const char* json) {
             return;
         }
         settings_save_ble_pin(doc["new_pin"] | 0);
+        sync_ble_pin_to_supabase();
         send_response("{\"ok\":true,\"msg\":\"pin_updated\"}");
     } else if (strcmp(cmd, "get_status") == 0) {
         JsonDocument resp;
@@ -319,6 +351,46 @@ static void handle_command(const char* json) {
         char buf[128];
         serializeJson(resp, buf);
         send_response(buf);
+    } else if (strcmp(cmd, "set_calibration") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        uint8_t type = doc["type"] | 0;
+        float value = doc["value"] | 0.0f;
+        if (ch > 2) {
+            send_response("{\"ok\":false,\"error\":\"invalid_channel\"}");
+            return;
+        }
+        sensor_set_calibration(ch, type, value);
+        sync_calibration_to_supabase();
+        send_response("{\"ok\":true,\"msg\":\"calibration_saved\"}");
+    } else if (strcmp(cmd, "get_calibration") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        if (ch > 2) {
+            send_response("{\"ok\":false,\"error\":\"invalid_channel\"}");
+            return;
+        }
+        float volt_offset_mv, volt_gain, curr_offset_ma, curr_gain;
+        sensor_get_calibration(ch, &volt_offset_mv, &volt_gain, &curr_offset_ma, &curr_gain);
+        JsonDocument resp;
+        resp["ok"] = true;
+        resp["channel"] = ch;
+        resp["volt_offset_mv"] = volt_offset_mv;
+        resp["volt_gain"] = volt_gain;
+        resp["curr_offset_ma"] = curr_offset_ma;
+        resp["curr_gain"] = curr_gain;
+        char buf[256];
+        serializeJson(resp, buf);
+        send_response(buf);
+    } else if (strcmp(cmd, "reset_calibration") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        if (ch > 2) {
+            send_response("{\"ok\":false,\"error\":\"invalid_channel\"}");
+            return;
+        }
+        sensor_reset_calibration(ch);
+        send_response("{\"ok\":true,\"msg\":\"calibration_reset\"}");
     } else if (strcmp(cmd, "factory_reset") == 0) {
         if (!check_pin(doc)) return;
         settings_factory_reset();

@@ -16,10 +16,9 @@ static unsigned long last5s = 0;
 
 static void print_sensor_data(const SensorData& data) {
     for (int i = 0; i < 3; i++) {
-        Serial.printf("CH%d: %.2fV %.3fA\n", i, data.ina3221_busV[i], data.ina3221_current[i]);
+        Serial.printf("CH%d: %.2fV %.3fA (cal)\n", i, data.ads1115_volts[i], data.ina3221_current[i]);
     }
     Serial.printf("INA226: %.2fV %.3fA %.2fW\n", data.ina226_busV, data.ina226_current, data.ina226_power);
-    Serial.printf("ADC: %.3fV %.3fV %.3fV %.3fV\n", data.ads1115_volts[0], data.ads1115_volts[1], data.ads1115_volts[2], data.ads1115_volts[3]);
 }
 
 static void print_status() {
@@ -97,8 +96,76 @@ static void handle_serial_cli() {
                         }
                     }
                     Serial.println("done");
+                } else if (line.startsWith("test relay ")) {
+                    int idx;
+                    if (sscanf(line.c_str(), "test relay %d", &idx) == 1 && idx >= 0 && idx <= 3) {
+                        RelayRule rt;
+                        if (settings_load_relay(idx, &rt)) {
+                            Serial.printf("Testing relay %d on GPIO %d...\n", idx, rt.gpio_pin);
+                            Serial.println("Activating 3s...");
+                            digitalWrite(rt.gpio_pin, rt.active_high ? HIGH : LOW);
+                            delay(3000);
+                            digitalWrite(rt.gpio_pin, rt.active_high ? LOW : HIGH);
+                            Serial.println("Relay deactivated.");
+                        } else {
+                            Serial.println("Relay not configured. Use 'relay N 0/1' to manual override.");
+                        }
+                    } else {
+                        Serial.println("Usage: test relay 0-3");
+                    }
+                } else if (line.startsWith("test sensor ")) {
+                    int ch;
+                    if (sscanf(line.c_str(), "test sensor %d", &ch) == 1 && ch >= 0 && ch <= 2) {
+                        SensorData d = read_sensors();
+                        Serial.printf("Sensor CH%d: %.3fV, %.3fA\n", ch, d.ads1115_volts[ch], d.ina3221_current[ch]);
+                        Serial.printf("  raw shunt voltage: %.2fmV\n", ina3221_getShuntVoltage(ch) * 1000.0f);
+                    } else {
+                        Serial.println("Usage: test sensor 0-2");
+                    }
+                } else if (line == "test display") {
+                    Serial.println("Display test: OLED should show cycling pages");
+                    extern void init_display();
+                    extern void update_display(const SensorData&, const char*, float);
+                    SensorData d = read_sensors();
+                    for (int i = 0; i < 5; i++) {
+                        update_display(d, "192.168.1.1", 123.4f);
+                        delay(1000);
+                    }
+                    Serial.println("Display test done.");
+                } else if (line == "test all relays") {
+                    Serial.println("Testing all relays in sequence...");
+                    for (int i = 0; i < 4; i++) {
+                        RelayRule rt;
+                        if (settings_load_relay(i, &rt)) {
+                            Serial.printf("Relay %d (GPIO %d)...\n", i, rt.gpio_pin);
+                            digitalWrite(rt.gpio_pin, rt.active_high ? HIGH : LOW);
+                            delay(1000);
+                            digitalWrite(rt.gpio_pin, rt.active_high ? LOW : HIGH);
+                            delay(500);
+                        }
+                    }
+                    Serial.println("All relays tested.");
+                } else if (line == "test all sensors") {
+                    SensorData d = read_sensors();
+                    Serial.println("All sensor channels:");
+                    for (int i = 0; i < 3; i++) {
+                        Serial.printf("  CH%d: %.3fV  %.3fA\n", i, d.ads1115_volts[i], d.ina3221_current[i]);
+                    }
                 } else if (line == "help") {
-                    Serial.println("Commands: status, sensors, relay status, relay N 0/1, reset coulomb N, flush log, i2c_scan, help");
+                    Serial.println("Commands:");
+                    Serial.println("  status              — IP, log entries, coulomb/SoC");
+                    Serial.println("  sensors             — all sensor readings");
+                    Serial.println("  relay status        — relay GPIO states");
+                    Serial.println("  relay N 0/1         — manual override relay N (0=off, 1=on)");
+                    Serial.println("  test relay N        — pulse relay N for 3s (auto-reset)");
+                    Serial.println("  test all relays     — pulse each relay 1s in sequence");
+                    Serial.println("  test sensor N       — read sensor CH N once (0-2)");
+                    Serial.println("  test all sensors    — read all sensor channels");
+                    Serial.println("  test display        — cycle OLED pages 5x");
+                    Serial.println("  reset coulomb N     — reset coulomb counter CH N");
+                    Serial.println("  flush log           — flush RAM log buffer");
+                    Serial.println("  i2c_scan            — scan I2C bus for devices");
+                    Serial.println("  help                — this list");
                 } else if (line.length() > 0) {
                     Serial.println("Unknown command. Type 'help'.");
                 }
@@ -150,7 +217,7 @@ void loop() {
         last5s = now;
         data = read_sensors();
         float total_power = 0;
-        for (int ch = 0; ch < 3; ch++) total_power += data.ina3221_busV[ch] * data.ina3221_current[ch];
+        for (int ch = 0; ch < 3; ch++) total_power += data.ads1115_volts[ch] * data.ina3221_current[ch];
         total_power += data.ina226_power;
         publish_data(data);
         update_display(data, get_local_ip_str(), total_power);

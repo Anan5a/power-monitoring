@@ -60,6 +60,7 @@ static void connect_wifi() {
     strlcpy(ip_str, WiFi.localIP().toString().c_str(), sizeof(ip_str));
     Serial.println("\nWiFi connected");
     sync_time();
+    sync_calibration_to_supabase();
 }
 
 static void connect_mqtt() {
@@ -261,4 +262,111 @@ void publish_data_supabase(const SensorData& data) {
     if (rc != 200 && rc != 201 && rc != 204) {
         Serial.print("Supabase publish failed: "); Serial.println(rc);
     }
+}
+
+void sync_calibration_to_supabase() {
+    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
+
+    ChannelCalibration cal;
+    if (!settings_load_channel_calibration(&cal)) return;
+
+    HTTPClient http;
+    char url[256];
+    snprintf(url, sizeof(url), "%s/rest/v1/device_channels?device_key=eq.%s", supabase_url, device_key);
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", anon_key);
+    http.addHeader("Authorization", "Bearer " + String(anon_key));
+    http.addHeader("Prefer", "precision=exact");
+
+    JsonDocument doc;
+    JsonObject cal_obj = doc["channel_calibration"].to<JsonObject>();
+    JsonArray volt_offset = cal_obj["volt_offset_mv"].to<JsonArray>();
+    JsonArray volt_gain = cal_obj["volt_gain"].to<JsonArray>();
+    JsonArray curr_offset = cal_obj["curr_offset_ma"].to<JsonArray>();
+    JsonArray curr_gain = cal_obj["curr_gain"].to<JsonArray>();
+    for (uint8_t i = 0; i < 3; i++) {
+        volt_offset.add(cal.volt_offset_mv[i]);
+        volt_gain.add(cal.volt_gain[i]);
+        curr_offset.add(cal.curr_offset_ma[i]);
+        curr_gain.add(cal.curr_gain[i]);
+    }
+
+    char buffer[512];
+    size_t len = serializeJson(doc, buffer);
+    int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
+    http.end();
+    if (rc >= 200 && rc < 300) {
+        Serial.println("Calibration synced to Supabase");
+    } else {
+        Serial.print("Calibration sync failed: "); Serial.println(rc);
+    }
+}
+
+void sync_ble_pin_to_supabase() {
+    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
+
+    uint32_t pin = settings_load_ble_pin();
+    char pin_str[16];
+    snprintf(pin_str, sizeof(pin_str), "%lu", (unsigned long)pin);
+
+    HTTPClient http;
+    char url[256];
+    snprintf(url, sizeof(url), "%s/rest/v1/device_channels?device_key=eq.%s", supabase_url, device_key);
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", anon_key);
+    http.addHeader("Authorization", "Bearer " + String(anon_key));
+
+    JsonDocument doc;
+    doc["ble_pin"] = pin_str;
+    char buffer[256];
+    size_t len = serializeJson(doc, buffer);
+    int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
+    http.end();
+    if (rc >= 200 && rc < 300) {
+        Serial.println("BLE PIN synced to Supabase");
+    } else {
+        Serial.print("BLE PIN sync failed: "); Serial.println(rc);
+    }
+}
+
+bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
+    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return false;
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return false;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return false;
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return false;
+
+    HTTPClient http;
+    char url[256];
+    snprintf(url, sizeof(url), "%s/rest/v1/device_channels?device_key=eq.%s&select=ble_pin", supabase_url, device_key);
+    http.begin(url);
+    http.addHeader("apikey", anon_key);
+    http.addHeader("Authorization", "Bearer " + String(anon_key));
+
+    int rc = http.GET();
+    bool ok = false;
+    if (rc == 200) {
+        String body = http.getString();
+        // Response: [{"ble_pin":"123456"}]
+        int q1 = body.indexOf('"');
+        if (q1 >= 0) {
+            int q2 = body.indexOf('"', q1 + 1);
+            if (q2 > q1) {
+                strlcpy(pin_str, body.substring(q1 + 1, q2).c_str(), len);
+                ok = strlen(pin_str) > 0;
+            }
+        }
+    }
+    http.end();
+    return ok;
 }
