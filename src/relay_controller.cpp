@@ -20,7 +20,7 @@ void init_relays() {
             RelayRule rt = { ch, 5.0f, 0.0f, 0.0f, 0.0f, 1000, 5000, default_pins[ch], false, true };
             settings_save_relay(ch, &rt);
             pinMode(default_pins[ch], OUTPUT);
-            digitalWrite(default_pins[ch], LOW);
+            digitalWrite(default_pins[ch], HIGH); // active_low → HIGH = relay OFF at boot
             relay_states[ch] = { false, 0, false };
         }
     } else {
@@ -28,6 +28,8 @@ void init_relays() {
             RelayRule rt;
             if (settings_load_relay(i, &rt)) {
                 pinMode(rt.gpio_pin, OUTPUT);
+                // active_high=false (active-low relay): LOW=ON, HIGH=OFF
+                // active_high=true (active-high relay): HIGH=ON, LOW=OFF
                 digitalWrite(rt.gpio_pin, rt.active_high ? LOW : HIGH);
                 relay_states[i] = { false, 0, false };
             }
@@ -37,7 +39,7 @@ void init_relays() {
 
 void evaluate_relays(const SensorData& data) {
     float voltages[4] = {
-        data.ina3221_busV[0], data.ina3221_busV[1], data.ina3221_busV[2], data.ina226_busV
+        data.ads1115_volts[0], data.ads1115_volts[1], data.ads1115_volts[2], data.ina226_busV
     };
     float currents[4] = {
         data.ina3221_current[0], data.ina3221_current[1], data.ina3221_current[2], data.ina226_current
