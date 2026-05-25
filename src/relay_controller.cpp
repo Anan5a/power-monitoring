@@ -17,10 +17,10 @@ void init_relays() {
     uint8_t count = settings_load_relay_count();
     if (count == 0) {
         for (uint8_t ch = 0; ch < 4; ch++) {
-            RelayRule rt = { ch, 5.0f, 0.0f, 0.0f, 0.0f, 1000, 5000, default_pins[ch], false, true };
+            RelayRule rt = { ch, 5.0f, 0.0f, 0.0f, 0.0f, 1000, 5000, default_pins[ch], true, true };
             settings_save_relay(ch, &rt);
             pinMode(default_pins[ch], OUTPUT);
-            digitalWrite(default_pins[ch], HIGH); // active_low → HIGH = relay OFF at boot
+            digitalWrite(default_pins[ch], LOW); // active_high → LOW = relay OFF at boot
             relay_states[ch] = { false, 0, false };
         }
     } else {
@@ -28,9 +28,7 @@ void init_relays() {
             RelayRule rt;
             if (settings_load_relay(i, &rt)) {
                 pinMode(rt.gpio_pin, OUTPUT);
-                // active_high=false (active-low relay): LOW=ON, HIGH=OFF
-                // active_high=true (active-high relay): HIGH=ON, LOW=OFF
-                digitalWrite(rt.gpio_pin, rt.active_high ? LOW : HIGH);
+                digitalWrite(rt.gpio_pin, LOW); // active_high=true: LOW=OFF, HIGH=ON
                 relay_states[i] = { false, 0, false };
             }
         }

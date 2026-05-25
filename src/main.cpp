@@ -66,7 +66,7 @@ static void handle_serial_cli() {
                     if (sscanf(line.c_str(), "relay %d %d", &idx, &st) == 2) {
                         RelayRule rt;
                         if (settings_load_relay(idx, &rt)) {
-                            digitalWrite(rt.gpio_pin, st ? (rt.active_high ? HIGH : LOW) : (rt.active_high ? LOW : HIGH));
+                            digitalWrite(rt.gpio_pin, st ? HIGH : LOW);
                             Serial.printf("Relay %d set to %d\n", idx, st);
                         } else {
                             Serial.println("Relay not found");
@@ -103,9 +103,9 @@ static void handle_serial_cli() {
                         if (settings_load_relay(idx, &rt)) {
                             Serial.printf("Testing relay %d on GPIO %d...\n", idx, rt.gpio_pin);
                             Serial.println("Activating 3s...");
-                            digitalWrite(rt.gpio_pin, rt.active_high ? HIGH : LOW);
+                            digitalWrite(rt.gpio_pin, HIGH);
                             delay(3000);
-                            digitalWrite(rt.gpio_pin, rt.active_high ? LOW : HIGH);
+                            digitalWrite(rt.gpio_pin, LOW);
                             Serial.println("Relay deactivated.");
                         } else {
                             Serial.println("Relay not configured. Use 'relay N 0/1' to manual override.");
