@@ -12,9 +12,11 @@ struct RelayState {
     bool condition_active;
 };
 static RelayState relay_states[4];
+static unsigned long relay_boot_time = 0;
 
 void init_relays() {
     uint8_t count = settings_load_relay_count();
+    relay_boot_time = millis();
     if (count == 0) {
         for (uint8_t ch = 0; ch < 4; ch++) {
             RelayRule rt = { ch, 5.0f, 0.0f, 0.0f, 0.0f, 1000, 5000, default_pins[ch], true, true };
@@ -36,6 +38,8 @@ void init_relays() {
 }
 
 void evaluate_relays(const SensorData& data) {
+    // Grace period: don't auto-trip for first 10s after boot (sensors stabilizing)
+    if (millis() - relay_boot_time < 10000) return;
     float voltages[4] = {
         data.ads1115_volts[0], data.ads1115_volts[1], data.ads1115_volts[2], data.ina226_busV
     };
