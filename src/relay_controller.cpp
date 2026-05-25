@@ -13,10 +13,12 @@ struct RelayState {
 };
 static RelayState relay_states[4];
 static unsigned long relay_boot_time = 0;
+static bool relay_auto_enabled = false;  // off by default — user enables via serial
 
 void init_relays() {
     uint8_t count = settings_load_relay_count();
     relay_boot_time = millis();
+    relay_auto_enabled = false;  // OFF by default — must enable manually
     if (count == 0) {
         for (uint8_t ch = 0; ch < 4; ch++) {
             RelayRule rt = { ch, 5.0f, 0.0f, 0.0f, 0.0f, 1000, 5000, default_pins[ch], true, true };
@@ -38,8 +40,8 @@ void init_relays() {
 }
 
 void evaluate_relays(const SensorData& data) {
-    // Grace period: don't auto-trip for first 10s after boot (sensors stabilizing)
-    if (millis() - relay_boot_time < 10000) return;
+    // Auto-trip disabled until user enables via 'relay auto on'
+    if (!relay_auto_enabled) return;
     float voltages[4] = {
         data.ads1115_volts[0], data.ads1115_volts[1], data.ads1115_volts[2], data.ina226_busV
     };
@@ -95,4 +97,8 @@ void evaluate_relays(const SensorData& data) {
             }
         }
     }
+}
+
+void relay_set_auto(bool enabled) {
+    relay_auto_enabled = enabled;
 }
