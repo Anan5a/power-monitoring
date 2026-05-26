@@ -107,19 +107,35 @@ static void draw_small_value(float value, const char* label, int x, int y) {
 // ─── Status page ───────────────────────────────────────────────
 
 static void draw_status_page(const char* ip_str, float total_power) {
-    draw_header("POWER MONITOR", 1, 5);
-
+    // BLUE area: single line with IP and total power
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 12);
-    display.print("IP: ");
-    display.println(ip_str);
-    display.print("PWR: ");
-    display.print(total_power, 1);
-    display.println("W");
-    display.print("LOG: ");
+    display.setCursor(0, 2);
+    display.print("PWR MON");
+    display.setCursor(50, 2);
+    display.print(ip_str);
+
+    display.setTextSize(2);
+    display.setTextColor(SSD1306_WHITE);
+    char pbuf[8];
+    dtostrf(total_power, 5, 1, pbuf);
+    display.setCursor(0, 16);
+    display.print(pbuf);
+    display.setTextSize(1);
+    display.setCursor(60, 16);
+    display.print("W");
+
+    // Divider
+    display.drawLine(0, 37, SCREEN_WIDTH - 1, 37, SSD1306_WHITE);
+
+    // YELLOW area: log count
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 42);
+    display.print("LOG:");
     display.print(log_entries_count());
-    display.println(" entries");
+    display.print(" entries");
+    if (log_has_overflow_file()) display.print(" [OVF]");
 }
 
 // ─── Channel page ───────────────────────────────────────────────
@@ -127,70 +143,53 @@ static void draw_status_page(const char* ip_str, float total_power) {
 static void draw_channel_page(uint8_t ch, const SensorData& data) {
     float v, i, p;
     char name[24] = "";
-    uint8_t icon_type; // 0=solar, 1=battery, 2=load
     if (ch < 3) {
         v = data.ads1115_volts[ch];
         i = data.ina3221_current[ch];
         p = v * i;
         settings_load_channel_name(ch, name, sizeof(name));
         if (!name[0]) {
-            if (ch == 0) { strlcpy(name, "Battery", sizeof(name)); icon_type = 1; }
-            else if (ch == 1) { strlcpy(name, "Solar", sizeof(name)); icon_type = 0; }
-            else { strlcpy(name, "Output", sizeof(name)); icon_type = 2; }
-        } else {
-            // Guess icon from name keywords
-            if (strcasestr(name, "solar") || strcasestr(name, "pv")) icon_type = 0;
-            else if (strcasestr(name, "battery") || strcasestr(name, "bat")) icon_type = 1;
-            else icon_type = 2;
+            if (ch == 0) strlcpy(name, "Battery", sizeof(name));
+            else if (ch == 1) strlcpy(name, "Solar", sizeof(name));
+            else strlcpy(name, "Output", sizeof(name));
         }
     } else {
         v = data.ina226_busV; i = data.ina226_current; p = data.ina226_power;
         strlcpy(name, "INA226", sizeof(name));
-        icon_type = 0;
     }
 
-    // Header with icon
+    // ── BLUE AREA (y=0..47): full-width single line ──────────────
+    // "BATT  V: 48.23  I: 3.156  P: 152W"
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
+    display.setCursor(0, 2);
     display.print(name);
-    display.setCursor(SCREEN_WIDTH - 12, 0);
-    display.print(ch + 1);
 
-    if (icon_type == 0) draw_solar_icon(SCREEN_WIDTH - 10, 5);
-    else if (icon_type == 1) draw_battery_icon(SCREEN_WIDTH - 10, 5);
-    else draw_load_icon(SCREEN_WIDTH - 10, 5);
-
-    // Separator
-    display.drawLine(0, 9, SCREEN_WIDTH - 1, 9, SSD1306_WHITE);
-
-    // Big voltage (top left)
-    display.setTextSize(2);
+    display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 12);
+    // V label+value
+    display.setCursor(0, 14);
+    display.print("V:");
+    display.setTextSize(2);
     display.print(v, 2);
-    display.setTextSize(1);
-    display.setCursor(54, 12);
-    display.print("VOLTS");
 
-    // Big current (below voltage)
+    // I label+value
+    display.setTextSize(1);
+    display.setCursor(48, 14);
+    display.print("I:");
     display.setTextSize(2);
-    display.setCursor(0, 30);
     display.print(i, 3);
-    display.setTextSize(1);
-    display.setCursor(54, 30);
-    display.print("AMPS");
 
-    // Power right side (large)
+    // P label+value
+    display.setTextSize(1);
+    display.setCursor(96, 14);
+    display.print("P:");
     display.setTextSize(2);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(60, 22);
-    display.print(p, 2);
-    display.setTextSize(1);
-    display.setCursor(116, 22);
-    display.print("W");
+    char pbuf[8];
+    dtostrf(p, 5, 1, pbuf);
+    display.print(pbuf);
 
-    // SoC bar or mAh
+    // ── YELLOW BAR (y=50..63): SoC or mAh ─────────────────────────
     display.drawLine(0, 49, SCREEN_WIDTH - 1, 49, SSD1306_WHITE);
     float mAh = get_coulomb_mAh(ch);
     BatteryConfig bat;
@@ -200,17 +199,26 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         if (soc < 0) soc = 0;
         if (soc > 100) soc = 100;
         display.setTextSize(1);
+        display.setTextColor(SSD1306_WHITE);
         display.setCursor(0, 52);
         display.print("SoC");
         display.print(soc, 0);
         display.print("% ");
-        draw_soc_bar(80, 57, 46, soc);
+        draw_soc_bar(90, 57, 36, soc);
     } else {
         display.setTextSize(1);
+        display.setTextColor(SSD1306_WHITE);
         display.setCursor(0, 52);
         display.print("mAh:");
         display.print(mAh, 0);
     }
+
+    // Page number top-right
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(SCREEN_WIDTH - 20, 0);
+    display.print("P.");
+    display.print(ch + 2);
 }
 
 // ─── Main display loop ───────────────────────────────────────────
