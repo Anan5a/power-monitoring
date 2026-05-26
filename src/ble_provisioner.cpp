@@ -395,6 +395,11 @@ static void handle_command(const char* json) {
         if (!check_pin(doc)) return;
         settings_factory_reset();
         send_response("{\"ok\":true,\"msg\":\"factory_reset_done_reboot\"}");
+    } else if (strcmp(cmd, "reboot") == 0) {
+        if (!check_pin(doc)) return;
+        send_response("{\"ok\":true,\"msg\":\"rebooting\"}");
+        delay(100);
+        ESP.restart();
     } else {
         send_response("{\"ok\":false,\"error\":\"unknown_cmd\"}");
     }

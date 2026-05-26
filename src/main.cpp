@@ -248,6 +248,10 @@ static void handle_serial_cli() {
                     for (int i = 0; i < 3; i++) {
                         Serial.printf("  CH%d: %.3fV  %.3fA\n", i, d.ads1115_volts[i], d.ina3221_current[i]);
                     }
+                } else if (line == "reboot") {
+                    Serial.println("Rebooting...");
+                    delay(100);
+                    ESP.restart();
                 } else if (line == "help") {
                     Serial.println("Commands:");
                     Serial.println("  status              — IP, log entries, coulomb/SoC");
@@ -273,6 +277,7 @@ static void handle_serial_cli() {
                     Serial.println("  resistor show       — show resistor values per channel");
                     Serial.println("  cal N type value    — set calibration (type: 0=vo_mv, 1=vg, 2=co_ma, 3=cg)");
                     Serial.println("  cal show            — show all channel calibration values");
+                    Serial.println("  reboot              — reboot the device");
                     Serial.println("  help                — this list");
                 } else if (line.length() > 0) {
                     Serial.println("Unknown command. Type 'help'.");
