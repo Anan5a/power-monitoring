@@ -11,8 +11,8 @@ static Adafruit_INA3221 ina3221_volt; // 0x42 — voltage sensing (resistor divi
 
 static bool wire_started = false;
 
-// Voltage divider ratios (hardware fixed)
-static const float volt_ratios[3] = {
+// Voltage divider ratios (can be overridden per-channel from NVS)
+static float volt_ratios[3] = {
     VOLT_RATIO_CH0,
     VOLT_RATIO_CH1,
     VOLT_RATIO_CH2,
@@ -37,6 +37,15 @@ void init_sensors() {
     ChannelCalibration saved;
     if (settings_load_channel_calibration(&saved)) {
         cal = saved;
+    }
+
+    // Load voltage divider ratios from NVS (falls back to config.h)
+    for (uint8_t ch = 0; ch < 3; ch++) {
+        float ratio = 0.0f;
+        if (settings_load_volt_ratio(ch, &ratio) && ratio > 0.0f) {
+            volt_ratios[ch] = ratio;
+            Serial.printf("CH%d volt_ratio: %.4f\n", ch, ratio);
+        }
     }
 
 #if ENABLE_INA3221

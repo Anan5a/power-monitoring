@@ -144,6 +144,24 @@ static void handle_serial_cli() {
                         float s; bool ok = settings_load_shunt(ch, &s);
                         Serial.printf("CH%d shunt: %s\n", ch, ok ? String(s, 6).c_str() : "(default)");
                     }
+                } else if (line.startsWith("vratio ")) {
+                    int ch; float ratio;
+                    if (sscanf(line.c_str(), "vratio %d %f", &ch, &ratio) == 2 && ch >= 0 && ch <= 2) {
+                        if (ratio <= 0.0f) {
+                            Serial.printf("CH%d vratio cleared (using config default %.4f)\n", ch, VOLT_RATIO_CH0);
+                        } else {
+                            Serial.printf("CH%d vratio set to %.4f\n", ch, ratio);
+                        }
+                        settings_save_volt_ratio(ch, ratio);
+                    } else {
+                        Serial.println("Usage: vratio N ratio (e.g. vratio 2 3.521) or vratio N 0 to clear");
+                    }
+                } else if (line.startsWith("vratio show")) {
+                    for (int ch = 0; ch < 3; ch++) {
+                        float r; bool ok = settings_load_volt_ratio(ch, &r);
+                        float def = (ch == 0) ? VOLT_RATIO_CH0 : (ch == 1) ? VOLT_RATIO_CH1 : VOLT_RATIO_CH2;
+                        Serial.printf("CH%d vratio: %s\n", ch, ok ? String(r, 4).c_str() : String("default:") + String(def, 4));
+                    }
                 } else if (line == "test display") {
                     Serial.println("Display test: OLED should show cycling pages");
                     extern void init_display();
@@ -203,6 +221,8 @@ static void handle_serial_cli() {
                     Serial.println("  i2c_scan            — scan I2C bus for devices");
                     Serial.println("  shunt N ohms       — set shunt resistance for CH N (0 clears)");
                     Serial.println("  shunt show         — show current shunt settings");
+                    Serial.println("  vratio N ratio     — set voltage divider ratio for CH N (0 clears)");
+                    Serial.println("  vratio show        — show current voltage ratios");
                     Serial.println("  help                — this list");
                 } else if (line.length() > 0) {
                     Serial.println("Unknown command. Type 'help'.");

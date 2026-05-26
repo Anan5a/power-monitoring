@@ -109,7 +109,10 @@ void settings_save_channel_name(uint8_t channel, const char* name);
 bool settings_load_shunt(uint8_t channel, float* out);   // ohms, 0=use default
 void settings_save_shunt(uint8_t channel, float ohms);
 
-uint32_t settings_load_ble_pin();        // 6-digit PIN, 0 = no security
+bool settings_load_volt_ratio(uint8_t channel, float* out);  // multiplier, 0=use config.h default
+void settings_save_volt_ratio(uint8_t channel, float ratio);
+
+uint32_t settings_load_ble_pin();
 void settings_save_ble_pin(uint32_t pin);
 
 void settings_factory_reset();           // wipe all NVS keys
