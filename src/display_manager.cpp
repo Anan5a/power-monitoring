@@ -100,18 +100,23 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         snprintf(pbuf, sizeof(pbuf), "%.1f W", p);
     }
 
-    // V row at y=16, I row at y=25, P row at y=34
+    // V row at y=16, I row at y=26, P row at y=36
+    display.setTextSize(1);
     display.setCursor(0, 16);
     display.print("V:");
+    display.setTextSize(2);
     display.print(v, 2);
+    display.setTextSize(1);
     display.print("V");
 
-    display.setCursor(0, 25);
+    display.setCursor(0, 26);
     display.print("I:");
+    display.setTextSize(2);
     display.print(ibuf);
 
-    display.setCursor(0, 34);
+    display.setCursor(0, 36);
     display.print("P:");
+    display.setTextSize(2);
     display.print(pbuf);
 
     // Bottom: SoC or mAh/Ah at y=54
