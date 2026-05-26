@@ -135,7 +135,6 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         display.setTextSize(1);
         display.setCursor(0, 50);
         display.print("mAh:");
-        display.setTextSize(2);
         if (fabsf(mAh) < 1000.0f) {
             display.print(mAh, 0);
         } else {
