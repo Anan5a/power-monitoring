@@ -47,13 +47,12 @@ static void print_status() {
 }
 
 static void handle_serial_cli() {
-    static String line;
-    while (Serial.available()) {
-        char c = Serial.read();
-        if (c == '\n' || c == '\r') {
-            if (line.length() > 0) {
-                line.trim();
-                if (line == "status") {
+    Serial.setTimeout(100);
+    String line = Serial.readStringUntil('\n');
+    if (line.length() == 0) return;
+    line.trim();
+    if (line.length() == 0) return;
+    if (line == "status") {
                     print_status();
                 } else if (line == "sensors") {
                     SensorData data = read_sensors();
@@ -430,12 +429,6 @@ static void handle_serial_cli() {
                 } else if (line.length() > 0) {
                     Serial.println("Unknown command. Type 'help'.");
                 }
-                line = "";
-            }
-        } else {
-            if (line.length() < 63) line += c;
-        }
-    }
 }
 
 void setup() {
