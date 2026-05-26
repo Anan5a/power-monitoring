@@ -162,6 +162,24 @@ static void handle_serial_cli() {
                         float def = (ch == 0) ? VOLT_RATIO_CH0 : (ch == 1) ? VOLT_RATIO_CH1 : VOLT_RATIO_CH2;
                         Serial.printf("CH%d vratio: %s\n", ch, ok ? String(r, 4).c_str() : String("default:") + String(def, 4));
                     }
+                } else if (line.startsWith("resistor ")) {
+                    int ch; float rh, rl;
+                    if (sscanf(line.c_str(), "resistor %d %f %f", &ch, &rh, &rl) == 3 && ch >= 0 && ch <= 2) {
+                        if (rh <= 0.0f || rl <= 0.0f) {
+                            Serial.printf("CH%d resistors cleared\n", ch);
+                        } else {
+                            float ratio = (rh + rl) / rl;
+                            Serial.printf("CH%d R=%.0f+%.0f -> ratio=%.4f\n", ch, rh, rl, ratio);
+                        }
+                        settings_save_resistors(ch, rh, rl);
+                    } else {
+                        Serial.println("Usage: resistor N r_high r_low (e.g. resistor 2 900000 68000) or all 0 to clear");
+                    }
+                } else if (line.startsWith("resistor show")) {
+                    for (int ch = 0; ch < 3; ch++) {
+                        float rh, rl; bool ok = settings_load_resistors(ch, &rh, &rl);
+                        Serial.printf("CH%d resistors: %s\n", ch, ok ? (String(rh, 0) + "+" + rl + " = " + String((rh+rl)/rl, 4)).c_str() : "(not set)");
+                    }
                 } else if (line == "test display") {
                     Serial.println("Display test: OLED should show cycling pages");
                     extern void init_display();
@@ -223,6 +241,8 @@ static void handle_serial_cli() {
                     Serial.println("  shunt show         — show current shunt settings");
                     Serial.println("  vratio N ratio     — set voltage divider ratio for CH N (0 clears)");
                     Serial.println("  vratio show        — show current voltage ratios");
+                    Serial.println("  resistor N r_high r_low — set R values, ratio auto-computed");
+                    Serial.println("  resistor show       — show resistor values per channel");
                     Serial.println("  help                — this list");
                 } else if (line.length() > 0) {
                     Serial.println("Unknown command. Type 'help'.");

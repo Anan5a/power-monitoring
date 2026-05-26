@@ -40,11 +40,21 @@ void init_sensors() {
     }
 
     // Load voltage divider ratios from NVS (falls back to config.h)
+    // If resistor values are stored, compute ratio: (r_high + r_low) / r_low
     for (uint8_t ch = 0; ch < 3; ch++) {
         float ratio = 0.0f;
         if (settings_load_volt_ratio(ch, &ratio) && ratio > 0.0f) {
             volt_ratios[ch] = ratio;
-            Serial.printf("CH%d volt_ratio: %.4f\n", ch, ratio);
+            Serial.printf("CH%d vratio: %.4f (NVS override)\n", ch, ratio);
+        } else {
+            float r_h = 0.0f, r_l = 0.0f;
+            if (settings_load_resistors(ch, &r_h, &r_l) && r_h > 0.0f && r_l > 0.0f) {
+                float computed = (r_h + r_l) / r_l;
+                volt_ratios[ch] = computed;
+                Serial.printf("CH%d vratio: %.4f (computed from R=%.0f+%.0f)\n", ch, computed, r_h, r_l);
+            } else {
+                volt_ratios[ch] = (ch == 0) ? VOLT_RATIO_CH0 : (ch == 1) ? VOLT_RATIO_CH1 : VOLT_RATIO_CH2;
+            }
         }
     }
 

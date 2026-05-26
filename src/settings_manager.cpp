@@ -216,6 +216,23 @@ void settings_save_volt_ratio(uint8_t channel, float ratio) {
     prefs.putFloat(key, ratio);
 }
 
+bool settings_load_resistors(uint8_t channel, float* r_high, float* r_low) {
+    char key_h[16], key_l[16];
+    snprintf(key_h, sizeof(key_h), "r_high_%d", channel);
+    snprintf(key_l, sizeof(key_l), "r_low_%d", channel);
+    if (!prefs.isKey(key_h) || !prefs.isKey(key_l)) return false;
+    *r_high = prefs.getFloat(key_h, 0.0f);
+    *r_low = prefs.getFloat(key_l, 1.0f);
+    return *r_high > 0.0f && *r_low > 0.0f;
+}
+void settings_save_resistors(uint8_t channel, float r_high, float r_low) {
+    char key_h[16], key_l[16];
+    snprintf(key_h, sizeof(key_h), "r_high_%d", channel);
+    snprintf(key_l, sizeof(key_l), "r_low_%d", channel);
+    prefs.putFloat(key_h, r_high);
+    prefs.putFloat(key_l, r_low);
+}
+
 uint32_t settings_load_ble_pin() {
     return prefs.getUInt("ble_pin", 123456);
 }

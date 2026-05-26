@@ -112,6 +112,10 @@ void settings_save_shunt(uint8_t channel, float ohms);
 bool settings_load_volt_ratio(uint8_t channel, float* out);  // multiplier, 0=use config.h default
 void settings_save_volt_ratio(uint8_t channel, float ratio);
 
+// Resistor values for voltage divider: ratio = (r_high + r_low) / r_low
+bool settings_load_resistors(uint8_t channel, float* r_high, float* r_low);
+void settings_save_resistors(uint8_t channel, float r_high, float r_low);
+
 uint32_t settings_load_ble_pin();
 void settings_save_ble_pin(uint32_t pin);
 
