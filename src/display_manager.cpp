@@ -18,127 +18,53 @@ static uint8_t current_page = 0;
 static unsigned long last_page_switch = 0;
 static bool wire_started = false;
 
-// ─── Tiny 8x8 bitmap helpers ────────────────────────────────────
-// All icons are 8x8 pixels, drawn as filled shapes using GFX methods.
-// To draw centered on a point (cx, cy) in an 8x8 grid: offset by -4,+4.
-
-static void draw_battery_icon(int cx, int cy) {
-    // Body
-    display.drawRect(cx - 4, cy - 2, 8, 5, SSD1306_WHITE);
-    // Tip
-    display.drawRect(cx + 4, cy - 1, 1, 2, SSD1306_WHITE);
-    // Charge bars
-    display.fillRect(cx - 3, cy + 1, 2, 2, SSD1306_WHITE);
-    display.fillRect(cx - 1, cy + 1, 2, 2, SSD1306_WHITE);
-}
-
-static void draw_solar_icon(int cx, int cy) {
-    // Sun circle
-    display.drawCircle(cx, cy, 2, SSD1306_WHITE);
-    // Rays (4 directions)
-    display.drawLine(cx - 4, cy, cx - 2, cy, SSD1306_WHITE);
-    display.drawLine(cx + 2, cy, cx + 4, cy, SSD1306_WHITE);
-    display.drawLine(cx, cy - 4, cx, cy - 2, SSD1306_WHITE);
-    display.drawLine(cx, cy + 2, cx, cy + 4, SSD1306_WHITE);
-    // Diagonal rays
-    display.drawLine(cx - 3, cy - 3, cx - 2, cy - 2, SSD1306_WHITE);
-    display.drawLine(cx + 2, cy - 2, cx + 3, cy - 3, SSD1306_WHITE);
-    display.drawLine(cx - 3, cy + 3, cx - 2, cy + 2, SSD1306_WHITE);
-    display.drawLine(cx + 2, cy + 2, cx + 3, cy + 3, SSD1306_WHITE);
-}
-
-static void draw_load_icon(int cx, int cy) {
-    // Lightbulb base
-    display.drawRect(cx - 2, cy, 4, 3, SSD1306_WHITE);
-    // Filament arc
-    display.drawCircle(cx, cy - 1, 2, SSD1306_WHITE);
-    // Rays
-    display.drawLine(cx - 4, cy - 2, cx - 3, cy - 1, SSD1306_WHITE);
-    display.drawLine(cx + 3, cy - 1, cx + 4, cy - 2, SSD1306_WHITE);
-    display.drawLine(cx - 4, cy + 2, cx - 3, cy + 1, SSD1306_WHITE);
-    display.drawLine(cx + 3, cy + 1, cx + 4, cy + 2, SSD1306_WHITE);
-}
+// ─── SoC bar ─────────────────────────────────────────────────────
 
 static void draw_soc_bar(int cx, int cy, int width, float soc) {
-    // Background bar
     display.drawRect(cx - width / 2, cy - 1, width, 3, SSD1306_WHITE);
-    // Filled portion
     int fill = (int)((width - 2) * soc / 100.0f);
     if (fill > 0) {
         display.fillRect(cx - width / 2 + 1, cy, fill, 1, SSD1306_WHITE);
     }
 }
 
-// ─── Page helpers ───────────────────────────────────────────────
-
-static void draw_header(const char* title, int page, int total) {
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.print(title);
-    // Page indicator top-right
-    display.setCursor(SCREEN_WIDTH - 24, 0);
-    display.print("P.");
-    display.print(page);
-    display.print("/");
-    display.print(total);
-    // Separator line
-    display.drawLine(0, 9, SCREEN_WIDTH - 1, 9, SSD1306_WHITE);
-}
-
-static void draw_big_value(float value, const char* unit, int x, int y) {
-    display.setTextSize(2);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(x, y);
-    display.print(value, 2);
-    display.setTextSize(1);
-    display.setCursor(x, y + 18);
-    display.print(unit);
-}
-
-static void draw_small_value(float value, const char* label, int x, int y) {
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(x, y);
-    display.print(label);
-    display.print(value, 3);
-}
-
 // ─── Status page ───────────────────────────────────────────────
+// YELLOW top (y=0..20): IP
+// BLUE middle (y=23..37): total power in large text
+// YELLOW bottom (y=40..63): log entry count + overflow flag
 
 static void draw_status_page(const char* ip_str, float total_power) {
-    // BLUE area: single line with IP and total power
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 2);
-    display.print("PWR MON");
-    display.setCursor(50, 2);
-    display.print(ip_str);
-
     display.setTextSize(2);
     display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 2);
+    display.print(ip_str);
+
     char pbuf[8];
     dtostrf(total_power, 5, 1, pbuf);
-    display.setCursor(0, 16);
+    display.setTextSize(3);
+    display.setCursor(0, 22);
     display.print(pbuf);
     display.setTextSize(1);
-    display.setCursor(60, 16);
+    display.setCursor(75, 24);
     display.print("W");
 
-    // Divider
-    display.drawLine(0, 37, SCREEN_WIDTH - 1, 37, SSD1306_WHITE);
+    display.drawLine(0, 40, SCREEN_WIDTH - 1, 40, SSD1306_WHITE);
 
-    // YELLOW area: log count
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 42);
+    display.setCursor(0, 43);
     display.print("LOG:");
     display.print(log_entries_count());
-    display.print(" entries");
-    if (log_has_overflow_file()) display.print(" [OVF]");
+    display.print(" ent");
+    if (log_has_overflow_file()) {
+        display.print(" [OVF]");
+    }
 }
 
 // ─── Channel page ───────────────────────────────────────────────
+// YELLOW top bar (y=0..20): channel name left, page# right
+// BLUE main area (y=23..47): voltage | current | power
+// YELLOW bottom bar (y=50..63): SoC or mAh/Ah
 
 static void draw_channel_page(uint8_t ch, const SensorData& data) {
     float v, i, p;
@@ -158,39 +84,58 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         strlcpy(name, "INA226", sizeof(name));
     }
 
-    // ── BLUE AREA (y=0..47): full-width single line ──────────────
-    // "BATT  V: 48.23  I: 3.156  P: 152W"
-    display.setTextSize(1);
+    // YELLOW top: channel name + page number
+    display.setTextSize(2);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 2);
     display.print(name);
-
     display.setTextSize(1);
+    display.setCursor(SCREEN_WIDTH - 20, 4);
+    display.print("P.");
+    display.print(ch + 2);
+
+    display.drawLine(0, 21, SCREEN_WIDTH - 1, 21, SSD1306_WHITE);
+
+    // BLUE middle: V | I | P stacked vertically
+    char ibuf[16], pbuf[16];
+
+    // Current: mA if |i|<1A, else A with 2 decimals
+    if (fabsf(i) < 1.0f) {
+        snprintf(ibuf, sizeof(ibuf), "%d mA", (int)(i * 1000.0f));
+    } else {
+        snprintf(ibuf, sizeof(ibuf), "%.2f A", i);
+    }
+
+    // Power: W with 2 decimals if <10W, else 1 decimal
+    if (fabsf(p) < 10.0f) {
+        snprintf(pbuf, sizeof(pbuf), "%.2f W", p);
+    } else {
+        snprintf(pbuf, sizeof(pbuf), "%.1f W", p);
+    }
+
+    // Voltage row (y=24): value + unit
+    display.setTextSize(2);
     display.setTextColor(SSD1306_WHITE);
-    // V label+value
-    display.setCursor(0, 14);
-    display.print("V:");
-    display.setTextSize(2);
+    display.setCursor(0, 24);
     display.print(v, 2);
-
-    // I label+value
     display.setTextSize(1);
-    display.setCursor(48, 14);
-    display.print("I:");
-    display.setTextSize(2);
-    display.print(i, 3);
+    display.setCursor(54, 26);
+    display.print("V");
 
-    // P label+value
-    display.setTextSize(1);
-    display.setCursor(96, 14);
-    display.print("P:");
+    // Current row (y=34): value + unit
     display.setTextSize(2);
-    char pbuf[8];
-    dtostrf(p, 5, 1, pbuf);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 34);
+    display.print(ibuf);
+
+    // Power row (y=44): value + unit
+    display.setTextSize(2);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 44);
     display.print(pbuf);
 
-    // ── YELLOW BAR (y=50..63): SoC or mAh ─────────────────────────
-    display.drawLine(0, 49, SCREEN_WIDTH - 1, 49, SSD1306_WHITE);
+    // YELLOW bottom bar: SoC or mAh/Ah
+    display.drawLine(0, 50, SCREEN_WIDTH - 1, 50, SSD1306_WHITE);
     float mAh = get_coulomb_mAh(ch);
     BatteryConfig bat;
     float soc = -1;
@@ -200,25 +145,23 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         if (soc > 100) soc = 100;
         display.setTextSize(1);
         display.setTextColor(SSD1306_WHITE);
-        display.setCursor(0, 52);
-        display.print("SoC");
+        display.setCursor(0, 53);
+        display.print("SoC ");
         display.print(soc, 0);
-        display.print("% ");
-        draw_soc_bar(90, 57, 36, soc);
+        display.print("%");
+        draw_soc_bar(95, 58, 30, soc);
     } else {
         display.setTextSize(1);
         display.setTextColor(SSD1306_WHITE);
-        display.setCursor(0, 52);
-        display.print("mAh:");
-        display.print(mAh, 0);
+        display.setCursor(0, 53);
+        if (fabsf(mAh) < 1000.0f) {
+            display.print("mAh: ");
+            display.print(mAh, 0);
+        } else {
+            display.print("Ah: ");
+            display.print(mAh / 1000.0f, 2);
+        }
     }
-
-    // Page number top-right
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(SCREEN_WIDTH - 20, 0);
-    display.print("P.");
-    display.print(ch + 2);
 }
 
 // ─── Main display loop ───────────────────────────────────────────
