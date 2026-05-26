@@ -114,77 +114,11 @@ static void handle_serial_cli() {
                             digitalWrite(rt.gpio_pin, LOW);
                             Serial.println("Relay deactivated.");
                         } else {
-                            Serial.println("Relay not configured. Use 'relay N 0/1' to manual override.");
+                            Serial.println("Not configured. Use 'relay N 0/1' to manual override.");
                         }
                     } else {
                         Serial.println("Usage: test relay 0-3");
                     }
-                } else if (line.startsWith("test sensor ")) {
-                    int ch;
-                    if (sscanf(line.c_str(), "test sensor %d", &ch) == 1 && ch >= 0 && ch <= 2) {
-                        SensorData d = read_sensors();
-                        Serial.printf("Sensor CH%d: %.3fV, %.3fA\n", ch, d.ads1115_volts[ch], d.ina3221_current[ch]);
-                        Serial.printf("  raw shunt voltage: %.2fmV\n", ina3221_getShuntVoltage(ch) * 1000.0f);
-                    } else {
-                        Serial.println("Usage: test sensor 0-2");
-                    }
-                } else if (line.startsWith("shunt ")) {
-                    int ch; float ohms;
-                    if (sscanf(line.c_str(), "shunt %d %f", &ch, &ohms) == 2 && ch >= 0 && ch <= 3) {
-                        if (ohms <= 0.0f) {
-                            Serial.printf("CH%d shunt cleared (using default)\n", ch);
-                        } else {
-                            Serial.printf("CH%d shunt set to %.6f Ohm\n", ch, ohms);
-                        }
-                        settings_save_shunt(ch, ohms);
-                    } else {
-                        Serial.println("Usage: shunt N ohms (e.g. shunt 0 0.0003) or shunt N 0 to clear");
-                    }
-                } else if (line == "shunt show") {
-                    for (int ch = 0; ch < 3; ch++) {
-                        float s; bool ok = settings_load_shunt(ch, &s);
-                        Serial.printf("CH%d shunt: %s\n", ch, ok ? String(s, 6).c_str() : "(default)");
-                    }
-                } else if (line == "vratio show") {
-                    for (int ch = 0; ch < 3; ch++) {
-                        float r; bool ok = settings_load_volt_ratio(ch, &r);
-                        float def = (ch == 0) ? VOLT_RATIO_CH0 : (ch == 1) ? VOLT_RATIO_CH1 : VOLT_RATIO_CH2;
-                        Serial.printf("CH%d vratio: %s\n", ch, ok ? String(r, 4).c_str() : String("default:") + String(def, 4));
-                    }
-                } else if (line == "resistor show") {
-                    for (int ch = 0; ch < 3; ch++) {
-                        float rh, rl; bool ok = settings_load_resistors(ch, &rh, &rl);
-                        Serial.printf("CH%d resistors: %s\n", ch, ok ? (String(rh, 0) + "+" + rl + " = " + String((rh+rl)/rl, 4)).c_str() : "(not set)");
-                    }
-                } else if (line == "cal show") {
-                    for (int ch = 0; ch < 3; ch++) {
-                        float vo, vg, co, cg;
-                        sensor_get_calibration(ch, &vo, &vg, &co, &cg);
-                        Serial.printf("CH%d: vo=%.2fmV vg=%.4f co=%.2fmA cg=%.4f\n", ch, vo, vg, co, cg);
-                    }
-                } else if (line.startsWith("shunt ")) {
-#if ENABLE_SERIAL1
-                    char buf[80];
-                    int count = 0;
-                    while (serial1_available() > 0 && count < 5) {
-                        if (serial1_read_line(buf, sizeof(buf))) {
-                            Serial.printf("[S1] %s\n", buf);
-                            count++;
-                        }
-                    }
-                    if (count == 0) Serial.println("S1: no data");
-#else
-                    Serial.println("Serial1 disabled");
-#endif
-                    Serial.println("Display test: OLED should show cycling pages");
-                    extern void init_display();
-                    extern void update_display(const SensorData&, const char*, float);
-                    SensorData d = read_sensors();
-                    for (int i = 0; i < 5; i++) {
-                        update_display(d, "192.168.1.1", 123.4f);
-                        delay(1000);
-                    }
-                    Serial.println("Display test done.");
                 } else if (line == "test all relays") {
                     Serial.println("Testing all relays in sequence...");
                     for (int i = 0; i < 4; i++) {
@@ -198,6 +132,107 @@ static void handle_serial_cli() {
                         }
                     }
                     Serial.println("All relays tested.");
+                } else if (line.startsWith("test sensor ")) {
+                    int ch;
+                    if (sscanf(line.c_str(), "test sensor %d", &ch) == 1 && ch >= 0 && ch <= 2) {
+                        SensorData d = read_sensors();
+                        Serial.printf("Sensor CH%d: %.3fV, %.3fA\n", ch, d.ads1115_volts[ch], d.ina3221_current[ch]);
+                        Serial.printf("  raw shunt voltage: %.2fmV\n", ina3221_getShuntVoltage(ch) * 1000.0f);
+                    } else {
+                        Serial.println("Usage: test sensor 0-2");
+                    }
+                } else if (line == "test all sensors") {
+                    SensorData d = read_sensors();
+                    Serial.println("All sensor channels:");
+                    for (int i = 0; i < 3; i++) {
+                        Serial.printf("  CH%d: %.3fV  %.3fA\n", i, d.ads1115_volts[i], d.ina3221_current[i]);
+                    }
+                } else if (line == "test display") {
+                    Serial.println("Display test: OLED should show cycling pages");
+                    extern void init_display();
+                    extern void update_display(const SensorData&, const char*, float);
+                    SensorData d = read_sensors();
+                    for (int i = 0; i < 5; i++) {
+                        update_display(d, "192.168.1.1", 123.4f);
+                        delay(1000);
+                    }
+                    Serial.println("Display test done.");
+                } else if (line.startsWith("display ")) {
+                    SensorData d = read_sensors();
+                    float total_power = 0;
+                    for (int ch = 0; ch < 3; ch++) total_power += d.ads1115_volts[ch] * d.ina3221_current[ch];
+                    total_power += d.ina226_power;
+                    if (line == "display all") {
+                        for (int p = 0; p < 5; p++) {
+                            Serial.printf("=== Display page %d ===\n", p);
+                            if (p == 0) {
+                                Serial.printf("  IP: %s | Power: %.1fW | Log: %lu %s\n",
+                                    get_local_ip_str(), total_power, log_entries_count(),
+                                    log_has_overflow_file() ? "[OVF]" : "");
+                            } else {
+                                uint8_t ch = p - 1;
+                                char name[24] = "";
+                                settings_load_channel_name(ch, name, sizeof(name));
+                                if (!name[0]) {
+                                    if (ch == 0) strlcpy(name, "Battery", sizeof(name));
+                                    else if (ch == 1) strlcpy(name, "Solar", sizeof(name));
+                                    else strlcpy(name, "Output", sizeof(name));
+                                }
+                                float v = d.ads1115_volts[ch];
+                                float i = d.ina3221_current[ch];
+                                float pw = v * i;
+                                Serial.printf("  Ch%d (%s): %.2fV %.3fA %.2fW\n", ch, name, v, i, pw);
+                                float mAh = get_coulomb_mAh(ch);
+                                BatteryConfig bat;
+                                float soc = -1;
+                                if (settings_load_battery(ch, &bat) && bat.capacity_mAh > 0.001f) {
+                                    soc = bat.initial_soc_pct + (mAh / bat.capacity_mAh) * 100.0f;
+                                    if (soc < 0) soc = 0;
+                                    if (soc > 100) soc = 100;
+                                    Serial.printf("  SoC: %.0f%% | mAh: %.0f\n", soc, mAh);
+                                } else {
+                                    Serial.printf("  mAh: %.0f\n", mAh);
+                                }
+                            }
+                        }
+                        Serial.printf("INA226: %.2fV %.3fA %.2fW\n", d.ina226_busV, d.ina226_current, d.ina226_power);
+                    } else {
+                        int pn;
+                        if (sscanf(line.c_str(), "display page %d", &pn) == 1 && pn >= 0 && pn <= 4) {
+                            Serial.printf("=== Display page %d ===\n", pn);
+                            if (pn == 0) {
+                                Serial.printf("  IP: %s | Power: %.1fW | Log: %lu %s\n",
+                                    get_local_ip_str(), total_power, log_entries_count(),
+                                    log_has_overflow_file() ? "[OVF]" : "");
+                            } else {
+                                uint8_t ch = pn - 1;
+                                char name[24] = "";
+                                settings_load_channel_name(ch, name, sizeof(name));
+                                if (!name[0]) {
+                                    if (ch == 0) strlcpy(name, "Battery", sizeof(name));
+                                    else if (ch == 1) strlcpy(name, "Solar", sizeof(name));
+                                    else strlcpy(name, "Output", sizeof(name));
+                                }
+                                float v = d.ads1115_volts[ch];
+                                float i = d.ina3221_current[ch];
+                                float pw = v * i;
+                                Serial.printf("  Ch%d (%s): %.2fV %.3fA %.2fW\n", ch, name, v, i, pw);
+                                float mAh = get_coulomb_mAh(ch);
+                                BatteryConfig bat;
+                                float soc = -1;
+                                if (settings_load_battery(ch, &bat) && bat.capacity_mAh > 0.001f) {
+                                    soc = bat.initial_soc_pct + (mAh / bat.capacity_mAh) * 100.0f;
+                                    if (soc < 0) soc = 0;
+                                    if (soc > 100) soc = 100;
+                                    Serial.printf("  SoC: %.0f%% | mAh: %.0f\n", soc, mAh);
+                                } else {
+                                    Serial.printf("  mAh: %.0f\n", mAh);
+                                }
+                            }
+                        } else {
+                            Serial.println("Usage: display page 0-4  |  display all");
+                        }
+                    }
                 } else if (line == "relay auto on") {
                     relay_set_auto(true);
                     Serial.println("Relay auto-trip ENABLED");
@@ -209,12 +244,89 @@ static void handle_serial_cli() {
                     delay(500);
                     settings_factory_reset();
                     ESP.restart();
-                } else if (line == "test all sensors") {
-                    SensorData d = read_sensors();
-                    Serial.println("All sensor channels:");
-                    for (int i = 0; i < 3; i++) {
-                        Serial.printf("  CH%d: %.3fV  %.3fA\n", i, d.ads1115_volts[i], d.ina3221_current[i]);
+
+                // === Cal / Shunt / Vratio / Resistor commands ===
+                } else if (line == "shunt show") {
+                    for (int ch = 0; ch < 3; ch++) {
+                        float s; bool ok = settings_load_shunt(ch, &s);
+                        Serial.printf("CH%d shunt: %s\n", ch, ok ? String(s, 6).c_str() : "(default)");
                     }
+                } else if (line.startsWith("shunt ")) {
+                    int ch; float ohms;
+                    if (sscanf(line.c_str(), "shunt %d %f", &ch, &ohms) == 2 && ch >= 0 && ch <= 3) {
+                        if (ohms <= 0.0f) {
+                            Serial.printf("CH%d shunt cleared (using default)\n", ch);
+                        } else {
+                            Serial.printf("CH%d shunt set to %.6f Ohm\n", ch, ohms);
+                        }
+                        settings_save_shunt(ch, ohms);
+                    } else {
+                        Serial.println("Usage: shunt N ohms (e.g. shunt 0 0.0003) or shunt N 0 to clear");
+                    }
+                } else if (line == "vratio show") {
+                    for (int ch = 0; ch < 3; ch++) {
+                        float r; bool ok = settings_load_volt_ratio(ch, &r);
+                        float def = (ch == 0) ? VOLT_RATIO_CH0 : (ch == 1) ? VOLT_RATIO_CH1 : VOLT_RATIO_CH2;
+                        Serial.printf("CH%d vratio: %s\n", ch, ok ? String(r, 4).c_str() : String("default:") + String(def, 4));
+                    }
+                } else if (line.startsWith("vratio ")) {
+                    int ch; float ratio;
+                    if (sscanf(line.c_str(), "vratio %d %f", &ch, &ratio) == 2 && ch >= 0 && ch <= 2) {
+                        if (ratio <= 0.0f) {
+                            Serial.printf("CH%d vratio cleared\n", ch);
+                        } else {
+                            Serial.printf("CH%d vratio set to %.4f\n", ch, ratio);
+                        }
+                        settings_save_volt_ratio(ch, ratio);
+                    } else {
+                        Serial.println("Usage: vratio N ratio (e.g. vratio 2 3.521) or vratio N 0 to clear");
+                    }
+                } else if (line == "resistor show") {
+                    for (int ch = 0; ch < 3; ch++) {
+                        float rh, rl; bool ok = settings_load_resistors(ch, &rh, &rl);
+                        Serial.printf("CH%d resistors: %s\n", ch, ok ? (String(rh, 0) + "+" + rl + " = " + String((rh+rl)/rl, 4)).c_str() : "(not set)");
+                    }
+                } else if (line.startsWith("resistor ")) {
+                    int ch; float rh, rl;
+                    if (sscanf(line.c_str(), "resistor %d %f %f", &ch, &rh, &rl) == 3 && ch >= 0 && ch <= 2) {
+                        if (rh <= 0.0f || rl <= 0.0f) {
+                            Serial.printf("CH%d resistors cleared\n", ch);
+                        } else {
+                            float ratio = (rh + rl) / rl;
+                            Serial.printf("CH%d R=%.0f+%.0f -> ratio=%.4f\n", ch, rh, rl, ratio);
+                        }
+                        settings_save_resistors(ch, rh, rl);
+                    } else {
+                        Serial.println("Usage: resistor N r_high r_low (e.g. resistor 2 900000 68000)");
+                    }
+                } else if (line == "cal show") {
+                    for (int ch = 0; ch < 3; ch++) {
+                        float vo, vg, co, cg;
+                        sensor_get_calibration(ch, &vo, &vg, &co, &cg);
+                        Serial.printf("CH%d: vo=%.2fmV vg=%.4f co=%.2fmA cg=%.4f\n", ch, vo, vg, co, cg);
+                    }
+                } else if (line.startsWith("cal ")) {
+                    int ch, type; float value;
+                    if (sscanf(line.c_str(), "cal %d %d %f", &ch, &type, &value) == 3 && ch >= 0 && ch <= 2 && type >= 0 && type <= 3) {
+                        sensor_set_calibration(ch, type, value);
+                        Serial.printf("CH%d cal type=%d value=%.4f saved\n", ch, type, value);
+                    } else {
+                        Serial.println("Usage: cal N type value — type: 0=volt_offset_mv, 1=volt_gain, 2=curr_offset_ma, 3=curr_gain");
+                    }
+                } else if (line == "serial1peek") {
+#if ENABLE_SERIAL1
+                    char buf[80];
+                    int count = 0;
+                    while (serial1_available() > 0 && count < 5) {
+                        if (serial1_read_line(buf, sizeof(buf))) {
+                            Serial.printf("[S1] %s\n", buf);
+                            count++;
+                        }
+                    }
+                    if (count == 0) Serial.println("S1: no data");
+#else
+                    Serial.println("Serial1 disabled");
+#endif
                 } else if (line == "reboot") {
                     Serial.println("Rebooting...");
                     delay(100);
@@ -230,20 +342,23 @@ static void handle_serial_cli() {
                     Serial.println("  test sensor N       — read sensor CH N once (0-2)");
                     Serial.println("  test all sensors    — read all sensor channels");
                     Serial.println("  test display        — cycle OLED pages 5x");
+                    Serial.println("  display page N     — print display page N (0-4)");
+                    Serial.println("  display all         — print all display pages");
                     Serial.println("  relay auto on       — enable auto-trip (off by default)");
                     Serial.println("  relay auto off      — disable auto-trip");
                     Serial.println("  factory_reset       — wipe all NVS settings, reboot");
                     Serial.println("  reset coulomb N     — reset coulomb counter CH N");
                     Serial.println("  flush log           — flush RAM log buffer");
                     Serial.println("  i2c_scan            — scan I2C bus for devices");
-                    Serial.println("  shunt N ohms       — set shunt resistance for CH N (0 clears)");
-                    Serial.println("  shunt show         — show current shunt settings");
-                    Serial.println("  vratio N ratio     — set voltage divider ratio for CH N (0 clears)");
-                    Serial.println("  vratio show        — show current voltage ratios");
+                    Serial.println("  shunt N ohms        — set shunt resistance for CH N (0 clears)");
+                    Serial.println("  shunt show          — show current shunt settings");
+                    Serial.println("  vratio N ratio      — set voltage divider ratio for CH N (0 clears)");
+                    Serial.println("  vratio show         — show current voltage ratios");
                     Serial.println("  resistor N r_high r_low — set R values, ratio auto-computed");
-                    Serial.println("  resistor show       — show resistor values per channel");
+                    Serial.println("  resistor show        — show resistor values per channel");
                     Serial.println("  cal N type value    — set calibration (type: 0=vo_mv, 1=vg, 2=co_ma, 3=cg)");
                     Serial.println("  cal show            — show all channel calibration values");
+                    Serial.println("  serial1peek         — dump up to 5 lines from Serial1");
                     Serial.println("  reboot              — reboot the device");
                     Serial.println("  help                — this list");
                 } else if (line.length() > 0) {
