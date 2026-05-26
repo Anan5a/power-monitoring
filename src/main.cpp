@@ -299,7 +299,59 @@ static void handle_serial_cli() {
                     } else {
                         Serial.println("Usage: resistor N r_high r_low (e.g. resistor 2 900000 68000)");
                     }
-                } else if (line == "cal show") {
+                } else if (line == "wifi_show") {
+                    char ssid[64] = "", pass[64] = "";
+                    if (settings_load_wifi(ssid, pass, sizeof(ssid))) {
+                        Serial.printf("WiFi SSID: %s\n", ssid);
+                    } else {
+                        Serial.println("WiFi: not configured");
+                    }
+                } else if (line.startsWith("wifi_ssid ")) {
+                    char new_ssid[64];
+                    if (sscanf(line.c_str(), "wifi_ssid %s", new_ssid) == 1) {
+                        char old_ssid[64] = "", old_pass[64] = "";
+                        settings_load_wifi(old_ssid, old_pass, sizeof(old_ssid));
+                        settings_save_wifi(new_ssid, old_pass);
+                        Serial.printf("WiFi SSID set to: %s\n", new_ssid);
+                    } else {
+                        Serial.println("Usage: wifi_ssid <ssid>");
+                    }
+                } else if (line.startsWith("wifi_pass ")) {
+                    char new_pass[64];
+                    if (sscanf(line.c_str(), "wifi_pass %s", new_pass) == 1) {
+                        char old_ssid[64] = "", old_pass[64] = "";
+                        settings_load_wifi(old_ssid, old_pass, sizeof(old_ssid));
+                        settings_save_wifi(old_ssid, new_pass);
+                        Serial.println("WiFi password updated");
+                    } else {
+                        Serial.println("Usage: wifi_pass <password>");
+                    }
+                } else if (line == "supabase_show") {
+                    char url[128] = "", anon_key[128] = "", device_key[64] = "", api_key[64] = "";
+                    bool has_url = settings_load_supabase_url(url, sizeof(url));
+                    bool has_akey = settings_load_supabase_anon_key(anon_key, sizeof(anon_key));
+                    bool has_dkey = settings_load_supabase_device_key(device_key, sizeof(device_key));
+                    bool has_apikey = settings_load_supabase_api_key(api_key, sizeof(api_key));
+                    if (has_url) Serial.printf("Supabase URL: %s\n", url);
+                    else Serial.println("Supabase URL: not set");
+                    if (has_akey) Serial.printf("Supabase anon key: %s\n", anon_key);
+                    if (has_dkey) Serial.printf("Device key: %s\n", device_key);
+                    if (has_apikey) Serial.printf("Device API key: %s\n", api_key);
+                    if (!has_url && !has_akey) Serial.println("Supabase: not configured");
+                } else if (line.startsWith("supabase ")) {
+                    char url[128], anon_key[128], service_role_key[128], device_key[64];
+                    int n = sscanf(line.c_str(), "supabase %s %s %s %s",
+                        url, anon_key, service_role_key, device_key);
+                    if (n == 4) {
+                        settings_save_supabase_url(url);
+                        settings_save_supabase_anon_key(anon_key);
+                        settings_save_supabase_api_key(service_role_key);
+                        settings_save_supabase_device_key(device_key);
+                        Serial.println("Supabase configured. Reboot to apply.");
+                    } else {
+                        Serial.println("Usage: supabase <url> <anon_key> <service_role_key> <device_key>");
+                    }
+                } else if (line == "factory_reset") {
                     for (int ch = 0; ch < 3; ch++) {
                         float vo, vg, co, cg;
                         sensor_get_calibration(ch, &vo, &vg, &co, &cg);
