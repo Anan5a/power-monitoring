@@ -85,7 +85,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
     display.print("P");
     display.print(ch + 2);
 
-    // V | I | P stacked, no dividers
+    // V | I | P stacked — all textSize1 to save vertical space
     char ibuf[16], pbuf[16];
 
     if (fabsf(i) < 1.0f) {
@@ -100,34 +100,21 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         snprintf(pbuf, sizeof(pbuf), "%.1f W", p);
     }
 
-    // V row (y=11)
-    display.setTextSize(1);
-    display.setCursor(0, 11);
-    display.print("V");
-    display.setTextSize(2);
+    // V row at y=10, I row at y=19, P row at y=28 (8px per row)
+    display.setCursor(0, 10);
+    display.print("V:");
     display.print(v, 2);
-    display.setTextSize(1);
-    display.setCursor(54, 13);
     display.print("V");
 
-    // I row (y=24)
-    display.setTextSize(1);
-    display.setCursor(0, 24);
-    display.print("I");
-    display.setTextSize(2);
+    display.setCursor(0, 19);
+    display.print("I:");
     display.print(ibuf);
-    display.setTextSize(1);
-    display.setCursor(54, 26);
-    display.print("A");
 
-    // P row (y=37)
-    display.setTextSize(1);
-    display.setCursor(0, 37);
-    display.print("P");
-    display.setTextSize(2);
+    display.setCursor(0, 28);
+    display.print("P:");
     display.print(pbuf);
 
-    // Bottom: SoC or mAh/Ah
+    // Bottom: SoC or mAh/Ah at y=54
     float mAh = get_coulomb_mAh(ch);
     BatteryConfig bat;
     float soc = -1;
@@ -135,15 +122,13 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         soc = bat.initial_soc_pct + (mAh / bat.capacity_mAh) * 100.0f;
         if (soc < 0) soc = 0;
         if (soc > 100) soc = 100;
-        display.setTextSize(1);
-        display.setCursor(0, 52);
+        display.setCursor(0, 54);
         display.print("SoC ");
         display.print(soc, 0);
         display.print("%");
-        draw_soc_bar(95, 60, 30, soc);
+        draw_soc_bar(95, 61, 28, soc);
     } else {
-        display.setTextSize(1);
-        display.setCursor(0, 52);
+        display.setCursor(0, 54);
         if (fabsf(mAh) < 1000.0f) {
             display.print("mAh: ");
             display.print(mAh, 0);
