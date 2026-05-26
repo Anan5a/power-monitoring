@@ -26,6 +26,7 @@
 #define ENABLE_INA3221_VOLT    1   // voltage module 0x42
 #define ENABLE_INA226          0
 #define ENABLE_ADS1115        0
+#define HAS_DISPLAY           1   // SSD1306 OLED on I2C
 
 // === Voltage divider ratios (hardware fixed) ===
 // ratio = (R_high + R_low) / R_low
