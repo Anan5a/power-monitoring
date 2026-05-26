@@ -259,7 +259,7 @@ $$;
 --  cannot insert for any other device)
 create policy "anon_insert_telemetry" on public.telemetry_live
     for insert to authenticated
-    using (
+    with check (
         exists (
             select 1 from public.devices d
             where d.device_key = telemetry_live.device_id
@@ -267,7 +267,8 @@ create policy "anon_insert_telemetry" on public.telemetry_live
         )
     );
 create policy "no_direct_insert" on public.telemetry_live
-    for insert to authenticated using (false);
+    for insert to authenticated
+    with check (false);
 
 ---------------------------------------------------------------
 -- pg_cron: Daily maintenance at midnight UTC
