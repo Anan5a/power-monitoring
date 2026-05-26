@@ -34,31 +34,34 @@ static void draw_soc_bar(int cx, int cy, int width, float soc) {
 // YELLOW bottom (y=40..63): log entry count + overflow flag
 
 static void draw_status_page(const char* ip_str, float total_power) {
-    display.setTextSize(2);
+    // YELLOW top: IP address
+    display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 2);
     display.print(ip_str);
 
+    // BLUE: total power large
     char pbuf[8];
     dtostrf(total_power, 5, 1, pbuf);
-    display.setTextSize(3);
-    display.setCursor(0, 22);
+    display.setTextSize(2);
+    display.setCursor(0, 12);
     display.print(pbuf);
     display.setTextSize(1);
-    display.setCursor(75, 24);
+    display.setCursor(54, 14);
     display.print("W");
 
-    display.drawLine(0, 40, SCREEN_WIDTH - 1, 40, SSD1306_WHITE);
-
+    // BLUE: log count below power
     display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 43);
+    display.setCursor(0, 30);
     display.print("LOG:");
     display.print(log_entries_count());
     display.print(" ent");
-    if (log_has_overflow_file()) {
-        display.print(" [OVF]");
-    }
+    if (log_has_overflow_file()) display.print(" [OVF]");
+
+    // YELLOW bottom: blank space or extra info
+    display.setTextSize(1);
+    display.setCursor(0, 52);
+    display.print("PWR MON");
 }
 
 // ─── Channel page ───────────────────────────────────────────────
@@ -84,58 +87,79 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         strlcpy(name, "INA226", sizeof(name));
     }
 
-    // YELLOW top: channel name + page number
+    static void draw_channel_page(uint8_t ch, const SensorData& data) {
+    float v, i, p;
+    char name[24] = "";
+    if (ch < 3) {
+        v = data.ads1115_volts[ch];
+        i = data.ina3221_current[ch];
+        p = v * i;
+        settings_load_channel_name(ch, name, sizeof(name));
+        if (!name[0]) {
+            if (ch == 0) strlcpy(name, "Battery", sizeof(name));
+            else if (ch == 1) strlcpy(name, "Solar", sizeof(name));
+            else strlcpy(name, "Output", sizeof(name));
+        }
+    } else {
+        v = data.ina226_busV; i = data.ina226_current; p = data.ina226_power;
+        strlcpy(name, "INA226", sizeof(name));
+    }
+
+    // YELLOW top: channel name (y=2) + page number (y=2 right)
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 2);
     display.print(name);
-    display.setTextSize(1);
-    display.setCursor(SCREEN_WIDTH - 20, 4);
-    display.print("P.");
+    display.setCursor(SCREEN_WIDTH - 16, 2);
+    display.print("P");
     display.print(ch + 2);
 
-    display.drawLine(0, 10, SCREEN_WIDTH - 1, 10, SSD1306_WHITE);
-
-    // BLUE middle: V | I | P stacked vertically
+    // BLUE area: V | I | P stacked, no dividers
     char ibuf[16], pbuf[16];
 
-    // Current: mA if |i|<1A, else A with 2 decimals
     if (fabsf(i) < 1.0f) {
         snprintf(ibuf, sizeof(ibuf), "%d mA", (int)(i * 1000.0f));
     } else {
         snprintf(ibuf, sizeof(ibuf), "%.2f A", i);
     }
 
-    // Power: W with 2 decimals if <10W, else 1 decimal
     if (fabsf(p) < 10.0f) {
         snprintf(pbuf, sizeof(pbuf), "%.2f W", p);
     } else {
         snprintf(pbuf, sizeof(pbuf), "%.1f W", p);
     }
 
-    // Voltage row (y=13): value + unit
-    display.setTextSize(2);
+    // V row (y=11): "V" + value + unit
+    display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 13);
+    display.setCursor(0, 11);
+    display.print("V");
+    display.setTextSize(2);
     display.print(v, 2);
     display.setTextSize(1);
-    display.setCursor(54, 15);
+    display.setCursor(54, 13);
     display.print("V");
 
-    // Current row (y=28): value + unit
-    display.setTextSize(2);
+    // I row (y=24): "I" + value + unit
+    display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 28);
+    display.setCursor(0, 24);
+    display.print("I");
+    display.setTextSize(2);
     display.print(ibuf);
+    display.setTextSize(1);
+    display.setCursor(54, 26);
+    display.print("A");
 
-    // Power row (y=43): value + unit
-    display.setTextSize(2);
+    // P row (y=37): "P" + value + unit
+    display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 43);
+    display.setCursor(0, 37);
+    display.print("P");
+    display.setTextSize(2);
     display.print(pbuf);
 
-    // YELLOW bottom bar: SoC or mAh/Ah
-    display.drawLine(0, 53, SCREEN_WIDTH - 1, 53, SSD1306_WHITE);
+    // YELLOW bottom: SoC or mAh/Ah
     float mAh = get_coulomb_mAh(ch);
     BatteryConfig bat;
     float soc = -1;
@@ -145,7 +169,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         if (soc > 100) soc = 100;
         display.setTextSize(1);
         display.setTextColor(SSD1306_WHITE);
-        display.setCursor(0, 55);
+        display.setCursor(0, 52);
         display.print("SoC ");
         display.print(soc, 0);
         display.print("%");
@@ -153,7 +177,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
     } else {
         display.setTextSize(1);
         display.setTextColor(SSD1306_WHITE);
-        display.setCursor(0, 55);
+        display.setCursor(0, 52);
         if (fabsf(mAh) < 1000.0f) {
             display.print("mAh: ");
             display.print(mAh, 0);
