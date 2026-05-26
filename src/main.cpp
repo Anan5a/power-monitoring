@@ -180,6 +180,20 @@ static void handle_serial_cli() {
                         float rh, rl; bool ok = settings_load_resistors(ch, &rh, &rl);
                         Serial.printf("CH%d resistors: %s\n", ch, ok ? (String(rh, 0) + "+" + rl + " = " + String((rh+rl)/rl, 4)).c_str() : "(not set)");
                     }
+                } else if (line.startsWith("cal ")) {
+                    int ch, type; float value;
+                    if (sscanf(line.c_str(), "cal %d %d %f", &ch, &type, &value) == 3 && ch >= 0 && ch <= 2 && type >= 0 && type <= 3) {
+                        sensor_set_calibration(ch, type, value);
+                        Serial.printf("CH%d cal type=%d value=%.4f saved\n", ch, type, value);
+                    } else {
+                        Serial.println("Usage: cal N type value — type: 0=volt_offset_mv, 1=volt_gain, 2=curr_offset_ma, 3=curr_gain");
+                    }
+                } else if (line.startsWith("cal show")) {
+                    for (int ch = 0; ch < 3; ch++) {
+                        float vo, vg, co, cg;
+                        sensor_get_calibration(ch, &vo, &vg, &co, &cg);
+                        Serial.printf("CH%d: vo=%.2fmV vg=%.4f co=%.2fmA cg=%.4f\n", ch, vo, vg, co, cg);
+                    }
                 } else if (line == "test display") {
                     Serial.println("Display test: OLED should show cycling pages");
                     extern void init_display();
@@ -243,6 +257,8 @@ static void handle_serial_cli() {
                     Serial.println("  vratio show        — show current voltage ratios");
                     Serial.println("  resistor N r_high r_low — set R values, ratio auto-computed");
                     Serial.println("  resistor show       — show resistor values per channel");
+                    Serial.println("  cal N type value    — set calibration (type: 0=vo_mv, 1=vg, 2=co_ma, 3=cg)");
+                    Serial.println("  cal show            — show all channel calibration values");
                     Serial.println("  help                — this list");
                 } else if (line.length() > 0) {
                     Serial.println("Unknown command. Type 'help'.");

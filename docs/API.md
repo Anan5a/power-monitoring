@@ -66,7 +66,48 @@ Connect at `115200 baud`. Type commands and press Enter.
 | `relay N 0` / `relay N 1` | Manually set relay `N` OFF / ON (bypasses logic) |
 | `reset coulomb N` | Reset coulomb counter for channel `N` (0-3) |
 | `flush log` | Pop and print size of all buffered log entries |
+| `i2c_scan` | Scan I2C bus and list responding addresses |
+| `factory_reset` | Wipe all NVS settings and reboot |
+| `test relay N` | Pulse relay N for 3s then deactivate |
+| `test all relays` | Sequence-test all 4 relays |
+| `test sensor N` | Read single sensor channel (0-2) |
+| `test all sensors` | Read all sensor channels |
+| `test display` | Cycle OLED pages 5 times |
+| `relay auto on` / `relay auto off` | Enable/disable auto-trip relay logic |
+| `shunt N ohms` | Set INA3221 shunt resistance for channel N (0=clear) |
+| `shunt show` | Show current shunt settings for all channels |
+| `vratio N ratio` | Set voltage divider ratio for channel N (0=clear) |
+| `vratio show` | Show current voltage ratios for all channels |
+| `resistor N r_high r_low` | Set resistor values, ratio auto-computed as (r_high+r_low)/r_low |
+| `resistor show` | Show resistor values and computed ratios per channel |
+| `cal N type value` | Set calibration for channel N. type: 0=volt_offset_mv, 1=volt_gain, 2=curr_offset_ma, 3=curr_gain |
+| `cal show` | Show calibration values for all channels |
 | `help` | Show command list |
+
+---
+
+## Voltage & Current Calibration
+
+Two-level calibration system applied in order:
+
+1. **Ratio** (channel-specific) — converts raw mV to volts
+   - `resistor N r_high r_low` — ratio = (r_high + r_low) / r_low
+   - `vratio N ratio` — direct ratio override
+   - Falls back to `VOLT_RATIO_CHn` from config.h
+2. **Fine adjustment** — offset and gain applied to mV before/after ratio
+   - `cal N 0 value` — `volt_offset_mv` in mV (zero-point shift)
+   - `cal N 1 value` — `volt_gain` multiplier (e.g. 1.02 = +2% correction)
+   - `cal N 2 value` — `curr_offset_ma` in mA (subtract ghost current)
+   - `cal N 3 value` — `curr_gain` multiplier
+
+**Math (voltage):** `displayed_V = (raw_mV + volt_offset_mv) * volt_gain * ratio / 1000`
+
+**Math (current):** `displayed_A = (raw_A * 1000 - curr_offset_ma) * curr_gain / 1000`
+
+**Example:** If CH2 reads 11.27V but should be 11.20V:
+```
+cal 2 1 0.9938   # gain = expected/actual = 11.20/11.27
+```
 
 ---
 
@@ -170,6 +211,65 @@ Response:
 Response: `{"ok":true,"ssid":"MyNetwork","pass":"***"}`
 
 #### `get_mqtt` — Get stored MQTT settings
+```json
+{"cmd":"get_mqtt","pin":123456}
+```
+Response: `{"ok":true,"broker":"192.168.1.100","port":1883,"topic":"power-monitor/data"}`
+
+#### `set_calibration` — Set channel calibration (offset/gain)
+```json
+{"cmd":"set_calibration","channel":0,"type":0,"value":0.0,"pin":123456}
+```
+- `type=0`: `volt_offset_mv` (mV zero shift)
+- `type=1`: `volt_gain` (multiplier, e.g. 1.02)
+- `type=2`: `curr_offset_ma` (mA ghost current)
+- `type=3`: `curr_gain` (multiplier)
+Response: `{"ok":true,"msg":"calibration_saved"}`
+
+#### `get_calibration` — Get channel calibration
+```json
+{"cmd":"get_calibration","channel":0,"pin":123456}
+```
+Response:
+```json
+{"ok":true,"channel":0,"volt_offset_mv":0.0,"volt_gain":1.0,"curr_offset_ma":12.0,"curr_gain":1.0}
+```
+
+#### `reset_calibration` — Reset channel calibration to defaults
+```json
+{"cmd":"reset_calibration","channel":0,"pin":123456}
+```
+Response: `{"ok":true,"msg":"calibration_reset"}`
+
+#### `set_shunt` — Set INA3221 shunt resistance
+```json
+{"cmd":"set_shunt","channel":0,"ohms":0.0003,"pin":123456}
+```
+- Set to `0` to clear (uses library default)
+- Stored in NVS, applied at boot via `ina3221.setShuntResistance()`
+Response: `{"ok":true,"msg":"shunt_saved"}`
+
+#### `get_shunt` — Get INA3221 shunt resistance
+```json
+{"cmd":"get_shunt","channel":0,"pin":123456}
+```
+Response: `{"ok":true,"channel":0,"ohms":0.0003}`
+
+#### `set_vratio` — Set voltage divider ratio
+```json
+{"cmd":"set_vratio","channel":0,"ratio":3.521,"pin":123456}
+```
+- Ratio stored in NVS, overrides config.h default
+- Or use `set_resistors` to compute ratio from resistor values
+Response: `{"ok":true,"msg":"vratio_saved"}`
+
+#### `set_resistors` — Set voltage divider resistor values (ratio computed)
+```json
+{"cmd":"set_resistors","channel":0,"r_high":300000,"r_low":119000,"pin":123456}
+```
+- Ratio computed as `(r_high + r_low) / r_low`
+- Stored in NVS, applied at boot
+Response: `{"ok":true,"ratio":3.521}`
 ```json
 {"cmd":"get_mqtt","pin":123456}
 ```
