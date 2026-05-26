@@ -76,7 +76,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         strlcpy(name, "INA226", sizeof(name));
     }
 
-    // Channel name (y=2) + page number
+    // Channel name in yellow band (y=2) + page number
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 2);
@@ -85,7 +85,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
     display.print("P");
     display.print(ch + 2);
 
-    // V | I | P stacked — all textSize1 to save vertical space
+    // V | I | P in blue area — below yellow band (y >= 16)
     char ibuf[16], pbuf[16];
 
     if (fabsf(i) < 1.0f) {
@@ -100,17 +100,17 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         snprintf(pbuf, sizeof(pbuf), "%.1f W", p);
     }
 
-    // V row at y=10, I row at y=19, P row at y=28 (8px per row)
-    display.setCursor(0, 10);
+    // V row at y=16, I row at y=25, P row at y=34
+    display.setCursor(0, 16);
     display.print("V:");
     display.print(v, 2);
     display.print("V");
 
-    display.setCursor(0, 19);
+    display.setCursor(0, 25);
     display.print("I:");
     display.print(ibuf);
 
-    display.setCursor(0, 28);
+    display.setCursor(0, 34);
     display.print("P:");
     display.print(pbuf);
 
