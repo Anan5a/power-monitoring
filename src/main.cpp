@@ -140,62 +140,29 @@ static void handle_serial_cli() {
                     } else {
                         Serial.println("Usage: shunt N ohms (e.g. shunt 0 0.0003) or shunt N 0 to clear");
                     }
-                } else if (line.startsWith("shunt show")) {
+                } else if (line == "shunt show") {
                     for (int ch = 0; ch < 3; ch++) {
                         float s; bool ok = settings_load_shunt(ch, &s);
                         Serial.printf("CH%d shunt: %s\n", ch, ok ? String(s, 6).c_str() : "(default)");
                     }
-                } else if (line.startsWith("vratio ")) {
-                    int ch; float ratio;
-                    if (sscanf(line.c_str(), "vratio %d %f", &ch, &ratio) == 2 && ch >= 0 && ch <= 2) {
-                        if (ratio <= 0.0f) {
-                            Serial.printf("CH%d vratio cleared (using config default %.4f)\n", ch, VOLT_RATIO_CH0);
-                        } else {
-                            Serial.printf("CH%d vratio set to %.4f\n", ch, ratio);
-                        }
-                        settings_save_volt_ratio(ch, ratio);
-                    } else {
-                        Serial.println("Usage: vratio N ratio (e.g. vratio 2 3.521) or vratio N 0 to clear");
-                    }
-                } else if (line.startsWith("vratio show")) {
+                } else if (line == "vratio show") {
                     for (int ch = 0; ch < 3; ch++) {
                         float r; bool ok = settings_load_volt_ratio(ch, &r);
                         float def = (ch == 0) ? VOLT_RATIO_CH0 : (ch == 1) ? VOLT_RATIO_CH1 : VOLT_RATIO_CH2;
                         Serial.printf("CH%d vratio: %s\n", ch, ok ? String(r, 4).c_str() : String("default:") + String(def, 4));
                     }
-                } else if (line.startsWith("resistor ")) {
-                    int ch; float rh, rl;
-                    if (sscanf(line.c_str(), "resistor %d %f %f", &ch, &rh, &rl) == 3 && ch >= 0 && ch <= 2) {
-                        if (rh <= 0.0f || rl <= 0.0f) {
-                            Serial.printf("CH%d resistors cleared\n", ch);
-                        } else {
-                            float ratio = (rh + rl) / rl;
-                            Serial.printf("CH%d R=%.0f+%.0f -> ratio=%.4f\n", ch, rh, rl, ratio);
-                        }
-                        settings_save_resistors(ch, rh, rl);
-                    } else {
-                        Serial.println("Usage: resistor N r_high r_low (e.g. resistor 2 900000 68000) or all 0 to clear");
-                    }
-                } else if (line.startsWith("resistor show")) {
+                } else if (line == "resistor show") {
                     for (int ch = 0; ch < 3; ch++) {
                         float rh, rl; bool ok = settings_load_resistors(ch, &rh, &rl);
                         Serial.printf("CH%d resistors: %s\n", ch, ok ? (String(rh, 0) + "+" + rl + " = " + String((rh+rl)/rl, 4)).c_str() : "(not set)");
                     }
-                } else if (line.startsWith("cal ")) {
-                    int ch, type; float value;
-                    if (sscanf(line.c_str(), "cal %d %d %f", &ch, &type, &value) == 3 && ch >= 0 && ch <= 2 && type >= 0 && type <= 3) {
-                        sensor_set_calibration(ch, type, value);
-                        Serial.printf("CH%d cal type=%d value=%.4f saved\n", ch, type, value);
-                    } else {
-                        Serial.println("Usage: cal N type value — type: 0=volt_offset_mv, 1=volt_gain, 2=curr_offset_ma, 3=curr_gain");
-                    }
-                } else if (line.startsWith("cal show")) {
+                } else if (line == "cal show") {
                     for (int ch = 0; ch < 3; ch++) {
                         float vo, vg, co, cg;
                         sensor_get_calibration(ch, &vo, &vg, &co, &cg);
                         Serial.printf("CH%d: vo=%.2fmV vg=%.4f co=%.2fmA cg=%.4f\n", ch, vo, vg, co, cg);
                     }
-                } else if (line.startsWith("serial1peek")) {
+                } else if (line.startsWith("shunt ")) {
 #if ENABLE_SERIAL1
                     char buf[80];
                     int count = 0;
