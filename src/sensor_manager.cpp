@@ -99,13 +99,13 @@ SensorData read_sensors() {
 
 #if ENABLE_INA3221_VOLT  // Voltage module 0x42 — bus voltage through resistor dividers
     for (uint8_t ch = 0; ch < 3; ch++) {
-        float raw_mv = ina3221_volt.getBusVoltage(ch);  // mV from INA3221
+        float raw_v = ina3221_volt.getBusVoltage(ch);  // volts from INA3221
 
         // Apply calibration offset and gain
-        float cal_mv = (raw_mv + cal.volt_offset_mv[ch]) * cal.volt_gain[ch];
+        float cal_v = (raw_v + cal.volt_offset_mv[ch] / 1000.0f) * cal.volt_gain[ch];
 
         // Apply resistor divider ratio → store as volts
-        d.ads1115_volts[ch] = (cal_mv / 1000.0f) * volt_ratios[ch];
+        d.ads1115_volts[ch] = cal_v * volt_ratios[ch];
     }
 #endif
 
