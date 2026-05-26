@@ -75,13 +75,6 @@ export default function LoginPage() {
           >
             {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
           </button>
-          {!isSignUp && (
-            <div className="mt-2">
-              <a href="/reset-password" className="text-blue-600 hover:underline text-sm">
-                Forgot password?
-              </a>
-            </div>
-          )}
         </div>
         <div className="mt-6 pt-4 border-t border-gray-200 text-center">
           <a href="/provision" className="text-blue-600 hover:underline text-sm font-medium">
