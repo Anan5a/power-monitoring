@@ -51,8 +51,6 @@ create table public.telemetry_live (
 );
 
 alter table public.telemetry_live replica identity full;
-drop publication if exists supabase_realtime;
-create publication supabase_realtime for table public.telemetry_live, public.devices, public.telemetry_archive, public.device_channels;
 
 create index idx_telemetry_live_device_time
     on public.telemetry_live (device_id, recorded_at desc);
@@ -103,6 +101,10 @@ create table public.device_channels (
 
 alter table public.device_channels replica identity full;
 alter table public.device_channels enable row level security;
+
+-- Supabase realtime publication (create after all tables exist)
+drop publication if exists supabase_realtime;
+create publication supabase_realtime for table public.telemetry_live, public.devices, public.telemetry_archive, public.device_channels;
 
 create policy "own_device_channels" on public.device_channels
     for all to authenticated using (
