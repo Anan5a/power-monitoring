@@ -8,10 +8,10 @@ static uint16_t rx_head = 0;  // write position
 static uint16_t rx_tail = 0;  // read position
 
 void init_serial1() {
-    Serial1.begin(SERIAL1_BAUD, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
+    Serial1.begin(SERIAL1_BAUD, SERIAL_8N1, SERIAL1_RX_PIN, -1);
     rx_head = rx_tail = 0;
-    Serial.printf("Serial1 enabled on RX=%d TX=%d at %d baud\n",
-        SERIAL1_RX_PIN, SERIAL1_TX_PIN, SERIAL1_BAUD);
+    Serial.printf("Serial1 enabled on RX=%d at %d baud\n",
+        SERIAL1_RX_PIN, SERIAL1_BAUD);
 }
 
 void loop_serial1() {

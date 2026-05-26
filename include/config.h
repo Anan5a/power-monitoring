@@ -78,9 +78,9 @@
 #define RELAY_4_GPIO    14
 
 // Serial1 interface (external device: inverter, generator, etc.)
-#define ENABLE_SERIAL1       0   // set to 1 to enable Serial1 reader
-#define SERIAL1_RX_PIN       33
-#define SERIAL1_TX_PIN       32
+// TX not needed — RX only on D23
+#define ENABLE_SERIAL1       1   // set to 1 to enable Serial1 reader
+#define SERIAL1_RX_PIN       23
 #define SERIAL1_BAUD         9600
 #define SERIAL1_BUFFER       256  // ring buffer size in bytes
 
