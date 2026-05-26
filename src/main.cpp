@@ -18,6 +18,11 @@ static void print_sensor_data(const SensorData& data) {
     for (int i = 0; i < 3; i++) {
         Serial.printf("CH%d: %.2fV %.3fA (cal)\n", i, data.ads1115_volts[i], data.ina3221_current[i]);
     }
+    Serial.printf("Raw INA3221 volt module (0x42): ");
+    for (int i = 0; i < 3; i++) {
+        Serial.printf("CH%d=%.2fmV ", i, ina3221_getVoltModuleBusVoltage(i) * 1000.0f);
+    }
+    Serial.println();
     Serial.printf("INA226: %.2fV %.3fA %.2fW\n", data.ina226_busV, data.ina226_current, data.ina226_power);
 }
 

@@ -142,6 +142,14 @@ float ina226_getShuntVoltage() {
 float ina226_getShuntVoltage() { return 0.0f; }
 #endif
 
+#if ENABLE_INA3221_VOLT
+float ina3221_getVoltModuleBusVoltage(uint8_t ch) {
+    return ina3221_volt.getBusVoltage(ch);
+}
+#else
+float ina3221_getVoltModuleBusVoltage(uint8_t) { return 0.0f; }
+#endif
+
 void sensor_set_calibration(uint8_t ch, uint8_t type, float value) {
     switch (type) {
         case 0: cal.volt_offset_mv[ch] = value; break;
