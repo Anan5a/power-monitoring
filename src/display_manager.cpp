@@ -85,7 +85,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
     }
 
     // YELLOW top: channel name + page number
-    display.setTextSize(2);
+    display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 2);
     display.print(name);
@@ -94,7 +94,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
     display.print("P.");
     display.print(ch + 2);
 
-    display.drawLine(0, 21, SCREEN_WIDTH - 1, 21, SSD1306_WHITE);
+    display.drawLine(0, 10, SCREEN_WIDTH - 1, 10, SSD1306_WHITE);
 
     // BLUE middle: V | I | P stacked vertically
     char ibuf[16], pbuf[16];
@@ -113,29 +113,29 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         snprintf(pbuf, sizeof(pbuf), "%.1f W", p);
     }
 
-    // Voltage row (y=24): value + unit
+    // Voltage row (y=13): value + unit
     display.setTextSize(2);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 24);
+    display.setCursor(0, 13);
     display.print(v, 2);
     display.setTextSize(1);
-    display.setCursor(54, 26);
+    display.setCursor(54, 15);
     display.print("V");
 
-    // Current row (y=34): value + unit
+    // Current row (y=28): value + unit
     display.setTextSize(2);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 34);
+    display.setCursor(0, 28);
     display.print(ibuf);
 
-    // Power row (y=44): value + unit
+    // Power row (y=43): value + unit
     display.setTextSize(2);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 44);
+    display.setCursor(0, 43);
     display.print(pbuf);
 
     // YELLOW bottom bar: SoC or mAh/Ah
-    display.drawLine(0, 50, SCREEN_WIDTH - 1, 50, SSD1306_WHITE);
+    display.drawLine(0, 53, SCREEN_WIDTH - 1, 53, SSD1306_WHITE);
     float mAh = get_coulomb_mAh(ch);
     BatteryConfig bat;
     float soc = -1;
@@ -145,15 +145,15 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         if (soc > 100) soc = 100;
         display.setTextSize(1);
         display.setTextColor(SSD1306_WHITE);
-        display.setCursor(0, 53);
+        display.setCursor(0, 55);
         display.print("SoC ");
         display.print(soc, 0);
         display.print("%");
-        draw_soc_bar(95, 58, 30, soc);
+        draw_soc_bar(95, 60, 30, soc);
     } else {
         display.setTextSize(1);
         display.setTextColor(SSD1306_WHITE);
-        display.setCursor(0, 53);
+        display.setCursor(0, 55);
         if (fabsf(mAh) < 1000.0f) {
             display.print("mAh: ");
             display.print(mAh, 0);
