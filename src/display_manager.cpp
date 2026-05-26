@@ -133,7 +133,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         draw_soc_bar(85, 57, 18, soc);
     } else {
         display.setTextSize(1);
-        display.setCursor(0, 50);
+        display.setCursor(0, 56);
         display.print("mAh:");
         if (fabsf(mAh) < 1000.0f) {
             display.print(mAh, 0);
