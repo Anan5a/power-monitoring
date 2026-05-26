@@ -122,6 +122,23 @@ static void handle_serial_cli() {
                     } else {
                         Serial.println("Usage: test sensor 0-2");
                     }
+                } else if (line.startsWith("shunt ")) {
+                    int ch; float ohms;
+                    if (sscanf(line.c_str(), "shunt %d %f", &ch, &ohms) == 2 && ch >= 0 && ch <= 3) {
+                        if (ohms <= 0.0f) {
+                            Serial.printf("CH%d shunt cleared (using default)\n", ch);
+                        } else {
+                            Serial.printf("CH%d shunt set to %.6f Ohm\n", ch, ohms);
+                        }
+                        settings_save_shunt(ch, ohms);
+                    } else {
+                        Serial.println("Usage: shunt N ohms (e.g. shunt 0 0.0003) or shunt N 0 to clear");
+                    }
+                } else if (line.startsWith("shunt show")) {
+                    for (int ch = 0; ch < 3; ch++) {
+                        float s; bool ok = settings_load_shunt(ch, &s);
+                        Serial.printf("CH%d shunt: %s\n", ch, ok ? String(s, 6).c_str() : "(default)");
+                    }
                 } else if (line == "test display") {
                     Serial.println("Display test: OLED should show cycling pages");
                     extern void init_display();
@@ -179,6 +196,8 @@ static void handle_serial_cli() {
                     Serial.println("  reset coulomb N     — reset coulomb counter CH N");
                     Serial.println("  flush log           — flush RAM log buffer");
                     Serial.println("  i2c_scan            — scan I2C bus for devices");
+                    Serial.println("  shunt N ohms       — set shunt resistance for CH N (0 clears)");
+                    Serial.println("  shunt show         — show current shunt settings");
                     Serial.println("  help                — this list");
                 } else if (line.length() > 0) {
                     Serial.println("Unknown command. Type 'help'.");

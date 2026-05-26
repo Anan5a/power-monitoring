@@ -106,6 +106,9 @@ void settings_save_channel_group(uint8_t idx, const ChannelGroup* in);
 bool settings_load_channel_name(uint8_t channel, char* out, size_t buf_len);
 void settings_save_channel_name(uint8_t channel, const char* name);
 
+bool settings_load_shunt(uint8_t channel, float* out);   // ohms, 0=use default
+void settings_save_shunt(uint8_t channel, float ohms);
+
 uint32_t settings_load_ble_pin();        // 6-digit PIN, 0 = no security
 void settings_save_ble_pin(uint32_t pin);
 

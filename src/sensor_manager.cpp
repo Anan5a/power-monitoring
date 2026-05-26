@@ -42,6 +42,14 @@ void init_sensors() {
 #if ENABLE_INA3221
     if (!ina3221.begin(INA3221_ADDR, &Wire)) {
         Serial.println("INA3221 current (0x40) init failed");
+    } else {
+        for (uint8_t ch = 0; ch < 3; ch++) {
+            float shunt = 0.0f;
+            if (settings_load_shunt(ch, &shunt) && shunt > 0.0f) {
+                ina3221.setShuntResistance(ch, shunt);
+                Serial.printf("CH%d shunt: %.6f Ohm\n", ch, shunt);
+            }
+        }
     }
 #endif
 

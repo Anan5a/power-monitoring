@@ -190,6 +190,19 @@ void settings_save_channel_name(uint8_t channel, const char* name) {
     prefs.putString(key, name);
 }
 
+bool settings_load_shunt(uint8_t channel, float* out) {
+    char key[16];
+    snprintf(key, sizeof(key), "shunt_%d", channel);
+    if (!prefs.isKey(key)) return false;
+    *out = prefs.getFloat(key, 0.0f);
+    return *out > 0.0f;
+}
+void settings_save_shunt(uint8_t channel, float ohms) {
+    char key[16];
+    snprintf(key, sizeof(key), "shunt_%d", channel);
+    prefs.putFloat(key, ohms);
+}
+
 uint32_t settings_load_ble_pin() {
     return prefs.getUInt("ble_pin", 123456);
 }
