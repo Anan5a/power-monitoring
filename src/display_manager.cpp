@@ -113,10 +113,9 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
 
     display.setCursor(0, 36);
     display.print("P:");
-    display.setTextSize(2);
     display.print(pbuf);
 
-    // Bottom: SoC or mAh/Ah at y=56
+    // Bottom: SoC or mAh/Ah at y=50
     float mAh = get_coulomb_mAh(ch);
     BatteryConfig bat;
     float soc = -1;
@@ -124,13 +123,15 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         soc = bat.initial_soc_pct + (mAh / bat.capacity_mAh) * 100.0f;
         if (soc < 0) soc = 0;
         if (soc > 100) soc = 100;
-        display.setCursor(0, 56);
+        display.setTextSize(1);
+        display.setCursor(0, 50);
         display.print("SoC ");
         display.print(soc, 0);
         display.print("%");
-        draw_soc_bar(95, 62, 26, soc);
+        draw_soc_bar(85, 57, 18, soc);
     } else {
-        display.setCursor(0, 56);
+        display.setTextSize(1);
+        display.setCursor(0, 50);
         if (fabsf(mAh) < 1000.0f) {
             display.print("mAh:");
             display.print(mAh, 0);
