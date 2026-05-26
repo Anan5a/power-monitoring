@@ -102,24 +102,36 @@ void init_connectivity() {
         return;
     }
 
-    mqtt.setServer(MQTT_BROKER, MQTT_PORT);
-    connect_mqtt();
-
-    Blynk.config(BLYNK_AUTH_TOKEN);
-    if (Blynk.connect()) {
-        Serial.println("Blynk connected");
+    char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
+    if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
+        mqtt.setServer(mqtt_broker, mqtt_port);
+        connect_mqtt();
     } else {
-        Serial.println("Blynk connect failed");
+        Serial.println("MQTT: not configured (skip)");
+    }
+
+    if (strcmp(BLYNK_AUTH_TOKEN, "YOUR_BLYNK_TOKEN") != 0) {
+        Blynk.config(BLYNK_AUTH_TOKEN);
+        if (Blynk.connect()) {
+            Serial.println("Blynk connected");
+        } else {
+            Serial.println("Blynk connect failed");
+        }
+    } else {
+        Serial.println("Blynk: not configured (skip)");
     }
 }
 
 void loop_connectivity() {
     if (skip_network) return;
-    if (!mqtt.connected()) {
-        connect_mqtt();
+    char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
+    if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
+        if (!mqtt.connected()) connect_mqtt();
+        mqtt.loop();
     }
-    mqtt.loop();
-    Blynk.run();
+    if (strcmp(BLYNK_AUTH_TOKEN, "YOUR_BLYNK_TOKEN") != 0) {
+        Blynk.run();
+    }
 }
 
 static void base64_encode(const uint8_t* in, size_t in_len, char* out) {
@@ -141,6 +153,8 @@ static void base64_encode(const uint8_t* in, size_t in_len, char* out) {
 }
 
 void publish_log_batch() {
+    char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
+    if (!settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) return;
     if (!mqtt.connected()) return;
     uint8_t batch[512];
     size_t batch_len = log_pop_batch(batch, sizeof(batch));
@@ -162,10 +176,12 @@ void publish_data(const SensorData& data) {
         ch["i"] = data.ina3221_current[i];
     }
 
+#if ENABLE_INA226
     JsonObject ina226Obj = doc["ina226"].to<JsonObject>();
     ina226Obj["v"] = data.ina226_busV;
     ina226Obj["i"] = data.ina226_current;
     ina226Obj["p"] = data.ina226_power;
+#endif
 
     JsonArray adcArr = doc["ads1115"].to<JsonArray>();
     for (uint8_t i = 0; i < 4; i++) {
@@ -178,16 +194,22 @@ void publish_data(const SensorData& data) {
 
     char buffer[512];
     size_t len = serializeJson(doc, buffer);
-    mqtt.publish(MQTT_TOPIC, buffer, len);
+
+    char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
+    if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
+        mqtt.publish(MQTT_TOPIC, buffer, len);
+    }
 
     publish_data_http(data, buffer, len);
 
+#if ENABLE_INA226
     Blynk.virtualWrite(V0, data.ina3221_busV[0]);
     Blynk.virtualWrite(V1, data.ina3221_current[0]);
     Blynk.virtualWrite(V2, data.ina226_busV);
     Blynk.virtualWrite(V3, data.ina226_current);
     Blynk.virtualWrite(V4, data.ina226_power);
     Blynk.virtualWrite(V5, data.ads1115_volts[0]);
+#endif
 
     ble_notify_sensor_data(buffer, len);
 }
@@ -220,14 +242,11 @@ void publish_data_supabase(const SensorData& data) {
         snprintf(key, sizeof(key), "ina3221_i%d", i);
         payload[key] = data.ina3221_current[i];
     }
+#if ENABLE_INA226
     payload["ina226_v"] = data.ina226_busV;
     payload["ina226_i"] = data.ina226_current;
     payload["ina226_p"] = data.ina226_power;
-    for (uint8_t i = 0; i < 4; i++) {
-        char key[16];
-        snprintf(key, sizeof(key), "ads1115_%d", i);
-        payload[key] = data.ads1115_volts[i];
-    }
+#endif
     for (uint8_t i = 0; i < 4; i++) {
         char key[16];
         snprintf(key, sizeof(key), "coulomb_mah%d", i);
