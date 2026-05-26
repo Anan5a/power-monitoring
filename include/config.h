@@ -77,6 +77,13 @@
 #define RELAY_3_GPIO    27
 #define RELAY_4_GPIO    14
 
+// Serial1 interface (external device: inverter, generator, etc.)
+#define ENABLE_SERIAL1       0   // set to 1 to enable Serial1 reader
+#define SERIAL1_RX_PIN       33
+#define SERIAL1_TX_PIN       32
+#define SERIAL1_BAUD         9600
+#define SERIAL1_BUFFER       256  // ring buffer size in bytes
+
 // BLE command interface UUIDs
 #define BLE_CHAR_CMD_UUID       "c01afdfc-3cbe-4c26-a1e8-8c71a5f6f2a4"
 #define BLE_CHAR_RESP_UUID      "d8a7b56a-3f64-4fb6-a123-8d2e5c7a9b01"

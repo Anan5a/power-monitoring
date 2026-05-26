@@ -9,6 +9,7 @@
 #include "relay_controller.h"
 #include "settings_manager.h"
 #include "ble_provisioner.h"
+#include "serial1_manager.h"
 
 static unsigned long last1s = 0;
 static unsigned long last5min = 0;
@@ -194,7 +195,20 @@ static void handle_serial_cli() {
                         sensor_get_calibration(ch, &vo, &vg, &co, &cg);
                         Serial.printf("CH%d: vo=%.2fmV vg=%.4f co=%.2fmA cg=%.4f\n", ch, vo, vg, co, cg);
                     }
-                } else if (line == "test display") {
+                } else if (line.startsWith("serial1peek")) {
+#if ENABLE_SERIAL1
+                    char buf[80];
+                    int count = 0;
+                    while (serial1_available() > 0 && count < 5) {
+                        if (serial1_read_line(buf, sizeof(buf))) {
+                            Serial.printf("[S1] %s\n", buf);
+                            count++;
+                        }
+                    }
+                    if (count == 0) Serial.println("S1: no data");
+#else
+                    Serial.println("Serial1 disabled");
+#endif
                     Serial.println("Display test: OLED should show cycling pages");
                     extern void init_display();
                     extern void update_display(const SensorData&, const char*, float);
@@ -286,6 +300,7 @@ void setup() {
     init_coulomb_counter();
     init_relays();
     init_ble_provisioner();
+    init_serial1();
 
     Serial.println("Type 'help' for serial commands");
 }
@@ -319,6 +334,7 @@ void loop() {
 
     loop_connectivity();
     loop_ble_provisioner();
+    loop_serial1();
     handle_serial_cli();
     delay(10);
 }
