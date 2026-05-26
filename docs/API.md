@@ -73,6 +73,8 @@ Connect at `115200 baud`. Type commands and press Enter.
 | `test sensor N` | Read single sensor channel (0-2) |
 | `test all sensors` | Read all sensor channels |
 | `test display` | Cycle OLED pages 5 times |
+| `display page N` | Print display page N (0=status, 1-3=ch0-2, 4=INA226) |
+| `display all` | Print all display pages |
 | `relay auto on` / `relay auto off` | Enable/disable auto-trip relay logic |
 | `shunt N ohms` | Set INA3221 shunt resistance for channel N (0=clear) |
 | `shunt show` | Show current shunt settings for all channels |
@@ -82,6 +84,14 @@ Connect at `115200 baud`. Type commands and press Enter.
 | `resistor show` | Show resistor values and computed ratios per channel |
 | `cal N type value` | Set calibration for channel N. type: 0=volt_offset_mv, 1=volt_gain, 2=curr_offset_ma, 3=curr_gain |
 | `cal show` | Show calibration values for all channels |
+| `wifi_show` | Show current WiFi SSID |
+| `wifi_ssid <ssid>` | Set WiFi SSID |
+| `wifi_pass <password>` | Set WiFi password |
+| `set_wifi <ssid> <password>` | Set both WiFi SSID and password at once |
+| `supabase_show` | Show Supabase URL, anon key, device key |
+| `supabase <url> <anon_key> <service_role_key> <device_key>` | Configure Supabase connection |
+| `serial1peek` | Dump up to 5 lines from Serial1 RX buffer |
+| `reboot` | Reboot the device |
 | `help` | Show command list |
 
 ---

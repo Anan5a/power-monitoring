@@ -326,6 +326,14 @@ static void handle_serial_cli() {
                     } else {
                         Serial.println("Usage: wifi_pass <password>");
                     }
+                } else if (line.startsWith("set_wifi ")) {
+                    char new_ssid[64], new_pass[64];
+                    if (sscanf(line.c_str(), "set_wifi %s %s", new_ssid, new_pass) == 2) {
+                        settings_save_wifi(new_ssid, new_pass);
+                        Serial.printf("WiFi set: %s (reboot to apply)\n", new_ssid);
+                    } else {
+                        Serial.println("Usage: set_wifi <ssid> <password>");
+                    }
                 } else if (line == "supabase_show") {
                     char url[128] = "", anon_key[128] = "", device_key[64] = "", api_key[64] = "";
                     bool has_url = settings_load_supabase_url(url, sizeof(url));
@@ -411,6 +419,12 @@ static void handle_serial_cli() {
                     Serial.println("  cal N type value    — set calibration (type: 0=vo_mv, 1=vg, 2=co_ma, 3=cg)");
                     Serial.println("  cal show            — show all channel calibration values");
                     Serial.println("  serial1peek         — dump up to 5 lines from Serial1");
+                    Serial.println("  wifi_show          — show current WiFi SSID");
+                    Serial.println("  wifi_ssid <ssid>  — set WiFi SSID");
+                    Serial.println("  wifi_pass <pass>  — set WiFi password");
+                    Serial.println("  set_wifi <ssid> <pass> — set both SSID and password");
+                    Serial.println("  supabase_show     — show Supabase config");
+                    Serial.println("  supabase <url> <anon_key> <service_role_key> <device_key>");
                     Serial.println("  reboot              — reboot the device");
                     Serial.println("  help                — this list");
                 } else if (line.length() > 0) {
