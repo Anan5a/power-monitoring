@@ -104,15 +104,19 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
     display.setTextSize(1);
     display.setCursor(0, 16);
     display.print("V:");
+    display.setTextSize(2);
     display.print(v, 2);
+    display.setTextSize(1);
     display.print("V");
 
     display.setCursor(0, 26);
     display.print("I:");
+    display.setTextSize(2);
     display.print(ibuf);
 
     display.setCursor(0, 36);
     display.print("P:");
+    display.setTextSize(2);
     display.print(pbuf);
 
     // Bottom: SoC or mAh/Ah at y=50
@@ -132,11 +136,11 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
     } else {
         display.setTextSize(1);
         display.setCursor(0, 50);
+        display.print("mAh:");
+        display.setTextSize(2);
         if (fabsf(mAh) < 1000.0f) {
-            display.print("mAh:");
             display.print(mAh, 0);
         } else {
-            display.print("Ah:");
             display.print(mAh / 1000.0f, 2);
         }
     }
