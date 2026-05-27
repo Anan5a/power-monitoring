@@ -4,6 +4,7 @@
 #include "data_logger.h"
 #include "ble_provisioner.h"
 #include "coulomb_counter.h"
+#include "sensor_manager.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
@@ -336,6 +337,21 @@ void publish_data_supabase(const SensorData& data) {
         payload[key] = i;
         snprintf(key, sizeof(key), "ch%d_P", ch);
         payload[key] = p;
+    }
+
+    // Add stddev + spike flags for INA3221 channels
+    for (uint8_t i = 0; i < 3; i++) {
+        char key[16];
+        SampleMeta m = sensor_get_meta(i); // 0-2 = INA3221 current
+        snprintf(key, sizeof(key), "ina3221_i%d_stddev", i);
+        payload[key] = m.stddev;
+        snprintf(key, sizeof(key), "ina3221_i%d_spike", i);
+        payload[key] = m.spike;
+        m = sensor_get_meta(i + 3); // 3-5 = INA3221 voltage
+        snprintf(key, sizeof(key), "ina3221_v%d_stddev", i);
+        payload[key] = m.stddev;
+        snprintf(key, sizeof(key), "ina3221_v%d_spike", i);
+        payload[key] = m.spike;
     }
 
     JsonObject metadata = doc["p_metadata"].to<JsonObject>();
