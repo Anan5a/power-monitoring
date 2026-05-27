@@ -1,8 +1,11 @@
+/// <reference types="vite/client" />
 import { createClient } from '@supabase/supabase-js'
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config'
 import type { DeviceChannels } from './types'
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+export const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL as string,
+  import.meta.env.VITE_SUPABASE_ANON_KEY as string
+)
 
 export async function fetchDeviceChannels(deviceKey: string): Promise<DeviceChannels | null> {
   const { data, error } = await supabase
