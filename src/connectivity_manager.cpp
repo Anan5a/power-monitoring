@@ -4,6 +4,7 @@
 #include "data_logger.h"
 #include "ble_provisioner.h"
 #include "coulomb_counter.h"
+#include "sensor_manager.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
@@ -338,6 +339,21 @@ void publish_data_supabase(const SensorData& data) {
         payload[key] = p;
     }
 
+    // Add stddev + spike flags for INA3221 channels
+    for (uint8_t i = 0; i < 3; i++) {
+        char key[16];
+        SampleMeta m = sensor_get_meta(i); // 0-2 = INA3221 current
+        snprintf(key, sizeof(key), "ina3221_i%d_stddev", i);
+        payload[key] = m.stddev;
+        snprintf(key, sizeof(key), "ina3221_i%d_spike", i);
+        payload[key] = m.spike;
+        m = sensor_get_meta(i + 3); // 3-5 = INA3221 voltage
+        snprintf(key, sizeof(key), "ina3221_v%d_stddev", i);
+        payload[key] = m.stddev;
+        snprintf(key, sizeof(key), "ina3221_v%d_spike", i);
+        payload[key] = m.spike;
+    }
+
     JsonObject metadata = doc["p_metadata"].to<JsonObject>();
     metadata["rssi"] = WiFi.RSSI();
     metadata["vcc"] = analogRead(0) / 4095.0f * 3.3f;
@@ -460,4 +476,46 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
     }
     http.end();
     return ok;
+}
+
+void check_settings_commands() {
+    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
+
+    static unsigned long last_check = 0;
+    if (millis() - last_check < 30000) return;  // poll every 30s
+    last_check = millis();
+
+    HTTPClient http;
+    http.begin(String(supabase_url) + "/rest/v1/rpc/claim_settings_command");
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", anon_key);
+    http.addHeader("Authorization", "Bearer " + String(anon_key));
+
+    JsonDocument doc;
+    doc["p_device_key"] = device_key;
+    char buffer[256];
+    size_t len = serializeJson(doc, buffer);
+
+    int rc = http.POST((uint8_t*)buffer, len);
+    http.end();
+
+    if (rc == 200) {
+        String body = http.getString();
+        if (body.length() < 5 || body == "null") return;  // no pending command
+
+        // Expected: {"cmd_type":"set_wifi","payload":{...}}
+        JsonDocument resp;
+        DeserializationError err = deserializeJson(resp, body.c_str());
+        if (err) { Serial.println("[SETTINGS] parse error"); return; }
+
+        const char* cmd_type = resp["cmd_type"] | "";
+        const char* payload = resp["payload"] | "{}";
+        if (strlen(cmd_type) > 0) {
+            apply_settings_command(cmd_type, payload);
+        }
+    }
 }

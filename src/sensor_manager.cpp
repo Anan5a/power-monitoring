@@ -2,29 +2,57 @@
 #include "settings_manager.h"
 #include "config.h"
 #include <Wire.h>
+#include <algorithm>
 #include <Adafruit_INA3221.h>
 #include <INA226.h>
 #include <Adafruit_ADS1X15.h>
 
-static Adafruit_INA3221 ina3221;      // 0x40 — current sensing
-static Adafruit_INA3221 ina3221_volt; // 0x42 — voltage sensing (resistor dividers)
+static Adafruit_INA3221 ina3221;
+static Adafruit_INA3221 ina3221_volt;
 
 static bool wire_started = false;
 
-// Voltage divider ratios (can be overridden per-channel from NVS)
 static float volt_ratios[3] = {
     VOLT_RATIO_CH0,
     VOLT_RATIO_CH1,
     VOLT_RATIO_CH2,
 };
 
-// Active calibration (loaded from NVS or defaults from config.h)
 static ChannelCalibration cal = {
     .volt_offset_mv = {CAL_VOLT_OFFSET_MV_CH0, CAL_VOLT_OFFSET_MV_CH1, CAL_VOLT_OFFSET_MV_CH2},
     .volt_gain = {CAL_VOLT_GAIN_CH0, CAL_VOLT_GAIN_CH1, CAL_VOLT_GAIN_CH2},
     .curr_offset_ma = {CAL_CURR_OFFSET_MA_CH0, CAL_CURR_OFFSET_MA_CH1, CAL_CURR_OFFSET_MA_CH2},
     .curr_gain = {CAL_CURR_GAIN_CH0, CAL_CURR_GAIN_CH1, CAL_CURR_GAIN_CH2},
 };
+
+// Burst sample metadata for all channels
+static SampleMeta g_meta[8] = {{0,false},{0,false},{0,false},{0,false},{0,false},{0,false},{0,false},{0,false}};
+static float baseline_stddev[8] = {0};
+static uint8_t baseline_count = 0;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+static float median_of(float arr[], int n) {
+    std::nth_element(arr, arr + n/2, arr + n);
+    return arr[n/2];
+}
+
+static float stddev_of(float arr[], int n, float med) {
+    float variance = 0;
+    for (int i = 0; i < n; i++) {
+        float d = arr[i] - med;
+        variance += d * d;
+    }
+    return sqrtf(variance / n);
+}
+
+static float max_deviation(float arr[], int n, float med) {
+    float m = 0;
+    for (int i = 0; i < n; i++) m = fmaxf(m, fabsf(arr[i] - med));
+    return m;
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
 
 void init_sensors() {
     if (!wire_started) {
@@ -33,27 +61,17 @@ void init_sensors() {
         wire_started = true;
     }
 
-    // Load calibration from NVS (falls back to config.h defaults on first boot)
     ChannelCalibration saved;
-    if (settings_load_channel_calibration(&saved)) {
-        cal = saved;
-    }
+    if (settings_load_channel_calibration(&saved)) cal = saved;
 
-    // Load voltage divider ratios from NVS (falls back to config.h)
-    // If resistor values are stored, compute ratio: (r_high + r_low) / r_low
     for (uint8_t ch = 0; ch < 3; ch++) {
         float ratio = 0.0f;
         if (settings_load_volt_ratio(ch, &ratio) && ratio > 0.0f) {
             volt_ratios[ch] = ratio;
-            Serial.printf("CH%d vratio: %.4f (NVS override)\n", ch, ratio);
         } else {
             float r_h = 0.0f, r_l = 0.0f;
             if (settings_load_resistors(ch, &r_h, &r_l) && r_h > 0.0f && r_l > 0.0f) {
-                float computed = (r_h + r_l) / r_l;
-                volt_ratios[ch] = computed;
-                Serial.printf("CH%d vratio: %.4f (computed from R=%.0f+%.0f)\n", ch, computed, r_h, r_l);
-            } else {
-                volt_ratios[ch] = (ch == 0) ? VOLT_RATIO_CH0 : (ch == 1) ? VOLT_RATIO_CH1 : VOLT_RATIO_CH2;
+                volt_ratios[ch] = (r_h + r_l) / r_l;
             }
         }
     }
@@ -66,7 +84,6 @@ void init_sensors() {
             float shunt = 0.0f;
             if (settings_load_shunt(ch, &shunt) && shunt > 0.0f) {
                 ina3221.setShuntResistance(ch, shunt);
-                Serial.printf("CH%d shunt: %.6f Ohm\n", ch, shunt);
             }
         }
     }
@@ -97,76 +114,118 @@ void init_sensors() {
 #endif
 }
 
+// ── Read with burst sampling ──────────────────────────────────────────────────
+
 SensorData read_sensors() {
     SensorData d = {0};
+    float samples[BURST_N];
 
-#if ENABLE_INA3221  // Current module 0x40 — shunt voltage → current
+    // ── INA3221 current (0x40) ─────────────────────────────────
     for (uint8_t ch = 0; ch < 3; ch++) {
-        float raw_mv = ina3221.getBusVoltage(ch);  // mV (int16_t millivolts)
-        float raw_ma = ina3221.getCurrentAmps(ch) * 1000.0f;  // A→mA
+        for (int i = 0; i < BURST_N; i++) {
+            samples[i] = ina3221.getCurrentAmps(ch) * 1000.0f; // mA
+        }
+        float med = median_of(samples, BURST_N);
+        float sd = stddev_of(samples, BURST_N, med);
+        float max_dev = max_deviation(samples, BURST_N, med);
+        bool spike = baseline_count >= BASELINE_TICKS &&
+                     sd > SPIKE_STDDEV_MULT * baseline_stddev[ch] &&
+                     max_dev > SPIKE_DEVIATION_MA;
+        g_meta[ch] = {sd, spike};
 
-        float cal_mv = (raw_mv + cal.volt_offset_mv[ch]) * cal.volt_gain[ch];
-        float cal_ma = raw_ma - cal.curr_offset_ma[ch];
-        cal_ma *= cal.curr_gain[ch];
-
-        // Dead-zone: if current magnitude below threshold, treat as zero
-        if (fabsf(cal_ma) < 5.0f) cal_ma = 0.0f;
-
-        d.ina3221_current[ch] = cal_ma / 1000.0f;  // store as A
+        float cal_ma = (med - cal.curr_offset_ma[ch]) * cal.curr_gain[ch];
+        if (fabsf(cal_ma) < 5.0f) cal_ma = 0.0f; // dead-zone
+        d.ina3221_current[ch] = cal_ma / 1000.0f;
     }
-#endif
 
-#if ENABLE_INA3221_VOLT  // Voltage module 0x42 — bus voltage through resistor dividers
+    // ── INA3221 voltage (0x42) ─────────────────────────────────
     for (uint8_t ch = 0; ch < 3; ch++) {
-        float raw_mv = ina3221_volt.getBusVoltage(ch) * 1000.0f;  // mV
+        for (int i = 0; i < BURST_N; i++) {
+            samples[i] = ina3221_volt.getBusVoltage(ch) * 1000.0f; // mV
+        }
+        float med = median_of(samples, BURST_N);
+        float sd = stddev_of(samples, BURST_N, med);
+        float max_dev = max_deviation(samples, BURST_N, med);
+        bool spike = baseline_count >= BASELINE_TICKS &&
+                     sd > SPIKE_STDDEV_MULT * baseline_stddev[ch + 3] &&
+                     max_dev > SPIKE_DEVIATION_MV;
+        g_meta[ch + 3] = {sd, spike};
 
-        // Apply calibration offset and gain (both in mV space)
-        float cal_mv = (raw_mv + cal.volt_offset_mv[ch]) * cal.volt_gain[ch];
-
-        // Apply resistor divider ratio → convert to volts
+        float cal_mv = (med + cal.volt_offset_mv[ch]) * cal.volt_gain[ch];
         d.ads1115_volts[ch] = cal_mv / 1000.0f * volt_ratios[ch];
     }
-#endif
 
+    // ── INA226 (single read, already filtered by HW) ────────────
 #if ENABLE_INA226
     d.ina226_busV    = ina226.getBusVoltage() + INA226_V_OFFSET;
     d.ina226_current = ina226.getCurrent() * INA226_I_GAIN;
     d.ina226_power   = ina226.getPower();
+    g_meta[6] = {0, false};
 #endif
 
+    // ── ADS1115 ───────────────────────────────────────────────
 #if ENABLE_ADS1115
     for (uint8_t ch = 0; ch < 4; ch++) {
-        int16_t raw = ads1115.readADC_SingleEnded(ch);
-        float v = ads1115.computeVolts(raw);
-        d.ads1115_volts[ch] = v;
+        for (int i = 0; i < BURST_N; i++) {
+            int16_t raw = ads1115.readADC_SingleEnded(ch);
+            samples[i] = ads1115.computeVolts(raw);
+        }
+        float med = median_of(samples, BURST_N);
+        d.ads1115_volts[ch] = med;
     }
 #endif
+
+    // Baseline calibration: accumulate stddev for first BASELINE_TICKS
+    if (baseline_count < BASELINE_TICKS) {
+        baseline_count++;
+        for (int i = 0; i < 6; i++) { // ch 0-5 (INA3221 current + voltage)
+            baseline_stddev[i] += g_meta[i].stddev / (float)BASELINE_TICKS;
+        }
+    }
 
     return d;
 }
 
-#if ENABLE_INA3221
-float ina3221_getShuntVoltage(uint8_t ch) {
-    return ina3221.getShuntVoltage(ch);
+// ── Public API ────────────────────────────────────────────────────────────────
+
+SampleMeta sensor_get_meta(uint8_t ch) {
+    if (ch >= 8) return {0, false};
+    return g_meta[ch];
 }
+
+void sensor_calibrate_baseline() {
+    baseline_count = 0;
+    for (int i = 0; i < 8; i++) baseline_stddev[i] = 0;
+    Serial.println("Baseline recalibration started");
+}
+
+float ina3221_getShuntVoltage(uint8_t ch) {
+#if ENABLE_INA3221
+    return ina3221.getShuntVoltage(ch);
 #else
+    (void)ch;
+    return 0.0f;
+#endif
+}
+
+float ina226_getShuntVoltage() {
+#if ENABLE_INA226
+    return ina226.getShuntVoltage();
+#else
+    return 0.0f;
+#endif
+}
+
+#if !ENABLE_INA3221
 float ina3221_getShuntVoltage(uint8_t) { return 0.0f; }
 #endif
 
-#if ENABLE_INA226
-float ina226_getShuntVoltage() {
-    return ina226.getShuntVoltage();
-}
+#if !ENABLE_INA3221_VOLT
+float ina3221_getVoltModuleBusVoltage(uint8_t) { return 0.0f; }
 #else
-float ina226_getShuntVoltage() { return 0.0f; }
-#endif
-
-#if ENABLE_INA3221_VOLT
 float ina3221_getVoltModuleBusVoltage(uint8_t ch) {
     return ina3221_volt.getBusVoltage(ch);
 }
-#else
-float ina3221_getVoltModuleBusVoltage(uint8_t) { return 0.0f; }
 #endif
 
 void sensor_set_calibration(uint8_t ch, uint8_t type, float value) {
@@ -180,10 +239,10 @@ void sensor_set_calibration(uint8_t ch, uint8_t type, float value) {
     settings_save_channel_calibration(&cal);
 }
 
-void sensor_get_calibration(uint8_t ch, float* volt_offset_mv, float* volt_gain, float* curr_offset_ma, float* curr_gain) {
+void sensor_get_calibration(uint8_t ch, float* volt_offset_mv, float* volt_gain, float* curr_offset_mv, float* curr_gain) {
     *volt_offset_mv = cal.volt_offset_mv[ch];
     *volt_gain = cal.volt_gain[ch];
-    *curr_offset_ma = cal.curr_offset_ma[ch];
+    *curr_offset_mv = cal.curr_offset_ma[ch];
     *curr_gain = cal.curr_gain[ch];
 }
 

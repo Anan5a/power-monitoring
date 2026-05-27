@@ -104,7 +104,7 @@ export default function ProvisioningPage() {
           .from('devices')
           .select('ble_pin')
           .eq('device_key', deviceKey)
-          .single()
+          .maybeSingle()
         if (data?.ble_pin) setStoredPin(data.ble_pin)
       } catch { /* use stored default if fetch fails */ }
       loadCalibration(0)

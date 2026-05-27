@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <Wire.h>
 #include "config.h"
 #include "sensor_manager.h"
@@ -10,10 +12,7 @@
 #include "settings_manager.h"
 #include "ble_provisioner.h"
 #include "serial1_manager.h"
-
-static unsigned long last1s = 0;
-static unsigned long last5min = 0;
-static unsigned long last5s = 0;
+#include "core_shared.h"
 
 static void print_sensor_data(const SensorData& data) {
     for (int i = 0; i < 3; i++) {
@@ -46,6 +45,75 @@ static void print_status() {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Core 0 — Network Task
+// Handles: MQTT loop, HTTP publish, Supabase telemetry + settings poll
+// ─────────────────────────────────────────────────────────────────────────────
+static void networkTask(void* param) {
+    (void)param;
+    Serial.println("[Network] task started on Core 0");
+
+    init_connectivity();
+
+    unsigned long last_settings_check = 0;
+    SensorData data;
+
+    for (;;) {
+        loop_connectivity();
+
+        // Drain sensor queue and publish
+        while (xQueueReceive(g_sensor_queue, &data, 0) == pdTRUE) {
+            publish_data(data);
+            publish_data_supabase(data);
+        }
+
+        // Supabase settings poll every 30s
+        if (millis() - last_settings_check >= 30000) {
+            last_settings_check = millis();
+            check_settings_commands();
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core 1 — Sensor Task
+// Handles: I2C reads, logging, coulomb, relay eval, OLED display
+// ─────────────────────────────────────────────────────────────────────────────
+static void sensorTask(void* param) {
+    (void)param;
+    Serial.println("[Sensor] task started on Core 1");
+
+    SensorData data;
+    TickType_t last_wake = xTaskGetTickCount();
+    unsigned long last_display_update = 0;
+
+    for (;;) {
+        data = read_sensors();
+        push_sensor_data(data);
+        log_sample(data, millis());
+        update_coulomb_counter(data, 1.0f);
+        evaluate_relays(data);
+
+        // OLED display update every 5s
+        if (millis() - last_display_update >= 5000) {
+            last_display_update = millis();
+            float total_power = 0;
+            for (int ch = 0; ch < 3; ch++) {
+                total_power += data.ads1115_volts[ch] * data.ina3221_current[ch];
+            }
+            total_power += data.ina226_power;
+            update_display(data, get_local_ip_str(), total_power);
+        }
+
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(500));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Serial CLI helpers
+// ─────────────────────────────────────────────────────────────────────────────
 static void handle_serial_cli() {
     static char line[256];
     static uint8_t len = 0;
@@ -306,6 +374,9 @@ static void handle_serial_cli() {
                     sensor_get_calibration(ch, &vo, &vg, &co, &cg);
                     Serial.printf("CH%d: vo=%.2fmV vg=%.4f co=%.2fmA cg=%.4f\n", ch, vo, vg, co, cg);
                 }
+            } else if (cmd == "calibrate_baseline") {
+                sensor_calibrate_baseline();
+                Serial.println("Baseline recalibration started — collecting new baseline over next 10 ticks");
             } else if (cmd.startsWith("cal ")) {
                 int ch, type; float value;
                 if (sscanf(cmd.c_str(), "cal %d %d %f", &ch, &type, &value) == 3 && ch >= 0 && ch <= 2 && type >= 0 && type <= 3) {
@@ -403,7 +474,6 @@ static void handle_serial_cli() {
                 int ch, vs = -1, vidx = -1, cs = -1, cidx = -1;
                 int n = sscanf(cmd.c_str(), "virtual_channel %d %d %d %d %d", &ch, &vs, &vidx, &cs, &cidx);
                 if (n == 1 && ch >= 0 && ch <= 3) {
-                    // Show single channel
                     VirtualChannelConfig vc;
                     if (settings_load_virtual_channel(ch, &vc)) {
                         Serial.printf("CH%d: V=src%d:idx%d I=src%d:idx%d\n",
@@ -455,6 +525,7 @@ static void handle_serial_cli() {
                 Serial.println("  resistor show        — show resistor values per channel");
                 Serial.println("  cal N type value    — set calibration (type: 0=vo_mv, 1=vg, 2=co_ma, 3=cg)");
                 Serial.println("  cal show            — show all channel calibration values");
+                Serial.println("  calibrate_baseline  — restart baseline noise calibration (10 ticks)");
                 Serial.println("  serial1peek         — dump up to 5 lines from Serial1");
                 Serial.println("  wifi_show          — show current WiFi SSID");
                 Serial.println("  wifi_ssid <ssid>  — set WiFi SSID");
@@ -473,6 +544,9 @@ static void handle_serial_cli() {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Arduino setup — create FreeRTOS tasks
+// ─────────────────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
     while (!Serial) { ; }
@@ -482,7 +556,6 @@ void setup() {
     init_settings();
     init_sensors();
     init_display();
-    init_connectivity();
     log_set_epoch(get_epoch_time());
     init_data_logger();
     init_coulomb_counter();
@@ -490,39 +563,16 @@ void setup() {
     init_ble_provisioner();
     init_serial1();
 
+    init_core_shared();
+
+    xTaskCreatePinnedToCore(networkTask, "Network", 8192, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(sensorTask,    "Sensor",   16384, NULL, 10, NULL, 1);
+
     Serial.println("Type 'help' for serial commands");
 }
 
 void loop() {
-    unsigned long now = millis();
-
-    SensorData data;
-    if (now - last1s >= FAST_SAMPLE_INTERVAL_MS) {
-        last1s = now;
-        data = read_sensors();
-        log_sample(data, now);
-        update_coulomb_counter(data, FAST_SAMPLE_INTERVAL_MS / 1000.0f);
-        evaluate_relays(data);
-    }
-
-    if (now - last5min >= 300000) {
-        last5min = now;
-        publish_data_supabase(data);
-    }
-
-    if (now - last5s >= SAMPLE_INTERVAL_MS) {
-        last5s = now;
-        data = read_sensors();
-        float total_power = 0;
-        for (int ch = 0; ch < 3; ch++) total_power += data.ads1115_volts[ch] * data.ina3221_current[ch];
-        total_power += data.ina226_power;
-        publish_data(data);
-        update_display(data, get_local_ip_str(), total_power);
-    }
-
-    loop_connectivity();
-    loop_ble_provisioner();
-    loop_serial1();
+    // Not used — all work is in FreeRTOS tasks
     handle_serial_cli();
     delay(10);
 }

@@ -24,4 +24,7 @@ float get_sensor_voltage(uint8_t src, uint8_t idx, const SensorData& data);
 float get_sensor_current(uint8_t src, uint8_t idx, const SensorData& data);
 float get_sensor_power(uint8_t src, uint8_t idx, const SensorData& data);
 
+// Settings commands: ESP32 polls Supabase for pending config changes
+void check_settings_commands();
+
 #endif
