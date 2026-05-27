@@ -65,7 +65,13 @@ static void send_response(const char* msg) {
 static bool check_pin(JsonDocument& doc) {
     uint32_t expected = settings_load_ble_pin();
     if (expected == 0) return true; // no security
-    uint32_t provided = doc["pin"] | 0;
+    // Accept PIN as number or as string (dashboard sends "123456" as JSON string)
+    uint32_t provided = 0;
+    if (doc["pin"].is<String>()) {
+        provided = atoi(doc["pin"].as<String>().c_str());
+    } else {
+        provided = doc["pin"] | 0;
+    }
     if (provided != expected) {
         send_response("{\"ok\":false,\"error\":\"invalid_pin\"}");
         return false;
