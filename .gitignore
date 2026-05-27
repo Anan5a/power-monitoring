@@ -4,3 +4,10 @@
 ui/dist/
 ui/package-lock.json
 .vscode/c_cpp_properties.json
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
