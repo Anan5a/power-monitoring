@@ -183,6 +183,9 @@ grant select, insert, update, delete on public.devices to authenticated;
 grant select on public.profiles to authenticated;
 grant select on public.device_profiles to authenticated;
 grant select, insert, update on public.device_channels to authenticated;
+grant select on public.telemetry_live to authenticated;
+grant select on public.telemetry_archive to authenticated;
+grant select, insert, update on public.relay_states to authenticated;
 
 -- Device profiles: all authenticated can read (for UI dropdown)
 create policy "read_device_profiles" on public.device_profiles
