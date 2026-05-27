@@ -181,6 +181,10 @@ SensorData read_sensors() {
         for (int i = 0; i < 6; i++) { // ch 0-5 (INA3221 current + voltage)
             baseline_stddev[i] += g_meta[i].stddev / (float)BASELINE_TICKS;
         }
+        if (baseline_count >= BASELINE_TICKS) {
+            Serial.printf("[CALIB] baseline complete: i0_stddev=%.4f i1_stddev=%.4f i2_stddev=%.4f\n",
+                baseline_stddev[0], baseline_stddev[1], baseline_stddev[2]);
+        }
     }
 
     return d;
