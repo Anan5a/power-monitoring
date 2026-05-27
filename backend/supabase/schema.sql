@@ -260,7 +260,7 @@ create table public.sensor_calibration_status (
     id bigint generated always as identity primary key,
     device_key text unique not null references public.devices(device_key) on delete cascade,
     calibrating boolean default false,
-    baseline_tick tinyint default 0,
+    baseline_tick smallint default 0,
     baseline_stddev jsonb default '{}',
     updated_at timestamptz default now()
 );
