@@ -20,6 +20,25 @@ static bool skip_network = false;
 
 static time_t epoch_time = 0;
 
+// src: 0=none, 1=ina3221_volt(0x42), 2=ina3221_curr(0x40), 3=ina226, 4=ads1115
+float get_sensor_voltage(uint8_t src, uint8_t idx, const SensorData& data) {
+    if (src == 1) return data.ads1115_volts[idx < 4 ? idx : 0];        // INA3221 voltage module
+    if (src == 2) return data.ina3221_busV[idx < 3 ? idx : 0];        // INA3221 current module (busV)
+    if (src == 3) return data.ina226_busV;                            // INA226
+    if (src == 4) return data.ads1115_volts[idx < 4 ? idx : 0];      // ADS1115
+    return 0.0f;
+}
+float get_sensor_current(uint8_t src, uint8_t idx, const SensorData& data) {
+    if (src == 1) return 0.0f;                                       // voltage-only source
+    if (src == 2) return data.ina3221_current[idx < 3 ? idx : 0];    // INA3221 current module
+    if (src == 3) return data.ina226_current;                         // INA226
+    return 0.0f;
+}
+float get_sensor_power(uint8_t src, uint8_t idx, const SensorData& data) {
+    if (src == 3) return data.ina226_power;                          // INA226 has built-in power
+    return 0.0f;
+}
+
 static void sync_time() {
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
     struct tm ti = {};
@@ -192,6 +211,34 @@ void publish_data(const SensorData& data) {
     doc["log_overflow"] = log_has_overflow_file();
     doc["log_overflow_bytes"] = log_overflow_file_size();
 
+    // Virtual channels: compute V, I, P per channel from configured sources
+    for (uint8_t ch = 0; ch < 4; ch++) {
+        VirtualChannelConfig vc;
+        if (!settings_load_virtual_channel(ch, &vc)) continue;
+        char key[16];
+        float v = 0, i = 0, p = 0;
+        if (vc.voltage_src > 0) {
+            v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data);
+        }
+        if (vc.current_src > 0) {
+            i = get_sensor_current(vc.current_src, vc.current_idx, data);
+            if (vc.current_src == 3) {
+                p = get_sensor_power(vc.current_src, vc.current_idx, data);
+            } else if (vc.voltage_src > 0) {
+                p = v * i;
+            }
+        }
+        if (vc.voltage_src > 0 && vc.current_src == 0) {
+            // Current-only source (INA226 with separate power calc)
+        }
+        snprintf(key, sizeof(key), "ch%d_V", ch);
+        doc[key] = v;
+        snprintf(key, sizeof(key), "ch%d_I", ch);
+        doc[key] = i;
+        snprintf(key, sizeof(key), "ch%d_P", ch);
+        doc[key] = p;
+    }
+
     char buffer[512];
     size_t len = serializeJson(doc, buffer);
 
@@ -265,6 +312,31 @@ void publish_data_supabase(const SensorData& data) {
     payload["log_entries"] = log_entries_count();
     payload["log_overflow"] = log_has_overflow_file();
     payload["log_overflow_bytes"] = log_overflow_file_size();
+
+    // Virtual channels: compute V, I, P per channel from configured sources
+    for (uint8_t ch = 0; ch < 4; ch++) {
+        VirtualChannelConfig vc;
+        if (!settings_load_virtual_channel(ch, &vc)) continue;
+        char key[16];
+        float v = 0, i = 0, p = 0;
+        if (vc.voltage_src > 0) {
+            v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data);
+        }
+        if (vc.current_src > 0) {
+            i = get_sensor_current(vc.current_src, vc.current_idx, data);
+            if (vc.current_src == 3) {
+                p = get_sensor_power(vc.current_src, vc.current_idx, data);
+            } else if (vc.voltage_src > 0) {
+                p = v * i;
+            }
+        }
+        snprintf(key, sizeof(key), "ch%d_V", ch);
+        payload[key] = v;
+        snprintf(key, sizeof(key), "ch%d_I", ch);
+        payload[key] = i;
+        snprintf(key, sizeof(key), "ch%d_P", ch);
+        payload[key] = p;
+    }
 
     JsonObject metadata = doc["p_metadata"].to<JsonObject>();
     metadata["rssi"] = WiFi.RSSI();

@@ -388,6 +388,42 @@ static void handle_serial_cli() {
 #else
                 Serial.println("Serial1 disabled");
 #endif
+            } else if (cmd == "virtual_channel show") {
+                Serial.println("Virtual channel configs:");
+                for (int ch = 0; ch < 4; ch++) {
+                    VirtualChannelConfig vc;
+                    if (settings_load_virtual_channel(ch, &vc)) {
+                        Serial.printf("  CH%d: V=src%d:idx%d I=src%d:idx%d\n",
+                            ch, vc.voltage_src, vc.voltage_idx, vc.current_src, vc.current_idx);
+                    } else {
+                        Serial.printf("  CH%d: not configured\n", ch);
+                    }
+                }
+            } else if (cmd.startsWith("virtual_channel ")) {
+                int ch, vs = -1, vidx = -1, cs = -1, cidx = -1;
+                int n = sscanf(cmd.c_str(), "virtual_channel %d %d %d %d %d", &ch, &vs, &vidx, &cs, &cidx);
+                if (n == 1 && ch >= 0 && ch <= 3) {
+                    // Show single channel
+                    VirtualChannelConfig vc;
+                    if (settings_load_virtual_channel(ch, &vc)) {
+                        Serial.printf("CH%d: V=src%d:idx%d I=src%d:idx%d\n",
+                            ch, vc.voltage_src, vc.voltage_idx, vc.current_src, vc.current_idx);
+                    } else {
+                        Serial.printf("CH%d: not configured\n", ch);
+                    }
+                } else if (n == 5 && ch >= 0 && ch <= 3 && vs >= 0 && vs <= 4 && vidx >= 0 && cs >= 0 && cs <= 3 && cidx >= 0 && cidx <= 2) {
+                    VirtualChannelConfig vc = {};
+                    vc.voltage_src = (uint8_t)vs;
+                    vc.voltage_idx = (uint8_t)vidx;
+                    vc.current_src = (uint8_t)cs;
+                    vc.current_idx = (uint8_t)cidx;
+                    settings_save_virtual_channel(ch, &vc);
+                    Serial.printf("CH%d: V=src%d:idx%d I=src%d:idx%d saved\n", ch, vs, vidx, cs, cidx);
+                } else {
+                    Serial.println("Usage: virtual_channel show | virtual_channel N | virtual_channel N vs vidx cs cidx");
+                    Serial.println("  src: 0=none 1=volt(0x42) 2=curr(0x40) 3=ina226 4=ads1115");
+                    Serial.println("  e.g. virtual_channel 0 1 0 2 0 → CH0: V=volt:0, I=curr:0");
+                }
             } else if (cmd == "reboot") {
                 Serial.println("Rebooting...");
                 delay(100);

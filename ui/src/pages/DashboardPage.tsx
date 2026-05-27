@@ -8,6 +8,33 @@ import ChannelSelector from '../components/ChannelSelector'
 import RelayControl from '../components/RelayControl'
 import BatteryStatus from '../components/BatteryStatus'
 
+// Unit inference from key suffix
+function inferUnit(key: string): string {
+  if (key.endsWith('_V')) return 'V'
+  if (key.endsWith('_I')) return 'A'
+  if (key.endsWith('_P')) return 'W'
+  if (key.endsWith('_mah') || key.endsWith('_mah')) return 'mAh'
+  if (key.endsWith('_soc') || key.endsWith('_pct')) return '%'
+  return ''
+}
+
+// Human-readable label from key
+function keyToLabel(key: string): string {
+  return key
+    .replace(/^ina3221_v/, 'INA3221 V Ch')
+    .replace(/^ina3221_i/, 'INA3221 I Ch')
+    .replace(/^ina226_/, 'INA226 ')
+    .replace(/^ads1115_/, 'ADS1115 ')
+    .replace(/^coulomb_mah/, 'Coulomb mAh Ch')
+    .replace(/^soc_pct/, 'SoC Ch')
+    .replace(/^ch(\d+)_V/, 'CH$1 Voltage')
+    .replace(/^ch(\d+)_I/, 'CH$1 Current')
+    .replace(/^ch(\d+)_P/, 'CH$1 Power')
+    .replace(/_/g, ' ')
+}
+
+interface FieldDef { key: string; label: string; unit: string; chart: boolean }
+
 export default function DashboardPage() {
   const [devices, setDevices] = useState<Device[]>([])
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null)
@@ -16,6 +43,8 @@ export default function DashboardPage() {
   const [historicalData, setHistoricalData] = useState<TelemetryPoint[]>([])
   const [selectedFields, setSelectedFields] = useState<string[]>([])
   const [loadingDevices, setLoadingDevices] = useState(true)
+  const [dynamicFields, setDynamicFields] = useState<FieldDef[]>([])
+  const [fieldsSource, setFieldsSource] = useState<'profile' | 'dynamic'>('profile')
 
   useEffect(() => {
     async function loadDevices() {
@@ -32,6 +61,33 @@ export default function DashboardPage() {
     }
     loadDevices()
   }, [])
+
+  const discoverFieldsFromTelemetry = useCallback(async (deviceKey: string) => {
+    // Fetch latest telemetry row to discover available payload keys
+    const { data } = await supabase
+      .from('telemetry_live')
+      .select('payload')
+      .eq('device_id', deviceKey)
+      .order('recorded_at', { ascending: false })
+      .limit(1)
+      .single()
+
+    if (!data?.payload) return
+
+    const payload = data.payload as Record<string, unknown>
+    const discoveredKeys = Object.keys(payload).filter(k => typeof payload[k] === 'number')
+
+    const fields: FieldDef[] = discoveredKeys.map(key => ({
+      key,
+      label: keyToLabel(key),
+      unit: inferUnit(key),
+      chart: true,
+    }))
+
+    setDynamicFields(fields)
+    setFieldsSource('dynamic')
+    setSelectedFields(fields.filter(f => f.chart).map(f => f.key))
+  }, [supabase])
 
   const loadDeviceProfile = useCallback(async (device: Device) => {
     const { data } = await supabase
@@ -66,18 +122,27 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!selectedDevice) return
 
-    loadDeviceProfile(selectedDevice)
     loadDeviceChannels(selectedDevice.device_key)
     loadHistory(selectedDevice)
-  }, [selectedDevice, loadDeviceProfile, loadDeviceChannels, loadHistory])
+    // Try dynamic discovery first; fall back to deviceProfile if no telemetry yet
+    discoverFieldsFromTelemetry(selectedDevice.device_key).then(() => {
+      // If no fields discovered (no telemetry rows yet), fall back to profile
+      setFieldsSource(prev => prev === 'profile' ? prev : 'dynamic')
+      loadDeviceProfile(selectedDevice)
+    })
+  }, [selectedDevice])
 
   const { dataPoints, latestReading } = useRealtime(selectedDevice?.device_key ?? null)
 
-  // Build merged field list: device_profiles.fields with channel_name overrides
+  // Use dynamic fields when available, otherwise fall back to deviceProfile.fields
+  const activeFields: FieldDef[] = fieldsSource === 'dynamic' && dynamicFields.length > 0
+    ? dynamicFields
+    : (deviceProfile?.fields ?? []) as FieldDef[]
+
+  // Build merged field list: apply channel_name overrides
   const mergedFields = (() => {
-    if (!deviceProfile) return []
     const overrides = new Map(deviceChannels?.channel_names.map(cn => [cn.channel, cn.name]) ?? [])
-    return deviceProfile.fields.map(f => {
+    return activeFields.map(f => {
       const ch = parseInt(f.key.match(/[0-9]+$/)?.[0] ?? 'NaN', 10)
       if (!isNaN(ch) && overrides.has(ch)) {
         return { ...f, label: overrides.get(ch)! }
@@ -126,6 +191,8 @@ export default function DashboardPage() {
                 const d = devices.find(dev => dev.id === e.target.value)
                 setSelectedDevice(d ?? null)
                 setHistoricalData([])
+                setDynamicFields([])
+                setFieldsSource('profile')
               }}
               className="w-full max-w-xs rounded-md border border-gray-300 px-3 py-2 bg-white"
             >
@@ -137,7 +204,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {selectedDevice && deviceProfile && (
+        {selectedDevice && activeFields.length > 0 && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
               <DeviceCard device={selectedDevice} />
@@ -146,7 +213,7 @@ export default function DashboardPage() {
               )}
               <BatteryStatus
                 data={latestReading}
-                deviceProfile={deviceProfile}
+                deviceProfile={deviceProfile ?? { id: 0, device_type: '', label: '', fields: activeFields }}
                 batteryProfiles={deviceChannels?.battery_profiles ?? []}
               />
             </div>
@@ -169,7 +236,7 @@ export default function DashboardPage() {
                   {chartFields.map(field => (
                     <div key={field.key}>
                       <h3 className="text-sm font-medium text-gray-600 mb-2">
-                        {field.label} ({field.unit})
+                        {field.label} {field.unit ? `(${field.unit})` : ''}
                       </h3>
                       <TelemetryChart
                         data={[...historicalData, ...dataPoints]}

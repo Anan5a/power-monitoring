@@ -1,4 +1,5 @@
 #include "settings_manager.h"
+#include "config.h"
 #include <Preferences.h>
 
 static Preferences prefs;
@@ -238,6 +239,21 @@ uint32_t settings_load_ble_pin() {
 }
 void settings_save_ble_pin(uint32_t pin) {
     prefs.putUInt("ble_pin", pin);
+}
+
+bool settings_load_virtual_channel(uint8_t ch, VirtualChannelConfig* out) {
+    char key[16];
+    snprintf(key, sizeof(key), "vc_%d", ch);
+    if (!prefs.isKey(key)) return false;
+    size_t len = prefs.getBytesLength(key);
+    if (len != sizeof(VirtualChannelConfig)) return false;
+    prefs.getBytes(key, out, sizeof(VirtualChannelConfig));
+    return true;
+}
+void settings_save_virtual_channel(uint8_t ch, const VirtualChannelConfig* in) {
+    char key[16];
+    snprintf(key, sizeof(key), "vc_%d", ch);
+    prefs.putBytes(key, in, sizeof(VirtualChannelConfig));
 }
 
 void settings_factory_reset() {

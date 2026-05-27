@@ -44,41 +44,90 @@ export default function ChannelSelector({ fields, groups, channelNames, selected
   }))
   const ungroupedFields = fields.filter(f => !usedKeys.has(f.key))
 
+  // Group-based layout when groups exist, otherwise flat list
+  const hasGroups = groups.length > 0
+
   return (
     <div className="space-y-3">
-      {groups.map(group => {
-        const channelsInGroup = [0, 1, 2, 3].filter(ch => group.channel_mask & (1 << ch))
-        return (
-          <div key={group.group_id} className="border rounded-lg p-3">
-            <div className="flex items-center gap-2 mb-2 font-medium text-gray-700">
-              <span>{ICONS[group.icon] ?? '📟'}</span>
-              <span>{group.name}</span>
+      {hasGroups ? (
+        groups.map(group => {
+          const channelsInGroup = [0, 1, 2, 3].filter(ch => group.channel_mask & (1 << ch))
+          return (
+            <div key={group.group_id} className="border rounded-lg p-3">
+              <div className="flex items-center gap-2 mb-2 font-medium text-gray-700">
+                <span>{ICONS[group.icon] ?? '📟'}</span>
+                <span>{group.name}</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {channelsInGroup.map(ch => {
+                  const field = fields.find(f => f.key.endsWith(String(ch)))
+                  if (!field) return null
+                  const label = resolveLabel(ch, field.key, fields, channelNames)
+                  return (
+                    <label key={field.key} className="inline-flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(field.key)}
+                        onChange={() => toggle(field.key)}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-gray-700">
+                        {label}
+                        {field.unit && <span className="text-gray-400 text-xs ml-1">({field.unit})</span>}
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {channelsInGroup.map(ch => {
-                const field = fields.find(f => f.key.endsWith(String(ch)))
-                if (!field) return null
-                const label = resolveLabel(ch, field.key, fields, channelNames)
-                return (
-                  <label key={field.key} className="inline-flex items-center gap-1.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(field.key)}
-                      onChange={() => toggle(field.key)}
-                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    <span className="text-sm text-gray-700">
-                      {label}
-                      {field.unit && <span className="text-gray-400 text-xs ml-1">({field.unit})</span>}
-                    </span>
-                  </label>
-                )
-              })}
-            </div>
-          </div>
-        )
-      })}
-      {ungroupedFields.length > 0 && (
+          )
+        })
+      ) : (
+        // No groups: show all fields in a flat wrap (dynamic discovery mode)
+        <div className="flex flex-wrap gap-2">
+          {fields.map(field => {
+            const ch = channelIndexFromKey(field.key)
+            const label = ch >= 0 ? resolveLabel(ch, field.key, fields, channelNames) : field.label
+            return (
+              <label key={field.key} className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(field.key)}
+                  onChange={() => toggle(field.key)}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-700">
+                  {label}
+                  {field.unit && <span className="text-gray-400 text-xs ml-1">({field.unit})</span>}
+                </span>
+              </label>
+            )
+          })}
+        </div>
+      )}
+      {!hasGroups && ungroupedFields.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {ungroupedFields.map(field => {
+            const ch = channelIndexFromKey(field.key)
+            const label = ch >= 0 ? resolveLabel(ch, field.key, fields, channelNames) : field.label
+            return (
+              <label key={field.key} className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(field.key)}
+                  onChange={() => toggle(field.key)}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-700">
+                  {label}
+                  {field.unit && <span className="text-gray-400 text-xs ml-1">({field.unit})</span>}
+                </span>
+              </label>
+            )
+          })}
+        </div>
+      )}
+      {hasGroups && ungroupedFields.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {ungroupedFields.map(field => {
             const ch = channelIndexFromKey(field.key)

@@ -35,13 +35,19 @@ class ProvServerCallbacks : public BLEServerCallbacks {
     }
     void onDisconnect(BLEServer* pServer) {
         bleClientConnected = false;
+        // Clear pointers so send_response/nofity bail out cleanly
+        pCmdChar = nullptr;
+        pRespChar = nullptr;
+        pStatusChar = nullptr;
+        pSensorChar = nullptr;
+        // Restart advertising so next connection attempt succeeds
         BLEDevice::startAdvertising();
     }
 };
 
 class CmdCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* pCharacteristic) {
-        std::string val(pCharacteristic->getValue().c_str());
+        std::string val = pCharacteristic->getValue();
         Serial.printf("[BLE] onWrite len=%d\n", val.length());
         if (val.empty()) return;
         handle_command(val.c_str());
@@ -49,14 +55,11 @@ class CmdCallbacks : public BLECharacteristicCallbacks {
 };
 
 static void send_response(const char* msg) {
-    if (pRespChar) {
-        size_t len = strlen(msg);
-        pRespChar->setValue((uint8_t*)msg, len);
-        pRespChar->notify();
-        Serial.printf("[BLE] sent resp: %s\n", msg);
-    } else {
-        Serial.println("[BLE] send_response: pRespChar is null");
-    }
+    if (!bleClientConnected || !pRespChar) { Serial.println("[BLE] send_response: not connected or pRespChar is null"); return; }
+    size_t len = strlen(msg);
+    pRespChar->setValue((uint8_t*)msg, len);
+    pRespChar->notify();
+    Serial.printf("[BLE] sent resp: %s\n", msg);
 }
 
 static bool check_pin(JsonDocument& doc) {
@@ -403,6 +406,39 @@ static void handle_command(const char* json) {
         }
         sensor_reset_calibration(ch);
         send_response("{\"ok\":true,\"msg\":\"calibration_reset\"}");
+    } else if (strcmp(cmd, "set_virtual_channel") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        if (ch > 3) {
+            send_response("{\"ok\":false,\"error\":\"invalid_channel\"}");
+            return;
+        }
+        VirtualChannelConfig vc = {};
+        vc.voltage_src = doc["voltage_src"] | 0;
+        vc.voltage_idx = doc["voltage_idx"] | 0;
+        vc.current_src = doc["current_src"] | 0;
+        vc.current_idx = doc["current_idx"] | 0;
+        settings_save_virtual_channel(ch, &vc);
+        send_response("{\"ok\":true,\"msg\":\"virtual_channel_saved\"}");
+    } else if (strcmp(cmd, "get_virtual_channel") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        VirtualChannelConfig vc;
+        JsonDocument resp;
+        if (settings_load_virtual_channel(ch, &vc)) {
+            resp["ok"] = true;
+            resp["channel"] = ch;
+            resp["voltage_src"] = vc.voltage_src;
+            resp["voltage_idx"] = vc.voltage_idx;
+            resp["current_src"] = vc.current_src;
+            resp["current_idx"] = vc.current_idx;
+        } else {
+            resp["ok"] = false;
+            resp["error"] = "virtual_channel_not_found";
+        }
+        char buf[256];
+        serializeJson(resp, buf);
+        send_response(buf);
     } else if (strcmp(cmd, "factory_reset") == 0) {
         if (!check_pin(doc)) return;
         settings_factory_reset();

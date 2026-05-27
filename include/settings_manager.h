@@ -119,6 +119,18 @@ void settings_save_resistors(uint8_t channel, float r_high, float r_low);
 uint32_t settings_load_ble_pin();
 void settings_save_ble_pin(uint32_t pin);
 
+// Virtual channel: decouple physical sensor sources from logical channel mapping
+// src: 0=none, 1=ina3221_volt, 2=ina3221_curr, 3=ina226, 4=ads1115
+struct VirtualChannelConfig {
+    uint8_t voltage_src;   // 0=none, 1=ina3221_volt, 2=ina3221_curr, 3=ina226, 4=ads1115
+    uint8_t voltage_idx;    // channel index within that source (0-2 for dual INA3221, 0 for INA226, 0-3 for ADS1115)
+    uint8_t current_src;    // 0=none, 1=ina3221_curr, 2=ina226
+    uint8_t current_idx;    // channel index (0-2 for INA3221, 0 for INA226)
+};
+
+bool settings_load_virtual_channel(uint8_t ch, VirtualChannelConfig* out);
+void settings_save_virtual_channel(uint8_t ch, const VirtualChannelConfig* in);
+
 void settings_factory_reset();           // wipe all NVS keys
 
 #endif

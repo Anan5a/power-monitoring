@@ -12,7 +12,7 @@ interface BleCommand {
 }
 
 export default function ProvisioningPage() {
-  const [step, setStep] = useState(0) // 0=disconnected, 1=scanning, 2=connected, 3=wifi set, 4=supabase set, 5=calibration, 6=done
+  const [step, setStep] = useState(0) // 0=disconnected, 1=scanning, 2=connected, 3=wifi set, 4=supabase set, 5=calibration, 6=virtual channels, 7=done
   const [error, setError] = useState('')
   const [device, setDevice] = useState<BluetoothDevice | null>(null)
   const [ssid, setSsid] = useState('')
@@ -24,6 +24,8 @@ export default function ProvisioningPage() {
   const [calChannel, setCalChannel] = useState(0)
   const [calibration, setCalibration] = useState<Record<string, number>>({})
   const [storedPin, setStoredPin] = useState('123456')
+  const [virtualChannels, setVirtualChannels] = useState<Array<{ voltage_src: number; voltage_idx: number; current_src: number; current_idx: number } | null>>([null, null, null, null])
+  const [vcSaving, setVcSaving] = useState(false)
 
   async function connectBLE() {
     setError('')
@@ -127,6 +129,49 @@ export default function ProvisioningPage() {
     } catch { /* ignore */ }
   }
 
+  async function loadVirtualChannel(ch: number) {
+    try {
+      const resp = await sendCommand({ cmd: 'get_virtual_channel', channel: ch, pin: storedPin }) as {
+        ok?: boolean; voltage_src?: number; voltage_idx?: number; current_src?: number; current_idx?: number
+      }
+      if (resp?.ok) {
+        setVirtualChannels(prev => {
+          const next = [...prev]
+          next[ch] = {
+            voltage_src: resp.voltage_src ?? 0,
+            voltage_idx: resp.voltage_idx ?? 0,
+            current_src: resp.current_src ?? 0,
+            current_idx: resp.current_idx ?? 0,
+          }
+          return next
+        })
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function saveVirtualChannel(ch: number) {
+    const vc = virtualChannels[ch]
+    if (!vc) return
+    setVcSaving(true)
+    setError('')
+    try {
+      const resp = await sendCommand({
+        cmd: 'set_virtual_channel',
+        channel: ch,
+        voltage_src: vc.voltage_src,
+        voltage_idx: vc.voltage_idx,
+        current_src: vc.current_src,
+        current_idx: vc.current_idx,
+        pin: storedPin,
+      }) as { ok?: boolean; error?: string }
+      if (!resp?.ok) throw new Error(resp?.error ?? 'Save failed')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Virtual channel save failed')
+    } finally {
+      setVcSaving(false)
+    }
+  }
+
   async function saveCalibration(ch: number, type: number, value: number) {
     setError('')
     try {
@@ -153,11 +198,11 @@ export default function ProvisioningPage() {
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
       <div className="bg-white rounded-lg shadow-lg w-full max-w-lg p-6">
         <h1 className="text-2xl font-bold mb-2 text-center">BLE Device Provisioning</h1>
-        <p className="text-gray-600 text-center mb-6">Step {Math.max(1, step)} of 5</p>
+        <p className="text-gray-600 text-center mb-6">Step {Math.max(1, step)} of 6</p>
 
         {/* Progress bar */}
         <div className="w-full bg-gray-200 rounded-full h-2 mb-6">
-          <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${(step / 5) * 100}%` }} />
+          <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${(step / 6) * 100}%` }} />
         </div>
 
         {error && <div className="bg-red-50 text-red-700 p-3 rounded mb-4 text-sm">{error}</div>}
@@ -269,7 +314,12 @@ export default function ProvisioningPage() {
                   className="text-red-600 hover:text-red-700 text-xs">Reset this channel</button>
               </div>
             </div>
-            <button onClick={() => { setStep(6); setProgress('Done! Go to Dashboard'); }}
+            <button onClick={() => {
+                // Load all virtual channel configs then go to step 6
+                for (let ch = 0; ch < 4; ch++) loadVirtualChannel(ch)
+                setStep(6)
+                setProgress('')
+              }}
               className="w-full bg-gray-200 text-gray-700 py-2 rounded hover:bg-gray-300">
               Skip / Continue →
             </button>
@@ -277,6 +327,93 @@ export default function ProvisioningPage() {
         )}
 
         {step === 6 && (
+          <div className="space-y-4">
+            <h2 className="font-semibold text-lg">Step 6: Virtual Channel Mapping</h2>
+            <p className="text-sm text-gray-600">Configure which physical sensor feeds each virtual channel's voltage and current.</p>
+            <div className="space-y-3 max-h-80 overflow-y-auto">
+              {[0, 1, 2, 3].map(ch => {
+                const vc = virtualChannels[ch]
+                return (
+                  <div key={ch} className="border rounded p-3">
+                    <div className="font-medium text-sm mb-2">Channel {ch}</div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-gray-500">Voltage source</span>
+                        <select value={vc?.voltage_src ?? 0}
+                          onChange={e => setVirtualChannels(prev => {
+                            const next = [...prev]
+                            next[ch] = { ...(next[ch] ?? { voltage_src: 0, voltage_idx: 0, current_src: 0, current_idx: 0 }), voltage_src: Number(e.target.value) }
+                            return next
+                          })}
+                          className="w-full rounded border-gray-300 px-2 py-1 mt-1">
+                          <option value={0}>None</option>
+                          <option value={1}>INA3221 Voltage (0x42)</option>
+                          <option value={2}>INA3221 Current (0x40)</option>
+                          <option value={3}>INA226</option>
+                          <option value={4}>ADS1115</option>
+                        </select>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Voltage index</span>
+                        <select value={vc?.voltage_idx ?? 0}
+                          onChange={e => setVirtualChannels(prev => {
+                            const next = [...prev]
+                            next[ch] = { ...(next[ch] ?? { voltage_src: 0, voltage_idx: 0, current_src: 0, current_idx: 0 }), voltage_idx: Number(e.target.value) }
+                            return next
+                          })}
+                          className="w-full rounded border-gray-300 px-2 py-1 mt-1">
+                          {[0, 1, 2, 3].map(i => <option key={i} value={i}>{i}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Current source</span>
+                        <select value={vc?.current_src ?? 0}
+                          onChange={e => setVirtualChannels(prev => {
+                            const next = [...prev]
+                            next[ch] = { ...(next[ch] ?? { voltage_src: 0, voltage_idx: 0, current_src: 0, current_idx: 0 }), current_src: Number(e.target.value) }
+                            return next
+                          })}
+                          className="w-full rounded border-gray-300 px-2 py-1 mt-1">
+                          <option value={0}>None</option>
+                          <option value={2}>INA3221 Current (0x40)</option>
+                          <option value={3}>INA226</option>
+                        </select>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Current index</span>
+                        <select value={vc?.current_idx ?? 0}
+                          onChange={e => setVirtualChannels(prev => {
+                            const next = [...prev]
+                            next[ch] = { ...(next[ch] ?? { voltage_src: 0, voltage_idx: 0, current_src: 0, current_idx: 0 }), current_idx: Number(e.target.value) }
+                            return next
+                          })}
+                          className="w-full rounded border-gray-300 px-2 py-1 mt-1">
+                          {[0, 1, 2, 3].map(i => <option key={i} value={i}>{i}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    {vc && (
+                      <div className="mt-2 text-xs text-gray-400">
+                        → V=src{vc.voltage_src}:idx{vc.voltage_idx} , I=src{vc.current_src}:idx{vc.current_idx}
+                      </div>
+                    )}
+                    <button onClick={() => saveVirtualChannel(ch)}
+                      disabled={vcSaving || !vc}
+                      className="mt-2 text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 disabled:opacity-50">
+                      {vcSaving ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+            <button onClick={() => { setStep(7); setProgress('Done! Go to Dashboard'); }}
+              className="w-full bg-gray-200 text-gray-700 py-2 rounded hover:bg-gray-300">
+              Skip / Continue →
+            </button>
+          </div>
+        )}
+
+        {step === 7 && (
           <div className="text-center">
             <div className="text-6xl mb-4">✓</div>
             <h2 className="text-xl font-bold text-green-600 mb-2">Device Provisioned!</h2>

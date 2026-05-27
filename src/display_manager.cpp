@@ -3,6 +3,7 @@
 #include "coulomb_counter.h"
 #include "data_logger.h"
 #include "settings_manager.h"
+#include "connectivity_manager.h"
 
 #if 1 // HAS_DISPLAY
 #include <Wire.h>
@@ -61,7 +62,26 @@ static void draw_status_page(const char* ip_str, float total_power) {
 static void draw_channel_page(uint8_t ch, const SensorData& data) {
     float v, i, p;
     char name[24] = "";
-    if (ch < 3) {
+    VirtualChannelConfig vc;
+    bool has_vc = settings_load_virtual_channel(ch, &vc);
+
+    if (has_vc && (vc.voltage_src > 0 || vc.current_src > 0)) {
+        // Use virtual channel sources
+        v = (vc.voltage_src > 0) ? get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data) : 0.0f;
+        i = (vc.current_src > 0) ? get_sensor_current(vc.current_src, vc.current_idx, data) : 0.0f;
+        if (vc.current_src == 3) {
+            p = get_sensor_power(vc.current_src, vc.current_idx, data);  // INA226 has built-in power
+        } else if (vc.voltage_src > 0 && vc.current_src > 0) {
+            p = v * i;
+        } else {
+            p = 0.0f;
+        }
+        settings_load_channel_name(ch, name, sizeof(name));
+        if (!name[0]) {
+            snprintf(name, sizeof(name), "CH%d", ch);
+        }
+    } else if (ch < 3) {
+        // Default: hardcoded mapping for backward compat
         v = data.ads1115_volts[ch];
         i = data.ina3221_current[ch];
         p = v * i;

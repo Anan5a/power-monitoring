@@ -90,6 +90,9 @@ Connect at `115200 baud`. Type commands and press Enter.
 | `set_wifi <ssid> <password>` | Set both WiFi SSID and password at once |
 | `supabase_show` | Show Supabase URL, anon key, device key |
 | `supabase <url> <anon_key> <service_role_key> <device_key>` | Configure Supabase connection |
+| `virtual_channel show` | Show all 4 virtual channel configs (src:idx for V and I) |
+| `virtual_channel N` | Show virtual channel config for channel N (0-3) |
+| `virtual_channel N vs vidx cs cidx` | Set CH N: V=src vs:idx, I=src cs:idx (src: 0=none 1=volt 2=curr 3=ina226 4=ads1115) |
 | `serial1peek` | Dump up to 5 lines from Serial1 RX buffer |
 | `reboot` | Reboot the device |
 | `help` | Show command list |
@@ -251,6 +254,25 @@ Response:
 ```
 Response: `{"ok":true,"msg":"calibration_reset"}`
 
+#### `set_virtual_channel` — Configure a virtual channel (source mapping)
+```json
+{"cmd":"set_virtual_channel","channel":0,"voltage_src":1,"voltage_idx":0,"current_src":2,"current_idx":0,"pin":123456}
+```
+- `channel`: 0-3 (virtual channel index)
+- `voltage_src`: 0=none, 1=ina3221_volt(0x42), 2=ina3221_curr(0x40), 3=ina226, 4=ads1115
+- `voltage_idx`: channel index within that source (0-2 for dual INA3221, 0 for INA226, 0-3 for ADS1115)
+- `current_src`: 0=none, 1=ina3221_curr(0x40), 2=ina226
+- `current_idx`: channel index (0-2 for INA3221, 0 for INA226)
+- When both voltage and current are set, power is computed as V×I (or from INA226 built-in power if using src=3 for current)
+- Virtual channels appear in MQTT/Supabase payloads as `ch0_V`, `ch0_I`, `ch0_P` ... `ch3_P`
+Response: `{"ok":true,"msg":"virtual_channel_saved"}`
+
+#### `get_virtual_channel` — Get virtual channel configuration
+```json
+{"cmd":"get_virtual_channel","channel":0,"pin":123456}
+```
+Response: `{"ok":true,"channel":0,"voltage_src":1,"voltage_idx":0,"current_src":2,"current_idx":0}` or `{"ok":false,"error":"virtual_channel_not_found"}`
+
 #### `set_shunt` — Set INA3221 shunt resistance
 ```json
 {"cmd":"set_shunt","channel":0,"ohms":0.0003,"pin":123456}
@@ -310,6 +332,7 @@ Response: `{"ok":true,"msg":"factory_reset_done_reboot"}`
 | `{"ok":false,"error":"wifi_not_set"}` | No WiFi credentials stored |
 | `{"ok":false,"error":"mqtt_not_set"}` | No MQTT settings stored |
 | `{"ok":false,"error":"http_not_set"}` | No HTTP endpoint stored |
+| `{"ok":false,"error":"virtual_channel_not_found"}` | Virtual channel not configured for that index |
 
 ---
 
@@ -422,6 +445,18 @@ struct LogSnapshot {
     float power[4];        // mW -> W (divided by 1000)
 };
 ```
+
+### VirtualChannelConfig
+
+```cpp
+struct VirtualChannelConfig {
+    uint8_t voltage_src;   // 0=none, 1=ina3221_volt(0x42), 2=ina3221_curr(0x40), 3=ina226, 4=ads1115
+    uint8_t voltage_idx;  // channel index within that source (0-2 for dual INA3221, 0 for INA226, 0-3 for ADS1115)
+    uint8_t current_src;  // 0=none, 1=ina3221_curr(0x40), 2=ina226
+    uint8_t current_idx;   // channel index (0-2 for INA3221, 0 for INA226)
+};
+```
+Stored in NVS as `vc_<ch>`. Virtual channels appear in telemetry payloads as `ch0_V`, `ch0_I`, `ch0_P` ... `ch3_P`.
 
 ---
 

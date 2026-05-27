@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <time.h>
 #include "sensor_manager.h"
+#include "settings_manager.h"
 
 void init_connectivity();
 void loop_connectivity();
@@ -16,5 +17,11 @@ void publish_log_batch();
 void sync_calibration_to_supabase();
 void sync_ble_pin_to_supabase();
 bool get_ble_pin_from_supabase(char* pin_str, size_t len);
+
+// Virtual channel helpers: get sensor values by source type
+// src: 0=none, 1=ina3221_volt(0x42), 2=ina3221_curr(0x40), 3=ina226, 4=ads1115
+float get_sensor_voltage(uint8_t src, uint8_t idx, const SensorData& data);
+float get_sensor_current(uint8_t src, uint8_t idx, const SensorData& data);
+float get_sensor_power(uint8_t src, uint8_t idx, const SensorData& data);
 
 #endif
