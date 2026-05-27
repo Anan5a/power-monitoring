@@ -3,12 +3,26 @@
 #include "config.h"
 #include <Wire.h>
 #include <algorithm>
-#include <Adafruit_INA3221.h>
-#include <INA226.h>
-#include <Adafruit_ADS1X15.h>
 
+#if ENABLE_INA3221
+#include <Adafruit_INA3221.h>
 static Adafruit_INA3221 ina3221;
+#endif
+
+#if ENABLE_INA3221_VOLT
+#include <Adafruit_INA3221.h>
 static Adafruit_INA3221 ina3221_volt;
+#endif
+
+#if ENABLE_INA226
+#include <INA226.h>
+static INA226 ina226;
+#endif
+
+#if ENABLE_ADS1115
+#include <Adafruit_ADS1X15.h>
+static Adafruit_ADS1115 ads1115;
+#endif
 
 static bool wire_started = false;
 
@@ -121,6 +135,7 @@ SensorData read_sensors() {
     float samples[BURST_N];
 
     // ── INA3221 current (0x40) ─────────────────────────────────
+#if ENABLE_INA3221
     for (uint8_t ch = 0; ch < 3; ch++) {
         for (int i = 0; i < BURST_N; i++) {
             samples[i] = ina3221.getCurrentAmps(ch) * 1000.0f; // mA
@@ -137,8 +152,15 @@ SensorData read_sensors() {
         if (fabsf(cal_ma) < 5.0f) cal_ma = 0.0f; // dead-zone
         d.ina3221_current[ch] = cal_ma / 1000.0f;
     }
+#else
+    for (uint8_t ch = 0; ch < 3; ch++) {
+        g_meta[ch] = {0, false};
+        d.ina3221_current[ch] = 0;
+    }
+#endif
 
     // ── INA3221 voltage (0x42) ─────────────────────────────────
+#if ENABLE_INA3221_VOLT
     for (uint8_t ch = 0; ch < 3; ch++) {
         for (int i = 0; i < BURST_N; i++) {
             samples[i] = ina3221_volt.getBusVoltage(ch) * 1000.0f; // mV
@@ -154,6 +176,12 @@ SensorData read_sensors() {
         float cal_mv = (med + cal.volt_offset_mv[ch]) * cal.volt_gain[ch];
         d.ads1115_volts[ch] = cal_mv / 1000.0f * volt_ratios[ch];
     }
+#else
+    for (uint8_t ch = 0; ch < 3; ch++) {
+        g_meta[ch + 3] = {0, false};
+        d.ads1115_volts[ch] = 0;
+    }
+#endif
 
     // ── INA226 (single read, already filtered by HW) ────────────
 #if ENABLE_INA226
