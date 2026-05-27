@@ -177,8 +177,12 @@ create policy "own_profile" on public.profiles
 create policy "own_devices" on public.devices
     for all to authenticated using (user_id = auth.uid());
 
--- Grant table-level permissions for authenticated role (RLS policies handle row-level access)
+-- Grant table-level permissions for authenticated role
+-- (table grants needed even with RLS so the role can access the table at all)
 grant select, insert, update, delete on public.devices to authenticated;
+grant select on public.profiles to authenticated;
+grant select on public.device_profiles to authenticated;
+grant select, insert, update on public.device_channels to authenticated;
 
 -- Device profiles: all authenticated can read (for UI dropdown)
 create policy "read_device_profiles" on public.device_profiles
