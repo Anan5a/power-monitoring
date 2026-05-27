@@ -7,7 +7,7 @@ SemaphoreHandle_t g_relay_mutex = nullptr;
 
 void init_core_shared() {
     g_sensor_queue = xQueueCreate(2, sizeof(SensorData));
-    g_cmd_queue = xQueueCreate(8, 256);
+    g_cmd_queue = xQueueCreate(8, 128);
     g_relay_mutex = xSemaphoreCreateMutex();
 }
 

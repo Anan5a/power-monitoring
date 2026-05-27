@@ -65,7 +65,7 @@
 #define BLE_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
 // Data logging
-#define LOG_BUFFER_BYTES      (32 * 1024)
+#define LOG_BUFFER_BYTES      (16 * 1024)
 #define LOG_SPIFFS_FILE       "/log_overflow.bin"
 #define LOG_MAX_DELTA_MV      32760
 #define LOG_MAX_DELTA_MA      32760
