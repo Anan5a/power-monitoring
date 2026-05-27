@@ -18,10 +18,11 @@ export default function SettingsPage() {
   const [loadingDevices, setLoadingDevices] = useState(true)
 
   // Command form states per tab
-  const [wifi, setWifi] = useState({ ssid: '', pass: '' })
+  const [wifi, setWifi] = useState({ ssid: '', pass: '', pin: '' })
   const [mqtt, setMqtt] = useState({ broker: '', port: '1883', topic: '' })
   const [http, setHttp] = useState({ url: '', token: '', enabled: true })
   const [supabaseCfg, setSupabaseCfg] = useState({ url: '', anon_key: '', api_key: '', device_key: '' })
+  const [blePin, setBlePin] = useState('')
 
   useEffect(() => {
     async function load() {
@@ -42,7 +43,12 @@ export default function SettingsPage() {
         .select('*')
         .eq('device_key', selectedKey)
         .maybeSingle()
-      if (data) setDeviceChannels(data as DeviceChannels)
+      if (data) {
+        setDeviceChannels(data as DeviceChannels)
+        if ((data as { ble_pin?: string }).ble_pin) {
+          setBlePin((data as { ble_pin?: string }).ble_pin as string)
+        }
+      }
       else setDeviceChannels(EMPTY_CHANNELS)
     }
     loadChannels()
@@ -148,9 +154,18 @@ export default function SettingsPage() {
                         className="w-full rounded border border-gray-300 px-3 py-2" placeholder="Password" />
                     </div>
                   </div>
-                  <button onClick={saveWifi} className="mt-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
-                    Save WiFi
-                  </button>
+                  <div className="grid grid-cols-3 gap-4 mt-2">
+                    <div>
+                      <label className="block text-sm text-gray-600 mb-1">BLE PIN</label>
+                      <input type="password" value={blePin} onChange={e => setBlePin(e.target.value)}
+                        className="w-full rounded border border-gray-300 px-3 py-2" placeholder="123456" maxLength={8} />
+                    </div>
+                    <div className="flex items-end">
+                      <button onClick={() => saveWifi()} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
+                        Save WiFi
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 <div>
