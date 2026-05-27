@@ -77,7 +77,8 @@ static void connect_wifi() {
         skip_network = true;
         return;
     }
-    strlcpy(ip_str, WiFi.localIP().toString().c_str(), sizeof(ip_str));
+    IPAddress ip = WiFi.localIP();
+    snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
     Serial.println("\nWiFi connected");
     sync_time();
     sync_calibration_to_supabase();
@@ -278,10 +279,16 @@ void publish_data_supabase(const SensorData& data) {
     if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
 
     HTTPClient http;
-    http.begin(String(supabase_url) + "/rest/v1/rpc/insert_telemetry");
+    char url[256];
+    snprintf(url, sizeof(url), "%s/rest/v1/rpc/insert_telemetry", supabase_url);
+    http.begin(url);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("apikey", anon_key);
-    http.addHeader("Authorization", "Bearer " + String(anon_key));
+    {
+        char auth_hdr[384];
+        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
+        http.addHeader("Authorization", auth_hdr);
+    }
 
     uint32_t ms = millis();
     time_t epoch_s = (epoch_time > 0) ? epoch_time + ms / 1000 : time(nullptr);
@@ -398,7 +405,11 @@ void sync_calibration_to_supabase() {
     http.begin(url);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("apikey", anon_key);
-    http.addHeader("Authorization", "Bearer " + String(anon_key));
+    {
+        char auth_hdr[384];
+        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
+        http.addHeader("Authorization", auth_hdr);
+    }
     http.addHeader("Prefer", "precision=exact");
 
     JsonDocument doc;
@@ -442,7 +453,11 @@ void sync_ble_pin_to_supabase() {
     http.begin(url);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("apikey", anon_key);
-    http.addHeader("Authorization", "Bearer " + String(anon_key));
+    {
+        char auth_hdr[384];
+        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
+        http.addHeader("Authorization", auth_hdr);
+    }
 
     JsonDocument doc;
     doc["ble_pin"] = pin_str;
@@ -495,7 +510,11 @@ void publish_calibration_status() {
     http.begin(url);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("apikey", anon_key);
-    http.addHeader("Authorization", "Bearer " + String(anon_key));
+    {
+        char auth_hdr[384];
+        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
+        http.addHeader("Authorization", auth_hdr);
+    }
     http.addHeader("Prefer", "resolution=merge-duplicates");
 
     int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
@@ -517,19 +536,26 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
     snprintf(url, sizeof(url), "%s/rest/v1/device_channels?device_key=eq.%s&select=ble_pin", supabase_url, device_key);
     http.begin(url);
     http.addHeader("apikey", anon_key);
-    http.addHeader("Authorization", "Bearer " + String(anon_key));
+    {
+        char auth_hdr[384];
+        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
+        http.addHeader("Authorization", auth_hdr);
+    }
 
     int rc = http.GET();
     bool ok = false;
     if (rc == 200) {
-        String body = http.getString();
-        // Response: [{"ble_pin":"123456"}]
-        int q1 = body.indexOf('"');
-        if (q1 >= 0) {
-            int q2 = body.indexOf('"', q1 + 1);
-            if (q2 > q1) {
-                strlcpy(pin_str, body.substring(q1 + 1, q2).c_str(), len);
-                ok = strlen(pin_str) > 0;
+        // Parse: [{"ble_pin":"123456"}] — find the value between the two quotes
+        const char* response = http.getString().c_str();
+        const char* needle = "\"ble_pin\":\"";
+        const char* p = strstr(response, needle);
+        if (p) {
+            p += strlen(needle);
+            char* q = strchr(p, '"');
+            if (q && (size_t)(q - p) < len) {
+                memcpy(pin_str, p, q - p);
+                pin_str[q - p] = '\0';
+                ok = pin_str[0] != '\0';
             }
         }
     }
@@ -549,10 +575,16 @@ void check_settings_commands() {
     last_check = millis();
 
     HTTPClient http;
-    http.begin(String(supabase_url) + "/rest/v1/rpc/claim_settings_command");
+    char url[256];
+    snprintf(url, sizeof(url), "%s/rest/v1/rpc/claim_settings_command", supabase_url);
+    http.begin(url);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("apikey", anon_key);
-    http.addHeader("Authorization", "Bearer " + String(anon_key));
+    {
+        char auth_hdr[384];
+        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
+        http.addHeader("Authorization", auth_hdr);
+    }
 
     JsonDocument doc;
     doc["p_device_key"] = device_key;
@@ -563,12 +595,13 @@ void check_settings_commands() {
     http.end();
 
     if (rc == 200) {
-        String body = http.getString();
-        if (body.length() < 5 || body == "null") return;  // no pending command
+        const char* resp_body = http.getString().c_str();
+        // null or empty response means no pending command
+        if (resp_body == nullptr || resp_body[0] == '\0' || strncmp(resp_body, "null", 4) == 0) return;
 
         // Expected: {"cmd_type":"set_wifi","payload":{...}}
         JsonDocument resp;
-        DeserializationError err = deserializeJson(resp, body.c_str());
+        DeserializationError err = deserializeJson(resp, resp_body);
         if (err) { Serial.println("[SETTINGS] parse error"); return; }
 
         const char* cmd_type = resp["cmd_type"] | "";
