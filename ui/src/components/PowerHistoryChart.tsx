@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Scatter } from 'recharts'
 import { supabase } from '../lib/supabase'
 import type { TelemetryPoint } from '../lib/types'
 
@@ -57,6 +57,19 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
     }
     return rec
   })
+
+  // Spike dots: mark time of spike on x-axis with y in middle of chart
+  const spikeData: Array<{ time: string; spike_y: number }> = []
+  for (const pt of historyData) {
+    const payload = pt.payload as Record<string, unknown>
+    for (let i = 0; i < 3; i++) {
+      if (payload[`ina3221_i${i}_spike`] === true) {
+        const t = new Date(pt.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        spikeData.push({ time: t, spike_y: 0 })
+        break
+      }
+    }
+  }
 
   // VC color map (stable per key)
   const vcColors: Record<string, string> = {
@@ -139,6 +152,14 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
                   connectNulls
                 />
               ))}
+              {spikeData.length > 0 && (
+                <Scatter
+                  data={spikeData}
+                  dataKey="spike_y"
+                  line={false}
+                  fill="#ef4444"
+                />
+              )}
             </LineChart>
           </ResponsiveContainer>
         </>
