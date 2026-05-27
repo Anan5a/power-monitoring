@@ -1,17 +1,12 @@
-/*
-  Content-Type: text/html
-  X-Content-Type-Options: nosniff
-
 /assets/*
   Content-Type: text/javascript
   X-Content-Type-Options: nosniff
 
 /assets/*.css
   Content-Type: text/css
-  X-Content-Type-Options: nosniff
 
-/*.js
-  Content-Type: text/javascript
-
-/*.svg
+/assets/*.svg
   Content-Type: image/svg+xml
+
+/favicon.ico
+  Content-Type: image/x-icon
