@@ -240,6 +240,11 @@ export default function ProvisioningPage() {
               <input type="password" value={pass} onChange={e => setPass(e.target.value)}
                 className="w-full rounded-md border border-gray-300 px-3 py-2" placeholder="WiFi password" />
             </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">BLE PIN <span className="text-gray-400 font-normal">(default: 123456)</span></label>
+              <input type="password" value={storedPin} onChange={e => setStoredPin(e.target.value)}
+                className="w-full rounded-md border border-gray-300 px-3 py-2" placeholder="123456" maxLength={8} />
+            </div>
             <button onClick={setWiFi}
               disabled={!ssid.trim()}
               className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50">
@@ -433,10 +438,7 @@ export default function ProvisioningPage() {
           </div>
         )}
 
-        <div className="mt-6 text-center text-sm text-gray-500">
-          Default BLE PIN: <code className="bg-gray-100 px-1 rounded">{storedPin}</code>
-        </div>
-      </div>
+              </div>
     </div>
   )
 }
