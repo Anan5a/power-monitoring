@@ -47,7 +47,7 @@ class ProvServerCallbacks : public BLEServerCallbacks {
 
 class CmdCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* pCharacteristic) {
-        std::string val = pCharacteristic->getValue();
+        std::string val = pCharacteristic->getValue().c_str();
         Serial.printf("[BLE] onWrite len=%d\n", val.length());
         if (val.empty()) return;
         handle_command(val.c_str());
