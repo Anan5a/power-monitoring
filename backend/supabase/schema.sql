@@ -382,3 +382,65 @@ insert into public.device_profiles (device_type, label, fields) values (
         {"key": "log_overflow", "label": "Log Overflow", "unit": "", "chart": false}
     ]'::jsonb
 );
+
+---------------------------------------------------------------
+-- Settings commands: ESP32 polls for pending config changes
+---------------------------------------------------------------
+create table public.settings_commands (
+    id bigint generated always as identity primary key,
+    device_key text not null,
+    cmd_type text not null,
+    payload jsonb not null default '{}',
+    status text not null default 'pending',  -- pending | applied | failed
+    created_at timestamptz default now(),
+    applied_at timestamptz
+);
+
+create index idx_settings_cmds_device_status on public.settings_commands (device_key, status);
+
+alter table public.settings_commands enable row level security;
+
+-- Users write commands for their own devices
+create policy "own_settings_commands_insert" on public.settings_commands
+    for insert to authenticated
+    with check (
+        exists (
+            select 1 from public.devices d
+            join public.profiles p on p.id = d.user_id
+            where d.device_key = settings_commands.device_key
+              and p.id = auth.uid()
+        )
+    );
+
+-- ESP32 reads pending commands (device owns its own rows via device_key)
+create policy "device_read_settings_commands" on public.settings_commands
+    for select to authenticated
+    using (device_key = current_setting('app.device_key', true));
+
+-- ESP32 updates status to applied/failed
+create policy "device_update_settings_commands" on public.settings_commands
+    for update to authenticated
+    using (device_key = current_setting('app.device_key', true));
+
+-- Atomically claim the oldest pending command for a device
+create or replace function public.claim_settings_command(p_device_key text)
+returns jsonb language plpgsql security definer as $$
+declare
+    cmd_row record;
+begin
+    update public.settings_commands
+    set status = 'applied', applied_at = now()
+    where id = (
+        select id from public.settings_commands
+        where device_key = p_device_key and status = 'pending'
+        order by created_at asc limit 1
+    )
+    returning cmd_type, payload into cmd_row;
+
+    if cmd_row.cmd_type is null then
+        return null;
+    end if;
+
+    return jsonb_build_object('cmd_type', cmd_row.cmd_type, 'payload', cmd_row.payload);
+end;
+$$;

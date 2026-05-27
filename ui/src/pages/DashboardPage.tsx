@@ -164,6 +164,7 @@ export default function DashboardPage() {
           <h1 className="text-xl font-bold text-gray-800">IoT Dashboard</h1>
           <div className="flex gap-4">
             <a href="/admin" className="text-blue-600 hover:underline text-sm">Admin</a>
+            <a href="/settings" className="text-blue-600 hover:underline text-sm">Settings</a>
             <button
               onClick={() => supabase.auth.signOut()}
               className="text-gray-600 hover:text-gray-800 text-sm"

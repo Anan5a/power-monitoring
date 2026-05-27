@@ -143,6 +143,7 @@ void init_connectivity() {
 
 void loop_connectivity() {
     if (skip_network) return;
+    check_settings_commands();
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
         if (!mqtt.connected()) connect_mqtt();
@@ -460,4 +461,46 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
     }
     http.end();
     return ok;
+}
+
+void check_settings_commands() {
+    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
+
+    static unsigned long last_check = 0;
+    if (millis() - last_check < 30000) return;  // poll every 30s
+    last_check = millis();
+
+    HTTPClient http;
+    http.begin(String(supabase_url) + "/rest/v1/rpc/claim_settings_command");
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", anon_key);
+    http.addHeader("Authorization", "Bearer " + String(anon_key));
+
+    JsonDocument doc;
+    doc["p_device_key"] = device_key;
+    char buffer[256];
+    size_t len = serializeJson(doc, buffer);
+
+    int rc = http.POST((uint8_t*)buffer, len);
+    http.end();
+
+    if (rc == 200) {
+        String body = http.getString();
+        if (body.length() < 5 || body == "null") return;  // no pending command
+
+        // Expected: {"cmd_type":"set_wifi","payload":{...}}
+        JsonDocument resp;
+        DeserializationError err = deserializeJson(resp, body.c_str());
+        if (err) { Serial.println("[SETTINGS] parse error"); return; }
+
+        const char* cmd_type = resp["cmd_type"] | "";
+        const char* payload = resp["payload"] | "{}";
+        if (strlen(cmd_type) > 0) {
+            apply_settings_command(cmd_type, payload);
+        }
+    }
 }

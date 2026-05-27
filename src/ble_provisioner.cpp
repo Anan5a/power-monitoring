@@ -453,6 +453,121 @@ static void handle_command(const char* json) {
     }
 }
 
+// Apply a settings command from Supabase (no PIN check — Supabase auth is trusted)
+// Reuses the same command dispatch logic from handle_command, but without PIN requirement.
+// cmd_type: command name string (e.g. "set_wifi", "set_calibration")
+// payload_json: JSON string containing the command parameters
+void apply_settings_command(const char* cmd_type, const char* payload_json) {
+    Serial.printf("[CMD] applying: %s\n", cmd_type);
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, payload_json);
+    if (err) { Serial.println("[CMD] bad json payload"); return; }
+
+    if (strcmp(cmd_type, "set_wifi") == 0) {
+        if (doc["ssid"] && doc["pass"]) {
+            settings_save_wifi(doc["ssid"], doc["pass"]);
+            Serial.println("[CMD] wifi saved");
+        }
+    } else if (strcmp(cmd_type, "set_mqtt") == 0) {
+        if (doc["broker"]) {
+            settings_save_mqtt(doc["broker"], doc["port"] | 1883, doc["topic"] | "");
+            Serial.println("[CMD] mqtt saved");
+        }
+    } else if (strcmp(cmd_type, "set_http") == 0) {
+        if (doc["url"]) {
+            settings_save_http_endpoint(doc["url"], doc["token"] | "");
+            settings_save_http_enabled(doc["enabled"] | true);
+            Serial.println("[CMD] http saved");
+        }
+    } else if (strcmp(cmd_type, "set_supabase") == 0) {
+        if (doc["url"]) {
+            settings_save_supabase_url(doc["url"]);
+            settings_save_supabase_anon_key(doc["anon_key"] | "");
+            settings_save_supabase_api_key(doc["api_key"] | "");
+            settings_save_supabase_device_key(doc["device_key"] | "");
+            Serial.println("[CMD] supabase saved");
+        }
+    } else if (strcmp(cmd_type, "set_relay") == 0) {
+        RelayRule rt = {};
+        rt.channel = doc["channel"] | 0;
+        rt.overcurrent_A = doc["overcurrent_A"] | 0.0f;
+        rt.undervoltage_V = doc["undervoltage_V"] | 0.0f;
+        rt.soc_low_pct = doc["soc_low_pct"] | 0.0f;
+        rt.soc_high_pct = doc["soc_high_pct"] | 0.0f;
+        rt.trip_delay_ms = doc["trip_delay_ms"] | 1000;
+        rt.reset_delay_ms = doc["reset_delay_ms"] | 5000;
+        rt.gpio_pin = doc["gpio_pin"] | 25;
+        rt.active_high = doc["active_high"] | false;
+        rt.enabled = doc["enabled"] | true;
+        settings_save_relay(doc["idx"] | 0, &rt);
+        Serial.println("[CMD] relay saved");
+    } else if (strcmp(cmd_type, "set_battery") == 0) {
+        BatteryConfig bat = {};
+        bat.channel = doc["channel"] | 0;
+        bat.capacity_mAh = doc["capacity_mAh"] | 0.0f;
+        bat.initial_soc_pct = doc["initial_soc_pct"] | 100.0f;
+        settings_save_battery(bat.channel, &bat);
+        Serial.println("[CMD] battery saved");
+    } else if (strcmp(cmd_type, "set_battery_profile") == 0) {
+        BatteryProfile bp = {};
+        bp.channel = doc["channel"] | 0;
+        strlcpy(bp.name, doc["name"] | "", sizeof(bp.name));
+        bp.chemistry = doc["chemistry"] | 0;
+        bp.capacity_mAh = doc["capacity_mAh"] | 0.0f;
+        bp.initial_soc_pct = doc["initial_soc_pct"] | 100.0f;
+        bp.cell_count = doc["cell_count"] | 1.0f;
+        bp.full_voltage = doc["full_voltage"] | 0.0f;
+        bp.cutoff_voltage = doc["cutoff_voltage"] | 0.0f;
+        bp.float_voltage = doc["float_voltage"] | 0.0f;
+        settings_save_battery_profile(bp.channel, &bp);
+        Serial.println("[CMD] battery_profile saved");
+    } else if (strcmp(cmd_type, "set_calibration") == 0) {
+        uint8_t ch = doc["channel"] | 0;
+        uint8_t type = doc["type"] | 0;
+        float value = doc["value"] | 0.0f;
+        sensor_set_calibration(ch, type, value);
+        sync_calibration_to_supabase();
+        Serial.println("[CMD] calibration saved");
+    } else if (strcmp(cmd_type, "set_virtual_channel") == 0) {
+        uint8_t ch = doc["channel"] | 0;
+        if (ch > 3) return;
+        VirtualChannelConfig vc = {};
+        vc.voltage_src = doc["voltage_src"] | 0;
+        vc.voltage_idx = doc["voltage_idx"] | 0;
+        vc.current_src = doc["current_src"] | 0;
+        vc.current_idx = doc["current_idx"] | 0;
+        settings_save_virtual_channel(ch, &vc);
+        Serial.println("[CMD] virtual_channel saved");
+    } else if (strcmp(cmd_type, "set_channel_group") == 0) {
+        ChannelGroup cg = {};
+        cg.group_id = doc["group_id"] | 0;
+        strlcpy(cg.name, doc["name"] | "", sizeof(cg.name));
+        cg.icon = doc["icon"] | 0;
+        cg.channel_mask = doc["channel_mask"] | 0;
+        settings_save_channel_group(cg.group_id, &cg);
+        Serial.println("[CMD] channel_group saved");
+    } else if (strcmp(cmd_type, "set_channel_name") == 0) {
+        uint8_t ch = doc["channel"] | 0;
+        settings_save_channel_name(ch, doc["name"] | "");
+        Serial.println("[CMD] channel_name saved");
+    } else if (strcmp(cmd_type, "set_pin") == 0) {
+        settings_save_ble_pin(doc["new_pin"] | 0);
+        sync_ble_pin_to_supabase();
+        Serial.println("[CMD] ble_pin updated");
+    } else if (strcmp(cmd_type, "factory_reset") == 0) {
+        settings_factory_reset();
+        Serial.println("[CMD] factory_reset done — rebooting");
+        delay(100);
+        ESP.restart();
+    } else if (strcmp(cmd_type, "reboot") == 0) {
+        Serial.println("[CMD] rebooting");
+        delay(100);
+        ESP.restart();
+    } else {
+        Serial.printf("[CMD] unknown: %s\n", cmd_type);
+    }
+}
+
 void init_ble_provisioner() {
     BLEDevice::init(BT_DEVICE_NAME);
     BLEServer* pServer = BLEDevice::createServer();
