@@ -58,22 +58,7 @@ create index idx_telemetry_live_recorded_at
     on public.telemetry_live (recorded_at desc);
 
 ---------------------------------------------------------------
--- 5. Daily archive (cold, indefinite) — aggregates all numeric payload fields
----------------------------------------------------------------
-create table public.telemetry_archive (
-    id bigint generated always as identity primary key,
-    device_id text not null,
-    log_date date not null,
-    sample_count bigint not null,
-    payload_agg jsonb not null default '{}',
-    constraint unique_device_date unique(device_id, log_date)
-);
-
-create index idx_telemetry_archive_device_date
-    on public.telemetry_archive (device_id, log_date desc);
-
----------------------------------------------------------------
--- 6. Relay states (for power-monitor device type)
+-- 5. Relay states (for power-monitor device type)
 ---------------------------------------------------------------
 create table public.relay_states (
     id bigint generated always as identity primary key,
@@ -102,9 +87,9 @@ create table public.device_channels (
 alter table public.device_channels replica identity full;
 alter table public.device_channels enable row level security;
 
--- Supabase realtime publication (create after all tables exist)
+-- Supabase realtime publication
 drop publication if exists supabase_realtime;
-create publication supabase_realtime for table public.telemetry_live, public.devices, public.telemetry_archive, public.device_channels;
+create publication supabase_realtime for table public.telemetry_live, public.devices, public.device_channels;
 
 create policy "own_device_channels" on public.device_channels
     for all to authenticated using (
@@ -166,7 +151,6 @@ alter table public.profiles enable row level security;
 alter table public.devices enable row level security;
 alter table public.device_profiles enable row level security;
 alter table public.telemetry_live enable row level security;
-alter table public.telemetry_archive enable row level security;
 alter table public.relay_states enable row level security;
 
 -- Profiles: users manage own profile
@@ -184,7 +168,6 @@ grant select on public.profiles to authenticated;
 grant select on public.device_profiles to authenticated;
 grant select, insert, update on public.device_channels to authenticated;
 grant select on public.telemetry_live to authenticated;
-grant select on public.telemetry_archive to authenticated;
 grant select, insert, update on public.relay_states to authenticated;
 
 -- Device profiles: all authenticated can read (for UI dropdown)
@@ -200,18 +183,6 @@ create policy "own_telemetry_select" on public.telemetry_live
             select 1 from public.devices d
             join public.profiles p on p.id = d.user_id
             where d.device_key = telemetry_live.device_id
-              and p.id = auth.uid()
-        )
-    );
-
--- Telemetry archive: same auth pattern
-create policy "own_archive_select" on public.telemetry_archive
-    for select to authenticated
-    using (
-        exists (
-            select 1 from public.devices d
-            join public.profiles p on p.id = d.user_id
-            where d.device_key = telemetry_archive.device_id
               and p.id = auth.uid()
         )
     );
@@ -281,49 +252,26 @@ create policy "no_direct_insert" on public.telemetry_live
     with check (false);
 
 ---------------------------------------------------------------
--- pg_cron: Daily maintenance at midnight UTC
--- Adaptive retention: keeps at least 7 days, targets 80% storage capacity
+-- Telemetry retention: adaptive, size-based (no daily aggregation)
+-- Keeps raw telemetry until storage reaches 70% of 500MB free tier (~350MB)
+-- Then deletes oldest rows in chunks until under 65% (~325MB)
 ---------------------------------------------------------------
 create or replace function public.archive_and_purge_telemetry()
 returns void language plpgsql security definer as $$
 declare
-    yd date := current_date - interval '1 day';
-    row_ct bigint;
     size_mb numeric;
     cutoff_ts timestamptz;
+    target_mb numeric := 325;   -- 65%: delete until we reach this
+    threshold_mb numeric := 350; -- 70%: start pruning when above this
 begin
-    -- Step 1: Archive yesterday's telemetry into daily aggregates
-    insert into public.telemetry_archive (device_id, log_date, sample_count, payload_agg)
-    select
-        device_id,
-        yd,
-        count(id),
-        jsonb_object(array_agg(key || '_avg'), array_agg(avg_val::text))
-    from (
-        select
-            t.device_id,
-            (each(t.payload)).key,
-            avg((each(t.payload)).value::numeric) as avg_val
-        from public.telemetry_live t
-        where t.recorded_at >= yd and t.recorded_at < current_date
-        group by t.device_id, (each(t.payload)).key
-    ) sub
-    group by device_id
-    on conflict (device_id, log_date) do nothing;
-
-    get diagnostics row_ct = row_count;
-
-    -- Step 2: Adaptive retention based on actual storage used
-    -- Free tier = 500 MB. Start pruning beyond 400 MB (80%).
-    -- Always keep minimum 7 days. Target: stay under 350 MB (70%).
+    -- Check total size of telemetry_live (includes TOAST and indexes)
     select pg_total_relation_size('public.telemetry_live') / (1024 * 1024) into size_mb;
 
-    if size_mb > 400 then
-        -- Delete oldest rows in chunks until under threshold or 7-day minimum hit
-        while size_mb > 350 loop
+    if size_mb > threshold_mb then
+        -- Delete oldest rows until under target
+        while size_mb > target_mb loop
             select recorded_at into cutoff_ts
             from public.telemetry_live
-            where recorded_at < current_timestamp - interval '7 days'
             order by recorded_at asc
             limit 1;
 
@@ -336,7 +284,7 @@ begin
         end loop;
     end if;
 
-    -- Step 3: Mark devices offline if no telemetry in last 24 hours
+    -- Mark devices offline if no telemetry in last 24 hours
     update public.devices d
     set is_online = false
     where d.last_seen_at < current_timestamp - interval '1 day';
@@ -345,7 +293,7 @@ $$;
 
 select cron.schedule(
     'telemetry-maintenance',
-    '0 0 * * *',
+    '0 * * * *',  -- every hour instead of once at midnight
     'select public.archive_and_purge_telemetry()'
 );
 
