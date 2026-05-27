@@ -126,6 +126,10 @@ static void handle_serial_cli() {
             cmd.trim();
             if (cmd == "status") {
                 print_status();
+            } else if (cmd == "mem") {
+                Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
+                Serial.printf("Heap size: %u bytes\n", ESP.getHeapSize());
+                Serial.printf("CPU temperature: %.1f C\n", temperatureRead());
             } else if (cmd == "sensors") {
                 SensorData data = read_sensors();
                 print_sensor_data(data);
@@ -501,6 +505,7 @@ static void handle_serial_cli() {
             } else if (cmd == "help") {
                 Serial.println("Commands:");
                 Serial.println("  status              — IP, log entries, coulomb/SoC");
+                Serial.println("  mem                 — free heap bytes, CPU temperature");
                 Serial.println("  sensors             — all sensor readings");
                 Serial.println("  relay status        — relay GPIO states");
                 Serial.println("  relay N 0/1         — manual override relay N (0=off, 1=on)");
@@ -565,8 +570,8 @@ void setup() {
 
     init_core_shared();
 
-    xTaskCreatePinnedToCore(networkTask, "Network", 8192, NULL, 5, NULL, 0);
-    xTaskCreatePinnedToCore(sensorTask,    "Sensor",   16384, NULL, 10, NULL, 1);
+    xTaskCreatePinnedToCore(networkTask, "Network", 6144, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(sensorTask,    "Sensor",   12288, NULL, 10, NULL, 1);
 
     Serial.println("Type 'help' for serial commands");
 }
