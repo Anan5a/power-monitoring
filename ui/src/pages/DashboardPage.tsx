@@ -70,7 +70,7 @@ export default function DashboardPage() {
       .eq('device_id', deviceKey)
       .order('recorded_at', { ascending: false })
       .limit(1)
-      .single()
+      .maybeSingle()
 
     if (!data?.payload) return
 
@@ -94,7 +94,7 @@ export default function DashboardPage() {
       .from('device_profiles')
       .select('*')
       .eq('device_type', device.device_type)
-      .single()
+      .maybeSingle()
 
     if (data) {
       setDeviceProfile(data)

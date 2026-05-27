@@ -12,7 +12,7 @@ export async function fetchDeviceChannels(deviceKey: string): Promise<DeviceChan
     .from('device_channels')
     .select('*')
     .eq('device_key', deviceKey)
-    .single()
+    .maybeSingle()
   if (error || !data) return null
   return data as DeviceChannels
 }
