@@ -143,7 +143,6 @@ void init_connectivity() {
 
 void loop_connectivity() {
     if (skip_network) return;
-    check_settings_commands();
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
         if (!mqtt.connected()) connect_mqtt();
