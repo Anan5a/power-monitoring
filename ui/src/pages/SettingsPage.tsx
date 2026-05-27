@@ -521,14 +521,15 @@ function BatteriesTab({ onSave }: { onSave: (ch: number, bat: object) => void })
   const [vals, setVals] = useState([{ capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }])
   return (
     <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="font-semibold mb-4">Battery Configuration</h3>
+      <h3 className="font-semibold mb-4">Battery Configuration (per VC)</h3>
+      <p className="text-sm text-gray-500 mb-4">Set capacity for VCs with a battery. Leave at 0 (or empty) for non-battery VCs like solar or grid.</p>
       <div className="space-y-3">
         {[0,1,2,3].map(ch => (
           <div key={ch} className="border rounded p-3">
-            <div className="font-medium mb-2">VC{ch} Battery</div>
+            <div className="font-medium mb-2">VC{ch}</div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-sm text-gray-600">Capacity (mAh)</label>
+                <label className="text-sm text-gray-600">Capacity (mAh, 0=disabled)</label>
                 <input value={vals[ch].capacity_mAh} onChange={e => setVals(v => v.map((x, i) => i === ch ? { ...x, capacity_mAh: e.target.value } : x))}
                   className="w-full rounded border border-gray-300 px-2 py-1" placeholder="5000" />
               </div>
