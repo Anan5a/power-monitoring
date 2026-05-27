@@ -128,7 +128,8 @@ export default function ChannelsPage() {
                   </div>
                 </div>
 
-                {/* INA226 */}
+                {/* INA226 — only show if in payload (ENABLE_INA226 was set on ESP) */}
+                {'ina226_v' in (payload as Record<string, number>) && (
                 <div className="bg-white rounded-lg shadow p-6">
                   <div className="flex items-center gap-2 mb-4">
                     <span className="px-2 py-1 rounded text-xs font-bold bg-green-100 text-green-700">INA226</span>
@@ -149,8 +150,10 @@ export default function ChannelsPage() {
                     })}
                   </div>
                 </div>
+                )}
 
                 {/* ADS1115 */}
+                {'ads1115_0' in (payload as Record<string, number>) && (
                 <div className="bg-white rounded-lg shadow p-6">
                   <div className="flex items-center gap-2 mb-4">
                     <span className="px-2 py-1 rounded text-xs font-bold bg-blue-100 text-blue-700">ADS1115</span>
@@ -170,6 +173,7 @@ export default function ChannelsPage() {
                     })}
                   </div>
                 </div>
+                )}
               </div>
             )}
 
