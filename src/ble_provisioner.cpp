@@ -42,6 +42,7 @@ class ProvServerCallbacks : public BLEServerCallbacks {
 class CmdCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* pCharacteristic) {
         std::string val(pCharacteristic->getValue().c_str());
+        Serial.printf("[BLE] onWrite len=%d\n", val.length());
         if (val.empty()) return;
         handle_command(val.c_str());
     }
@@ -52,6 +53,9 @@ static void send_response(const char* msg) {
         size_t len = strlen(msg);
         pRespChar->setValue((uint8_t*)msg, len);
         pRespChar->notify();
+        Serial.printf("[BLE] sent resp: %s\n", msg);
+    } else {
+        Serial.println("[BLE] send_response: pRespChar is null");
     }
 }
 
@@ -75,6 +79,7 @@ static bool check_rate_limit() {
     if (now - rate_last_cmd < 100) {
         rate_cmd_count++;
         if (rate_cmd_count > MAX_COMMANDS) {
+            Serial.println("[BLE] rate limited");
             send_response("{\"ok\":false,\"error\":\"rate_limited\"}");
             return false;
         }
@@ -86,16 +91,23 @@ static bool check_rate_limit() {
 }
 
 static void handle_command(const char* json) {
-    if (!check_rate_limit()) return;
+    Serial.printf("[BLE] command: %s\n", json);
+    if (!check_rate_limit()) { Serial.println("[BLE] rate limited"); return; }
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
-    if (err) { send_response("{\"ok\":false,\"error\":\"bad_json\"}"); return; }
+    if (err) { Serial.println("[BLE] bad json"); send_response("{\"ok\":false,\"error\":\"bad_json\"}"); return; }
 
     const char* cmd = doc["cmd"] | "";
+    Serial.printf("[BLE] cmd: %s\n", cmd);
     if (strcmp(cmd, "set_wifi") == 0) {
-        if (!check_pin(doc)) return;
+        uint32_t pin = doc["pin"] | 0;
+        Serial.printf("[BLE] set_wifi pin=%lu\n", pin);
+        uint32_t stored_pin = settings_load_ble_pin();
+        Serial.printf("[BLE] stored_pin=%lu expected=%lu\n", stored_pin, pin);
+        if (!check_pin(doc)) { Serial.println("[BLE] pin check failed"); return; }
         settings_save_wifi(doc["ssid"], doc["pass"]);
         send_response("{\"ok\":true,\"msg\":\"wifi_saved_reboot\"}");
+        Serial.println("[BLE] wifi saved");
     } else if (strcmp(cmd, "set_mqtt") == 0) {
         if (!check_pin(doc)) return;
         settings_save_mqtt(doc["broker"], doc["port"], doc["topic"]);
