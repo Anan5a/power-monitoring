@@ -67,7 +67,7 @@ export default function ProvisioningPage() {
       }
       respChar.addEventListener('characteristicvaluechanged', handler)
       cmdChar.writeValue(new TextEncoder().encode(JSON.stringify(cmd)))
-      setTimeout(() => reject(new Error('BLE command timeout (10s)')), 10000)
+      setTimeout(() => reject(new Error('BLE command timeout (10s) — check BLE connection and PIN')), 10000)
     })
   }
 
@@ -76,7 +76,10 @@ export default function ProvisioningPage() {
     setProgress('Setting WiFi...')
     try {
       const resp = await sendCommand({ cmd: 'set_wifi', ssid, pass, pin: storedPin }) as { ok?: boolean; error?: string }
-      if (!resp?.ok) throw new Error(resp?.error ?? 'Failed to set WiFi')
+      if (!resp?.ok) {
+        setError(resp?.error ?? 'Failed to set WiFi')
+        return
+      }
       setStep(3)
       setProgress('WiFi configured successfully')
     } catch (e: unknown) {
@@ -95,7 +98,10 @@ export default function ProvisioningPage() {
         device_key: deviceKey,
         pin: storedPin,
       }) as { ok?: boolean; error?: string }
-      if (!resp?.ok) throw new Error(resp?.error ?? 'Failed to set Supabase')
+      if (!resp?.ok) {
+        setError(resp?.error ?? 'Failed to set Supabase')
+        return
+      }
       setStep(5)
       setProgress('Device provisioned successfully!')
       // Fetch the device's stored PIN from Supabase (may have been set on a prior config)
@@ -164,7 +170,7 @@ export default function ProvisioningPage() {
         current_idx: vc.current_idx,
         pin: storedPin,
       }) as { ok?: boolean; error?: string }
-      if (!resp?.ok) throw new Error(resp?.error ?? 'Save failed')
+      if (!resp?.ok) { setError(resp?.error ?? 'Save failed'); return }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Virtual channel save failed')
     } finally {
@@ -176,7 +182,7 @@ export default function ProvisioningPage() {
     setError('')
     try {
       const resp = await sendCommand({ cmd: 'set_calibration', channel: ch, type, value, pin: storedPin }) as { ok?: boolean; error?: string }
-      if (!resp?.ok) throw new Error(resp?.error ?? 'Save failed')
+      if (!resp?.ok) { setError(resp?.error ?? 'Save failed'); return }
       await loadCalibration(ch)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Calibration save failed')
@@ -187,7 +193,7 @@ export default function ProvisioningPage() {
     setError('')
     try {
       const resp = await sendCommand({ cmd: 'reset_calibration', channel: ch, pin: storedPin }) as { ok?: boolean; error?: string }
-      if (!resp?.ok) throw new Error(resp?.error ?? 'Reset failed')
+      if (!resp?.ok) { setError(resp?.error ?? 'Reset failed'); return }
       await loadCalibration(ch)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Calibration reset failed')
