@@ -7,6 +7,23 @@ import PowerHistoryChart from '../components/PowerHistoryChart'
 import QuickStatsRow from '../components/QuickStatsRow'
 import RelayControl from '../components/RelayControl'
 
+// Live clock + last-updated display
+function StatusBar({ lastUpdated }: { lastUpdated: Date | null }) {
+  const [now, setNow] = useState(new Date())
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  return (
+    <div className="bg-gray-800 text-gray-300 text-xs px-4 py-1.5 flex justify-between">
+      <span>Local: {now.toLocaleTimeString()}</span>
+      {lastUpdated && (
+        <span>Last update: {lastUpdated.toLocaleTimeString()}{lastUpdated.getSeconds() === now.getSeconds() ? ' (just now)' : ''}</span>
+      )}
+    </div>
+  )
+}
+
 // Find voltage/current/power key for a given VC from the payload keys
 export default function DashboardPage() {
   const [devices, setDevices] = useState<Device[]>([])
@@ -94,6 +111,8 @@ export default function DashboardPage() {
           </nav>
         </div>
       </header>
+
+      <StatusBar lastUpdated={latestReading ? new Date(latestReading.recorded_at) : null} />
 
       <main className="max-w-7xl mx-auto px-4 py-6">
         {/* Device selector */}
