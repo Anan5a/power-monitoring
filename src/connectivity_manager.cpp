@@ -143,6 +143,14 @@ void init_connectivity() {
 }
 
 void loop_connectivity() {
+    // WiFi reconnection — attempt every 30s when disconnected
+    static uint32_t last_wifi_retry = 0;
+    if (WiFi.status() != WL_CONNECTED && millis() - last_wifi_retry > 30000) {
+        last_wifi_retry = millis();
+        WiFi.reconnect();
+        Serial.println("[WiFi] reconnecting...");
+    }
+
     if (skip_network) return;
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
