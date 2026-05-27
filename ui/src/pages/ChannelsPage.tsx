@@ -96,19 +96,32 @@ export default function ChannelsPage() {
                 <div className="bg-white rounded-lg shadow p-6">
                   <div className="flex items-center gap-2 mb-4">
                     <span className="px-2 py-1 rounded text-xs font-bold bg-yellow-100 text-yellow-700">INA3221</span>
-                    <span className="text-sm text-gray-500">0x42 — 3-channel current/voltage monitor</span>
+                    <span className="text-sm text-gray-500">0x40 current + 0x42 voltage — 3-channel each</span>
                   </div>
                   <div className="grid grid-cols-3 md:grid-cols-9 gap-4 text-center">
                     {['v0','v1','v2','i0','i1','i2','p0','p1','p2'].map(key => {
                       const fullKey = `ina3221_${key}`
                       const val = payload[fullKey]
+                      const suffix = key.slice(-1)
+                      const spikeKey = `ina3221_${key.startsWith('v') ? 'v' : 'i'}${suffix}_spike`
+                      const stddevKey = `ina3221_${key.startsWith('v') ? 'v' : 'i'}${suffix}_stddev`
+                      const spikeVal = (payload as Record<string, number | boolean>)[spikeKey]
+                      const isSpike = !!(spikeVal)
+                      const stddevVal = (payload as Record<string, number | boolean>)[stddevKey]
+                      const stddev = typeof stddevVal === 'number' ? stddevVal : null
                       const unit = key.startsWith('v') ? 'V' : key.startsWith('i') ? 'A' : 'W'
                       const label = key.replace(/^v/,'V Ch').replace(/^i/,'I Ch').replace(/^p/,'P Ch')
                       return (
-                        <div key={key} className="bg-gray-50 rounded p-2">
+                        <div key={key} className={`bg-gray-50 rounded p-2${isSpike ? ' ring-1 ring-red-400' : ''}`}>
                           <div className="text-xs text-gray-400 mb-1">{label}</div>
-                          <div className="font-semibold text-gray-700">{val != null ? val.toFixed(2) : '--'}</div>
+                          <div className={`font-semibold ${isSpike ? 'text-red-600' : 'text-gray-700'}`}>
+                            {val != null ? val.toFixed(2) : '--'}
+                          </div>
                           <div className="text-xs text-gray-400">{unit}</div>
+                          {isSpike && <div className="text-xs text-red-500 font-medium">⚠ spike</div>}
+                          {stddev != null && stddev > 0 && (
+                            <div className="text-xs text-gray-400">σ={stddev.toFixed(3)}</div>
+                          )}
                         </div>
                       )
                     })}
@@ -163,45 +176,27 @@ export default function ChannelsPage() {
             {/* Virtual tab */}
             {activeTab === 'virtual' && deviceChannels && (
               <div className="bg-white rounded-lg shadow p-6">
-                <p className="text-sm text-gray-500 mb-4">Virtual channel mapping: which hardware source feeds each VC.</p>
+                <p className="text-sm text-gray-500 mb-1">Virtual channel mapping is configured on-device via BLE provisioning.</p>
+                <p className="text-sm text-gray-400 mb-4">Hardware source assignments are stored in ESP32 NVS and not re-read by the UI.</p>
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-gray-600 border-b">
                       <th className="pb-2">VC</th>
                       <th className="pb-2">Name</th>
-                      <th className="pb-2">Voltage Source</th>
-                      <th className="pb-2">Current Source</th>
+                      <th className="pb-2">Description</th>
                     </tr>
                   </thead>
                   <tbody>
                     {[0,1,2,3].map(vcIdx => {
                       const vcName = deviceChannels.channel_names?.find(cn => cn.channel === vcIdx)?.name ?? `VC${vcIdx}`
-                      // Reconstruct from virtual channels if available
-                      const vc = deviceChannels as unknown as Array<{voltage_src:number,voltage_idx:number,current_src:number,current_idx:number}>
-                      const vSrc = vc[vcIdx]?.voltage_src ?? 0
-                      const cSrc = vc[vcIdx]?.current_src ?? 0
-                      const srcLabels: Record<number, {label:string, color:string}> = {
-                        0: {label: 'None', color: 'bg-gray-100'},
-                        1: {label: 'INA3221', color: 'bg-yellow-100'},
-                        2: {label: 'INA3221 I', color: 'bg-yellow-100'},
-                        3: {label: 'INA226', color: 'bg-green-100'},
-                        4: {label: 'ADS1115', color: 'bg-blue-100'},
-                      }
+                      const bp = deviceChannels.battery_profiles?.[vcIdx]
+                      const hasBat = bp && bp.capacity_mAh > 0
                       return (
                         <tr key={vcIdx} className="border-b last:border-0">
                           <td className="py-2 font-medium">VC{vcIdx}</td>
-                          <td className="py-2">{vcName}</td>
-                          <td className="py-2">
-                            <span className={`px-2 py-0.5 rounded text-xs ${srcLabels[vSrc]?.color}`}>
-                              {srcLabels[vSrc]?.label ?? 'Unknown'}
-                              {vSrc > 0 && ` Ch${vc[vcIdx]?.voltage_idx ?? 0}`}
-                            </span>
-                          </td>
-                          <td className="py-2">
-                            <span className={`px-2 py-0.5 rounded text-xs ${srcLabels[cSrc]?.color}`}>
-                              {srcLabels[cSrc]?.label ?? 'Unknown'}
-                              {cSrc > 0 && ` Ch${vc[vcIdx]?.current_idx ?? 0}`}
-                            </span>
+                          <td className="py-2">VC{vcIdx} — {vcName}</td>
+                          <td className="py-2 text-gray-500">
+                            {hasBat ? `${bp.chemistry} · ${bp.capacity_mAh}mAh` : 'No battery configured'}
                           </td>
                         </tr>
                       )

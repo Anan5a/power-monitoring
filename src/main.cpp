@@ -374,6 +374,9 @@ static void handle_serial_cli() {
                     sensor_get_calibration(ch, &vo, &vg, &co, &cg);
                     Serial.printf("CH%d: vo=%.2fmV vg=%.4f co=%.2fmA cg=%.4f\n", ch, vo, vg, co, cg);
                 }
+            } else if (cmd == "calibrate_baseline") {
+                sensor_calibrate_baseline();
+                Serial.println("Baseline recalibration started — collecting new baseline over next 10 ticks");
             } else if (cmd.startsWith("cal ")) {
                 int ch, type; float value;
                 if (sscanf(cmd.c_str(), "cal %d %d %f", &ch, &type, &value) == 3 && ch >= 0 && ch <= 2 && type >= 0 && type <= 3) {
@@ -522,6 +525,7 @@ static void handle_serial_cli() {
                 Serial.println("  resistor show        — show resistor values per channel");
                 Serial.println("  cal N type value    — set calibration (type: 0=vo_mv, 1=vg, 2=co_ma, 3=cg)");
                 Serial.println("  cal show            — show all channel calibration values");
+                Serial.println("  calibrate_baseline  — restart baseline noise calibration (10 ticks)");
                 Serial.println("  serial1peek         — dump up to 5 lines from Serial1");
                 Serial.println("  wifi_show          — show current WiFi SSID");
                 Serial.println("  wifi_ssid <ssid>  — set WiFi SSID");
