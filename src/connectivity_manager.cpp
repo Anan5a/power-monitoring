@@ -369,6 +369,9 @@ void publish_data_supabase(const SensorData& data) {
     if (rc != 200 && rc != 201 && rc != 204) {
         Serial.print("Supabase publish failed: "); Serial.println(rc);
     }
+
+    // Update calibration status table while baseline is collecting
+    publish_calibration_status();
 }
 
 void sync_calibration_to_supabase() {
@@ -443,6 +446,54 @@ void sync_ble_pin_to_supabase() {
         Serial.println("BLE PIN synced to Supabase");
     } else {
         Serial.print("BLE PIN sync failed: "); Serial.println(rc);
+    }
+}
+
+void publish_calibration_status() {
+    if (!sensor_is_calibrating()) return;  // nothing to report
+
+    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
+
+    float stddev_out[8];
+    uint8_t tick_count;
+    sensor_get_baseline_progress(stddev_out, &tick_count);
+
+    HTTPClient http;
+    char url[256];
+    snprintf(url, sizeof(url), "%s/rest/v1/sensor_calibration_status", supabase_url);
+
+    JsonDocument doc;
+    doc["device_key"] = device_key;
+    doc["calibrating"] = sensor_is_calibrating();
+    doc["baseline_tick"] = tick_count;
+    JsonObject sd = doc["baseline_stddev"].to<JsonObject>();
+    char key[16];
+    for (int i = 0; i < 3; i++) {
+        snprintf(key, sizeof(key), "ina3221_i%d", i);
+        sd[key] = stddev_out[i];
+    }
+    for (int i = 0; i < 3; i++) {
+        snprintf(key, sizeof(key), "ina3221_v%d", i);
+        sd[key] = stddev_out[i + 3];
+    }
+    doc["updated_at"] = "now";
+
+    char buffer[512];
+    size_t len = serializeJson(doc, buffer);
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", anon_key);
+    http.addHeader("Authorization", "Bearer " + String(anon_key));
+    http.addHeader("Prefer", "resolution=merge-duplicates");
+
+    int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
+    http.end();
+    if (rc >= 200 && rc < 300) {
+        Serial.printf("[CALIB] status published: tick=%d\n", tick_count);
     }
 }
 

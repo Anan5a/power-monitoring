@@ -6,6 +6,7 @@ import VCDashboardCard from '../components/VCDashboardCard'
 import PowerHistoryChart from '../components/PowerHistoryChart'
 import QuickStatsRow from '../components/QuickStatsRow'
 import RelayControl from '../components/RelayControl'
+import SensorControls from '../components/SensorControls'
 
 // Live clock + last-updated display
 function StatusBar({ lastUpdated }: { lastUpdated: Date | null }) {
@@ -64,19 +65,12 @@ export default function DashboardPage() {
 
   const { latestReading } = useRealtime(selectedDevice?.device_key ?? null)
 
-  // Build VC data for cards
+  // Build VC data for cards — use virtual channel keys directly (ch{N}_V/I/P)
   const vcCards = [0, 1, 2, 3].map(vcIdx => {
     if (!latestReading) {
       return { vcIdx, vcName: `VC${vcIdx}`, voltage: null, current: null, power: null, socPct: null, batteryCapacity: 0, relayOn: false }
     }
     const payload = latestReading.payload as Record<string, number>
-    const payloadKeys = Object.keys(payload)
-
-    // Find keys for this VC
-    const vKey = payloadKeys.find(k => k.match(new RegExp(`_v${vcIdx}$`))) ?? null
-    const iKey = payloadKeys.find(k => k.match(new RegExp(`_i${vcIdx}$`))) ?? null
-    const pKey = payloadKeys.find(k => k.match(new RegExp(`_p${vcIdx}$`))) ?? null
-    const socKey = payloadKeys.find(k => k.match(new RegExp(`soc_pct${vcIdx}$`))) ?? null
 
     const vcName = deviceChannels?.channel_names?.find(cn => cn.channel === vcIdx)?.name ?? `VC${vcIdx}`
     const batteryCapacity = deviceChannels?.battery_profiles?.[vcIdx]?.capacity_mAh ?? 0
@@ -84,10 +78,10 @@ export default function DashboardPage() {
     return {
       vcIdx,
       vcName,
-      voltage: vKey !== null ? (payload[vKey] as number) : null,
-      current: iKey !== null ? (payload[iKey] as number) : null,
-      power: pKey !== null ? (payload[pKey] as number) : null,
-      socPct: socKey !== null ? (payload[socKey] as number) : null,
+      voltage: payload[`ch${vcIdx}_V`] ?? null,
+      current: payload[`ch${vcIdx}_I`] ?? null,
+      power: payload[`ch${vcIdx}_P`] ?? null,
+      socPct: payload[`soc_pct${vcIdx}`] ?? null,
       batteryCapacity,
       relayOn: relayOn[vcIdx],
     }
@@ -163,6 +157,12 @@ export default function DashboardPage() {
               latestReading={latestReading?.payload ?? null}
               deviceChannels={deviceChannels}
               relayOn={relayOn}
+            />
+
+            {/* Sensor calibration controls */}
+            <SensorControls
+              deviceKey={selectedDevice?.device_key ?? null}
+              deviceChannels={deviceChannels}
             />
 
             {/* Power history chart */}

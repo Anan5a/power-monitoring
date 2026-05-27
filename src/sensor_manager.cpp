@@ -25,10 +25,10 @@ static ChannelCalibration cal = {
     .curr_gain = {CAL_CURR_GAIN_CH0, CAL_CURR_GAIN_CH1, CAL_CURR_GAIN_CH2},
 };
 
-// Burst sample metadata for all channels
-static SampleMeta g_meta[8] = {{0,false},{0,false},{0,false},{0,false},{0,false},{0,false},{0,false},{0,false}};
-static float baseline_stddev[8] = {0};
-static uint8_t baseline_count = 0;
+// Burst sample metadata — accessible by connectivity_manager for calibration status
+SampleMeta g_meta[8] = {{0,false},{0,false},{0,false},{0,false},{0,false},{0,false},{0,false},{0,false}};
+float baseline_stddev[8] = {0};
+uint8_t baseline_count = 0;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -193,10 +193,26 @@ SampleMeta sensor_get_meta(uint8_t ch) {
     return g_meta[ch];
 }
 
+// burst sample metadata — accessible by connectivity_manager for calibration status reporting
+extern SampleMeta g_meta[8];
+extern float baseline_stddev[8];
+extern uint8_t baseline_count;
+
 void sensor_calibrate_baseline() {
     baseline_count = 0;
     for (int i = 0; i < 8; i++) baseline_stddev[i] = 0;
     Serial.println("Baseline recalibration started");
+}
+
+void sensor_get_baseline_progress(float* stddev_out, uint8_t* tick_count_out) {
+    *tick_count_out = baseline_count;
+    if (stddev_out) {
+        for (int i = 0; i < 8; i++) stddev_out[i] = baseline_stddev[i];
+    }
+}
+
+bool sensor_is_calibrating() {
+    return baseline_count > 0 && baseline_count < BASELINE_TICKS;
 }
 
 float ina3221_getShuntVoltage(uint8_t ch) {

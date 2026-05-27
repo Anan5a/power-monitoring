@@ -31,6 +31,8 @@ void init_sensors();
 SensorData read_sensors();
 SampleMeta sensor_get_meta(uint8_t ch);  // ch 0-2=INA3221current, 3-5=INA3221voltage, 6=INA226, 7=ADS1115
 void sensor_calibrate_baseline();
+void sensor_get_baseline_progress(float* stddev_out, uint8_t* tick_count_out);  // for calibration status reporting
+bool sensor_is_calibrating();  // true when baseline calibration is collecting (1-9 ticks)
 float ina3221_getShuntVoltage(uint8_t ch);
 float ina226_getShuntVoltage();
 

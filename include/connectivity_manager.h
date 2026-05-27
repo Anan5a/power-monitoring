@@ -26,5 +26,6 @@ float get_sensor_power(uint8_t src, uint8_t idx, const SensorData& data);
 
 // Settings commands: ESP32 polls Supabase for pending config changes
 void check_settings_commands();
+void publish_calibration_status();  // writes sensor_calibration_status table during active calibration
 
 #endif

@@ -255,6 +255,22 @@ create policy "no_direct_insert" on public.telemetry_live
 -- Telemetry retention: adaptive, size-based (no daily aggregation)
 -- Keeps raw telemetry until storage reaches 70% of 500MB free tier (~350MB)
 -- Then deletes oldest rows in chunks until under 65% (~325MB)
+-- Sensor calibration status: baseline noise collected per channel, updated during calibrate_baseline
+create table public.sensor_calibration_status (
+    id bigint generated always as identity primary key,
+    device_key text unique not null references public.devices(device_key) on delete cascade,
+    calibrating boolean default false,
+    baseline_tick tinyint default 0,
+    baseline_stddev jsonb default '{}',
+    updated_at timestamptz default now()
+);
+alter table public.sensor_calibration_status enable row level security;
+grant select, insert, update on public.sensor_calibration_status to authenticated;
+
+-- Supabase realtime
+drop publication if exists supabase_realtime;
+create publication supabase_realtime for table public.telemetry_live, public.devices, public.device_channels, public.sensor_calibration_status, public.relay_states;
+
 ---------------------------------------------------------------
 create or replace function public.archive_and_purge_telemetry()
 returns void language plpgsql security definer as $$

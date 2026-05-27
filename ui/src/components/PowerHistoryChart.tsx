@@ -12,11 +12,11 @@ type Range = '1h' | '6h' | '24h' | '7d' | '30d'
 const RANGE_HOURS: Record<Range, number> = { '1h': 1, '6h': 6, '24h': 24, '7d': 168, '30d': 720 }
 const RANGE_LIMITS: Record<Range, number> = { '1h': 200, '6h': 200, '24h': 200, '7d': 500, '30d': 500 }
 
-// Find power keys for each VC (e.g. ina3221_p0, ina3221_p1, ina3221_p2, ina226_p)
+// Find power keys: virtual channels ch0_P/ch1_P/ch2_P + ina226_p
 function extractVCPowerKeys(data: TelemetryPoint[]): string[] {
   if (data.length === 0) return []
   const payloadKeys = Object.keys(data[0].payload as Record<string, number>)
-  return payloadKeys.filter(k => k.endsWith('_P') || k.endsWith('_p'))
+  return payloadKeys.filter(k => k.match(/^ch\d_P$/) || k === 'ina226_p')
 }
 
 export default function PowerHistoryChart({ deviceKey }: Props) {
@@ -92,7 +92,10 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
   }
 
   // Simple key to label
-  const keyToLabel = (k: string) => k.replace(/^ina3221_/i, '').replace(/_p$/i, '').replace(/^p(\d)/i, 'Ch$1 Power').toUpperCase()
+  const keyToLabel = (k: string) => {
+    if (k === 'ina226_p') return 'INA226'
+    return k.replace(/^ch(\d)_P$/i, 'CH$1').toUpperCase()
+  }
 
   return (
     <div className="bg-white rounded-lg shadow p-4">

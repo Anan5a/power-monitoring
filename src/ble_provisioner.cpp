@@ -167,6 +167,10 @@ static void handle_command(const char* json) {
         uint8_t ch = doc["channel"] | 0;
         reset_coulomb_counter(ch);
         send_response("{\"ok\":true,\"msg\":\"coulomb_reset\"}");
+    } else if (strcmp(cmd, "calibrate_baseline") == 0) {
+        if (!check_pin(doc)) return;
+        sensor_calibrate_baseline();
+        send_response("{\"ok\":true,\"msg\":\"baseline_calibration_started\"}");
     } else if (strcmp(cmd, "get_relay") == 0) {
         if (!check_pin(doc)) return;
         uint8_t idx = doc["idx"] | 0;
@@ -554,6 +558,9 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         settings_save_ble_pin(doc["new_pin"] | 0);
         sync_ble_pin_to_supabase();
         Serial.println("[CMD] ble_pin updated");
+    } else if (strcmp(cmd_type, "calibrate_baseline") == 0) {
+        sensor_calibrate_baseline();
+        Serial.println("[CMD] baseline calibration started");
     } else if (strcmp(cmd_type, "factory_reset") == 0) {
         settings_factory_reset();
         Serial.println("[CMD] factory_reset done — rebooting");
