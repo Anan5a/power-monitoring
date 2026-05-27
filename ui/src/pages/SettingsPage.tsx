@@ -332,7 +332,7 @@ function CalibrationTab({ deviceChannels, onSave }: { deviceChannels: DeviceChan
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-gray-600">
-            <th className="pb-2">Ch</th>
+            <th className="pb-2">VC</th>
             <th className="pb-2">volt_offset_mv</th>
             <th className="pb-2">volt_gain</th>
             <th className="pb-2">curr_offset_ma</th>
@@ -397,7 +397,7 @@ function VirtualChannelsTab({ deviceChannels: _dc, onSave }: { deviceChannels: D
       <div className="space-y-4">
         {[0,1,2,3].map(ch => (
           <div key={ch} className="border rounded p-3">
-            <div className="font-medium mb-2">Channel {ch}</div>
+            <div className="font-medium mb-2">VC{ch} (Virtual Channel)</div>
             <div className="grid grid-cols-4 gap-3 text-sm">
               <div>
                 <span className="text-gray-500">V Source</span>
@@ -457,7 +457,7 @@ function ChannelNamesTab({ deviceChannels, onSave }: { deviceChannels: DeviceCha
       <div className="space-y-3">
         {[0,1,2,3].map(ch => (
           <div key={ch} className="flex items-center gap-3">
-            <span className="w-16 text-sm text-gray-600">CH{ch}</span>
+            <span className="w-16 text-sm text-gray-600">VC{ch}</span>
             <input value={vals[ch]} onChange={e => setVals(v => v.map((x, i) => i === ch ? e.target.value : x))}
               className="flex-1 rounded border border-gray-300 px-3 py-2" placeholder="e.g. Solar Panel" />
             <button onClick={() => onSave(ch, vals[ch])}
@@ -495,7 +495,7 @@ function ChannelGroupsTab({ deviceChannels, onSave }: { deviceChannels: DeviceCh
               </select>
             </div>
             <div className="flex gap-2 items-center">
-              <span className="text-sm text-gray-500">Channels:</span>
+              <span className="text-sm text-gray-500">VCs:</span>
               {[0,1,2,3].map(ch => (
                 <label key={ch} className="flex items-center gap-1 text-sm">
                   <input type="checkbox"
@@ -504,7 +504,7 @@ function ChannelGroupsTab({ deviceChannels, onSave }: { deviceChannels: DeviceCh
                       ...x, channel_mask: e.target.checked ? x.channel_mask | (1 << ch) : x.channel_mask & ~(1 << ch)
                     } : x))}
                   />
-                  {ch}
+                  VC{ch}
                 </label>
               ))}
               <button onClick={() => onSave(idx, vals[idx])}
@@ -525,7 +525,7 @@ function BatteriesTab({ onSave }: { onSave: (ch: number, bat: object) => void })
       <div className="space-y-3">
         {[0,1,2,3].map(ch => (
           <div key={ch} className="border rounded p-3">
-            <div className="font-medium mb-2">Channel {ch}</div>
+            <div className="font-medium mb-2">VC{ch} Battery</div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm text-gray-600">Capacity (mAh)</label>
@@ -565,10 +565,10 @@ function RelaysTab({ onSave }: { onSave: (idx: number, rt: object) => void }) {
             <div className="font-medium mb-2">Relay {idx}</div>
             <div className="grid grid-cols-4 gap-2 text-sm">
               <div>
-                <label className="text-xs text-gray-500">Channel</label>
+                <label className="text-xs text-gray-500">VC</label>
                 <select value={relays[idx].channel} onChange={e => setRelays(r => r.map((x, i) => i === idx ? { ...x, channel: Number(e.target.value) } : x))}
                   className="w-full rounded border border-gray-300 px-1 py-1">
-                  {[0,1,2,3].map(c => <option key={c} value={c}>{c}</option>)}
+                  {[0,1,2,3].map(c => <option key={c} value={c}>VC{c}</option>)}
                 </select>
               </div>
               <div>
