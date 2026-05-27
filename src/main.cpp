@@ -129,7 +129,9 @@ static void handle_serial_cli() {
             } else if (cmd == "mem") {
                 Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
                 Serial.printf("Heap size: %u bytes\n", ESP.getHeapSize());
+                Serial.printf("Min free heap: %u bytes\n", ESP.getMinFreeHeap());
                 Serial.printf("CPU temperature: %.1f C\n", temperatureRead());
+                Serial.printf("PSRAM: %u bytes\n", ESP.getPsramSize());
             } else if (cmd == "sensors") {
                 SensorData data = read_sensors();
                 print_sensor_data(data);
