@@ -6,20 +6,104 @@ This document describes all external and internal interfaces for the ESP32 power
 
 ## Table of Contents
 
-1. [Hardware Pinout](#hardware-pinout)
-2. [Module Overview](#module-overview)
-3. [Serial CLI](#serial-cli)
-4. [BLE GATT Interface](#ble-gatt-interface)
-5. [MQTT Topics & Payloads](#mqtt-topics--payloads)
-6. [HTTP Endpoint](#http-endpoint)
-7. [Data Structures](#data-structures)
-8. [Settings Persistence (NVS)](#settings-persistence-nvs)
-9. [Data Logging Format](#data-logging-format)
-10. [Build Instructions](#build-instructions)
+1. [Quick Start Setup](#quick-start-setup)
+2. [Hardware Pinout](#hardware-pinout)
+3. [Module Overview](#module-overview)
+4. [I2C Sensor Architecture](#i2c-sensor-architecture)
+5. [Serial CLI](#serial-cli)
+6. [BLE GATT Interface](#ble-gatt-interface)
+7. [Supabase Telemetry](#supabase-telemetry)
+8. [Dashboard](#dashboard)
+9. [Calibration Guide](#calibration-guide)
+10. [Relay Logic](#relay-logic)
+11. [Settings Persistence (NVS)](#settings-persistence-nvs)
+12. [Data Logging Format](#data-logging-format)
+13. [Build Instructions](#build-instructions)
+
+---
+
+## Quick Start Setup
+
+### Prerequisites
+
+- ESP32 dev board (ESP32-WROOM-32 or ESP32-C3)
+- INA3221 3-channel voltage/current monitor (0x40 + 0x42)
+- Optional: INA226 high-side monitor (0x41), ADS1115 ADC (0x48)
+- Supabase project (free tier works)
+
+### Steps
+
+**1. Build and flash firmware**
+
+```bash
+git clone https://github.com/Anan5a/power-monitoring.git
+cd power-monitoring
+
+# Set your WiFi credentials in include/config.h before flashing
+# Edit WIFI_SSID, WIFI_PASSWORD
+
+# Build and flash
+~/.platformio/venv/bin/pio run -e esp32dev --target upload
+~/.platformio/venv/bin/pio device monitor
+```
+
+**2. Set up Supabase**
+
+Create a project at supabase.com, then run the schema:
+
+```sql
+-- In Supabase SQL editor (Project > SQL Editor)
+-- Apply: backend/supabase/schema.sql
+```
+
+Required tables: `devices`, `telemetry_live`, `device_channels`, `sensor_calibration_status`, `relay_states`, `settings_commands`, `profiles`.
+
+**3. Provision device via BLE**
+
+With the ESP32 running and BLE enabled:
+1. Open the dashboard UI
+2. Go to **Provisioning** page
+3. Enter your Supabase URL, anon key, service role key
+4. Enter device name and BLE PIN (default `123456`)
+5. Configure WiFi credentials
+6. Save — device will reboot and connect
+
+**4. Configure via dashboard**
+
+- **Channels tab** → name each virtual channel, assign voltage/current sources
+- **Settings tab** → battery capacity per channel, relay thresholds
+- **Sensor Controls** → run baseline calibration, set manual offsets
 
 ---
 
 ## Hardware Pinout
+
+| Function | GPIO | Notes |
+|---|---|---|
+| I2C SDA | 16/21 | Configurable in `config.h` |
+| I2C SCL | 17/22 | Configurable in `config.h` |
+| Relay 1 | 25 | Default, configurable |
+| Relay 2 | 26 | Default, configurable |
+| Relay 3 | 27 | Default, configurable |
+| Relay 4 | 14 | Default, configurable |
+
+**I2C Addresses (from `config.h`):**
+
+| Device | Address | Purpose |
+|---|---|---|
+| INA3221 (current) | `0x40` | 3-channel current measurement |
+| INA3221 (voltage) | `0x42` | 3-channel voltage measurement |
+| INA226 | `0x41` | High-side current/power (optional) |
+| ADS1115 | `0x48` | 4-channel 16-bit ADC (optional) |
+| SSD1306 OLED | `0x3C` | 128×64 display (optional) |
+
+**Sensor sources per virtual channel:**
+
+Each of the 4 virtual channels (VC0–VC3) can be mapped to any combination of:
+- `voltage_src`: 1=INA3221Voltage(0x42), 2=INA3221Current(0x40), 3=INA226, 4=ADS1115
+- `current_src`: 2=INA3221Current(0x40), 3=INA226
+
+Power = `V × I` for normal sources; INA226 computes power internally.
 
 | Function | GPIO | Notes |
 |---|---|---|
@@ -84,6 +168,7 @@ Connect at `115200 baud`. Type commands and press Enter.
 | `resistor show` | Show resistor values and computed ratios per channel |
 | `cal N type value` | Set calibration for channel N. type: 0=volt_offset_mv, 1=volt_gain, 2=curr_offset_ma, 3=curr_gain |
 | `cal show` | Show calibration values for all channels |
+| `calibrate_baseline` | Restart baseline noise calibration — collects new baseline over next 10 ticks (~5 seconds). Spike detection resumes after completion. |
 | `wifi_show` | Show current WiFi SSID |
 | `wifi_ssid <ssid>` | Set WiFi SSID |
 | `wifi_pass <password>` | Set WiFi password |
@@ -302,16 +387,21 @@ Response: `{"ok":true,"msg":"vratio_saved"}`
 - Ratio computed as `(r_high + r_low) / r_low`
 - Stored in NVS, applied at boot
 Response: `{"ok":true,"ratio":3.521}`
-```json
-{"cmd":"get_mqtt","pin":123456}
-```
-Response: `{"ok":true,"broker":"192.168.1.100","port":1883,"topic":"power-monitor/data"}`
 
 #### `get_http` — Get stored HTTP endpoint (token masked)
 ```json
 {"cmd":"get_http","pin":123456}
 ```
 Response: `{"ok":true,"url":"https://api.example.com/v1/data","token":"***","enabled":true}`
+
+#### `calibrate_baseline` — Restart baseline noise calibration
+```json
+{"cmd":"calibrate_baseline","pin":123456}
+```
+Resets `baseline_stddev[]` and re-collects spike detection baseline over next 10 ticks (~5 seconds). During collection, `sensor_calibration_status` table is updated each tick with `baseline_tick=N` and current stddev values. No spike detection until calibration completes.
+
+Also available via **Supabase command poll** (no PIN required): insert `settings_commands` row with `cmd_type=calibrate_baseline`.
+Response: `{"ok":true,"msg":"baseline_calibration_started"}`
 
 #### `factory_reset` — Wipe all NVS settings
 ```json
@@ -336,7 +426,164 @@ Response: `{"ok":true,"msg":"factory_reset_done_reboot"}`
 
 ---
 
-## MQTT Topics & Payloads
+## Supabase Telemetry
+
+The ESP32 publishes telemetry to Supabase every ~5 seconds via the `insert_telemetry` RPC function. The dashboard uses Supabase Realtime to display live data without polling.
+
+### Supabase Tables
+
+| Table | Purpose | ESP32 writes | Dashboard reads |
+|---|---|---|---|
+| `telemetry_live` | Latest readings per device | Every ~5s | Realtime subscription |
+| `sensor_calibration_status` | Baseline calibration progress | Every 500ms during calibration | Polled every 1s |
+| `relay_states` | Relay on/off states | Loop reads this to check relay toggles | Writes on toggle |
+| `settings_commands` | Pending config commands | Polls every 10s | Inserts commands |
+| `device_channels` | Channel names, battery profiles, calibration | ESP reads + writes | Modifies via Settings tab |
+
+### Telemetry Payload
+
+Published via `POST /rest/v1/rpc/insert_telemetry` with auth headers.
+
+```json
+{
+  "p_device_key": "my-device",
+  "p_device_api_key": "uuid-here",
+  "p_payload": {
+    "ina3221_v0": 12.34,
+    "ina3221_v1": 12.30,
+    "ina3221_v2": 5.10,
+    "ina3221_i0": 0.523,
+    "ina3221_i1": 0.481,
+    "ina3221_i2": 0.0,
+    "ina3221_i0_stddev": 0.012,
+    "ina3221_i0_spike": false,
+    "ina3221_v0_stddev": 0.008,
+    "ina3221_v0_spike": false,
+    "ina226_v": 12.36,
+    "ina226_i": 0.510,
+    "ina226_p": 6.303,
+    "coulomb_mah0": 850,
+    "coulomb_mah1": 720,
+    "soc_pct0": 42.5,
+    "soc_pct1": 36.0,
+    "ch0_V": 12.34,
+    "ch0_I": 0.523,
+    "ch0_P": 6.47,
+    "ch1_V": 12.30,
+    "ch1_I": 0.481,
+    "ch1_P": 5.92,
+    "log_entries": 1234,
+    "log_overflow": false
+  },
+  "p_metadata": {
+    "rssi": -45,
+    "vcc": 3.28,
+    "uptime_s": 3600
+  },
+  "p_recorded_at": 1716825000
+}
+```
+
+### Virtual Channel Keys
+
+Virtual channels compute `V × I` from mapped sensor sources and appear as:
+- `ch0_V`, `ch0_I`, `ch0_P` — Virtual Channel 0
+- `ch1_V`, `ch1_I`, `ch1_P` — Virtual Channel 1
+- `ch2_V`, `ch2_I`, `ch2_P` — Virtual Channel 2
+- `ch3_V`, `ch3_I`, `ch3_P` — Virtual Channel 3
+
+### Spike Detection Keys
+
+When a spike is detected on INA3221 channels, additional fields appear:
+- `ina3221_i0_spike: true` — current spike on channel 0
+- `ina3221_v0_spike: true` — voltage spike on channel 0
+- `ina3221_i0_stddev: 0.012` — sample stddev of the last burst (mA)
+- `ina3221_v0_stddev: 0.008` — sample stddev of the last burst (mV)
+
+### Adaptive Retention
+
+A cron job runs `archive_and_purge_telemetry()` every 10 minutes. When `telemetry_live` exceeds 70% of 500MB (~350MB), oldest rows are deleted until the table reaches 65%. Devices with no telemetry in 24 hours are marked offline.
+
+---
+
+## Dashboard
+
+The React dashboard (in `ui/`) connects to both Supabase and the ESP32 via BLE.
+
+### Pages
+
+| Route | Description |
+|---|---|
+| `/dashboard` | Main view: VC cards, quick stats, power history chart, sensor controls, relay toggles |
+| `/channels` | Tabbed view: raw sensors (INA3221/INA226/ADS1115), virtual channel info, battery SoC per channel, relay config |
+| `/settings` | Configure channel names, virtual channel source mapping, battery profiles, voltage ratios, shunt resistors, BLE provisioning |
+| `/admin` | Device management: add/remove devices |
+| `/provisioning` | BLE device setup: WiFi, Supabase credentials, device key registration |
+
+### Dashboard Realtime Flow
+
+1. ESP32 publishes telemetry to `telemetry_live` every ~5s
+2. Supabase Realtime fires INSERT event
+3. `useRealtime()` hook in UI receives event and updates `latestReading`
+4. All dashboard components re-render with new values
+5. PowerHistoryChart accumulates up to 200 data points per range
+
+### Sensor Calibration Panel
+
+Below QuickStatsRow, the **Sensor Controls** panel provides:
+- **Run Baseline Calibration** — sends `calibrate_baseline` via `settings_commands`, polls `sensor_calibration_status` every 1s for progress (N/10), shows progress bar, "Done ✓" for 3s after completion
+- **Per-channel offsets** — V offset (mV, type 0) and I offset (mA, type 2) inputs with Set buttons for channels 0–2
+
+---
+
+## Calibration Guide
+
+### Baseline Noise Calibration
+
+Run when sensor wiring or environment changes — this recalculates the "quiet" stddev threshold for spike detection.
+
+```
+calibrate_baseline
+```
+
+Or via BLE: `{"cmd":"calibrate_baseline","pin":123456}`
+
+With nothing connected (or known-load only), run the command. After 10 ticks (~5 seconds):
+- Spike detection becomes active with new noise baseline
+- `sensor_calibration_status` shows `baseline_tick=10, calibrating=false`
+
+### Manual Zero Calibration
+
+If a channel reads a non-zero value with nothing connected, set the offset:
+
+1. Read the noisy zero with `sensors` command — note the current reading
+2. Set negative offset to cancel it:
+   ```
+   cal 0 2 -12.5   # CH0 current reads +12.5mA with nothing connected → set -12.5mA offset
+   ```
+3. Verify with `cal show` and re-read `sensors`
+4. The channel now reads ~0.000 when open
+
+### Voltage Gain Calibration
+
+With a known accurate voltage source (multimeter):
+1. Measure actual voltage at the sensor input
+2. Compare to what ESP32 reports
+3. Apply gain correction:
+   ```
+   cal 0 1 1.023   # reads 11.77V but actual is 12.05V → gain = 12.05/11.77 = 1.0238
+   ```
+
+### When to Run Baseline Calibration
+
+- After any wiring change to sensors
+- After moving the device to a different electrical environment
+- If spike detection becomes too sensitive or not sensitive enough
+- After factory reset (runs automatically on first 10 ticks anyway)
+
+---
+
+## Relay Logic
 
 | Topic | Direction | Payload |
 |---|---|---|
