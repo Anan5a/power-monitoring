@@ -60,6 +60,7 @@ static void networkTask(void* param) {
 
     for (;;) {
         loop_connectivity();
+        loop_ble_provisioner();
 
         // Drain sensor queue and publish
         while (xQueueReceive(g_sensor_queue, &data, 0) == pdTRUE) {

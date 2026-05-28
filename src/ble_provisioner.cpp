@@ -581,6 +581,8 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
     }
 }
 
+static bool ble_advertising_active = false;
+
 void init_ble_provisioner() {
     BLEDevice::init(BT_DEVICE_NAME);
     BLEServer* pServer = BLEDevice::createServer();
@@ -612,15 +614,28 @@ void init_ble_provisioner() {
     pSensorChar->addDescriptor(new BLE2902());
 
     pService->start();
+    // Don't start advertising yet — wait until WiFi is online
+    ble_advertising_active = false;
+    Serial.println("BLE server ready (advertising deferred)");
+}
+
+void start_ble_advertising() {
+    if (ble_advertising_active) return;
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
     pAdvertising->setScanResponse(true);
     pAdvertising->setMinPreferred(0x06);
     BLEDevice::startAdvertising();
-    Serial.println("BLE advertising as 'PowerMonitor'");
+    ble_advertising_active = true;
+    Serial.println("BLE advertising started");
 }
 
 void loop_ble_provisioner() {
+    // Lazy-start advertising if not yet active
+    if (!ble_advertising_active) {
+        start_ble_advertising();
+        return;
+    }
     if (!bleClientConnected || !pStatusChar) return;
     // Broadcast status every 10s
     static unsigned long last_status = 0;
