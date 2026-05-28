@@ -528,12 +528,14 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
     int rc = http.GET();
     bool ok = false;
     if (rc == 200) {
-        // Parse: [{"ble_pin":"123456"}] — find the value between the two quotes
+        // Parse: [{"ble_pin":"123456"}] — read into stack buffer, no String heap allocation
         char resp[64];
-        size_t resp_len = http.getString().length();
-        if (resp_len >= sizeof(resp)) resp_len = sizeof(resp) - 1;
-        strncpy(resp, http.getString().c_str(), sizeof(resp) - 1);
-        resp[sizeof(resp) - 1] = '\0';
+        size_t resp_len = 0;
+        WiFiClient* stream = http.getStreamPtr();
+        while (stream->available() && resp_len < sizeof(resp) - 1) {
+            resp[resp_len++] = stream->read();
+        }
+        resp[resp_len] = '\0';
         const char* needle = "\"ble_pin\":\"";
         const char* p = strstr(resp, needle);
         if (p) {
@@ -582,12 +584,20 @@ void check_settings_commands() {
     http.end();
 
     if (rc == 200) {
-        String resp_body = http.getString();
-        if (resp_body.length() == 0 || resp_body.startsWith("null")) return;
+        // Read into stack buffer — no String heap allocation
+        char resp_buf[512];
+        size_t resp_len = 0;
+        WiFiClient* stream = http.getStreamPtr();
+        while (stream->available() && resp_len < sizeof(resp_buf) - 1) {
+            resp_buf[resp_len++] = stream->read();
+        }
+        resp_buf[resp_len] = '\0';
+
+        if (resp_len == 0 || strncmp(resp_buf, "null", 4) == 0) return;
 
         // Expected: {"cmd_type":"set_wifi","payload":{...}}
         JsonDocument resp;
-        DeserializationError err = deserializeJson(resp, resp_body);
+        DeserializationError err = deserializeJson(resp, resp_buf);
         if (err) { Serial.println("[SETTINGS] parse error"); return; }
 
         const char* cmd_type = resp["cmd_type"] | "";

@@ -67,8 +67,8 @@ static bool check_pin(JsonDocument& doc) {
     if (expected == 0) return true; // no security
     // Accept PIN as number or as string (dashboard sends "123456" as JSON string)
     uint32_t provided = 0;
-    if (doc["pin"].is<String>()) {
-        provided = atoi(doc["pin"].as<String>().c_str());
+    if (doc["pin"].is<const char*>()) {
+        provided = atoi(doc["pin"].as<const char*>());
     } else {
         provided = doc["pin"] | 0;
     }
