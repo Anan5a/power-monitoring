@@ -26,6 +26,8 @@ bool log_is_full();
 // SPIFFS overflow management
 bool log_has_overflow_file();
 size_t log_overflow_file_size();
-void log_flush_overflow(); // attempt to send overflow file via network, then delete
+bool log_open_overflow_for_read();
+size_t log_read_overflow_chunk(uint8_t* buf, size_t len);
+void log_close_overflow();
 
 #endif

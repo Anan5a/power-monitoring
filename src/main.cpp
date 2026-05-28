@@ -70,9 +70,9 @@ static void networkTask(void* param) {
             publish_data_supabase(data);
         }
 
-        // Flush log batch if MQTT connected, and drain overflow file if one exists
+        // Flush log batch (RAM + SPIFFS overflow) if MQTT connected
         publish_log_batch();
-        log_flush_overflow();
+        // TODO: add Supabase overflow log drain here when endpoint is ready
 
         // Supabase settings poll every 30s
         if (millis() - last_settings_check >= 30000) {

@@ -62,7 +62,6 @@ static void write_bytes(const uint8_t* src, size_t n) {
         memcpy(buffer + head, src + first, n - first);
         head = (head + n - first) % LOG_BUFFER_BYTES;
     }
-    entry_count += n;
 }
 
 static bool can_fit(size_t n) {
@@ -77,6 +76,18 @@ void init_data_logger() {
     have_base = false;
     if (!SPIFFS.begin(true)) {
         Serial.println("SPIFFS init failed");
+    } else {
+        size_t total = SPIFFS.totalBytes();
+        size_t used = SPIFFS.usedBytes();
+        Serial.printf("SPIFFS ready: %u/%u bytes used (%.1f%% free)\n",
+                      used, total, (total - used) * 100.0f / total);
+        if (SPIFFS.exists(LOG_SPIFFS_FILE)) {
+            File f = SPIFFS.open(LOG_SPIFFS_FILE, FILE_READ);
+            if (f) {
+                Serial.printf("SPIFFS overflow file exists: %u bytes\n", f.size());
+                f.close();
+            }
+        }
     }
 }
 
@@ -131,15 +142,47 @@ void log_sample(const SensorData& data, uint32_t timestamp_ms) {
     // Fallback: if buffer full and network likely down, write to SPIFFS
     if (!can_fit(sizeof(DeltaEntry))) {
         if (WiFi.status() != WL_CONNECTED) {
-            File f = SPIFFS.open(LOG_SPIFFS_FILE, FILE_APPEND);
-            if (f) {
-                size_t to_write = (head >= tail) ? (head - tail) : (LOG_BUFFER_BYTES - tail);
-                if (to_write > 0) {
-                    f.write(buffer + tail, to_write);
-                    tail = head; // consume all
-                    entry_count = 0;
+            size_t spiffs_total = SPIFFS.totalBytes();
+            size_t spiffs_used  = SPIFFS.usedBytes();
+            if (spiffs_used >= spiffs_total || (spiffs_total - spiffs_used) < 4096) {
+                Serial.println("[SPIFFS] full, dropping oldest batch");
+                tail = head;
+                entry_count = 0;
+            } else {
+                File f = SPIFFS.open(LOG_SPIFFS_FILE, FILE_APPEND);
+                if (f) {
+                    bool ok = true;
+                    size_t written = 0;
+                    if (head >= tail) {
+                        size_t n = head - tail;
+                        if (n > 0) {
+                            size_t w = f.write(buffer + tail, n);
+                            if (w != n) ok = false;
+                            written += w;
+                        }
+                    } else {
+                        size_t n1 = LOG_BUFFER_BYTES - tail;
+                        if (n1 > 0) {
+                            size_t w1 = f.write(buffer + tail, n1);
+                            if (w1 != n1) ok = false;
+                            written += w1;
+                            if (ok && head > 0) {
+                                size_t w2 = f.write(buffer, head);
+                                if (w2 != head) ok = false;
+                                written += w2;
+                            }
+                        }
+                    }
+                    f.close();
+                    if (ok) {
+                        tail = head;
+                        entry_count = 0;
+                    } else {
+                        Serial.printf("[SPIFFS] partial write %u bytes, keeping buffer\n", written);
+                    }
+                } else {
+                    Serial.println("[SPIFFS] open failed for log append");
                 }
-                f.close();
             }
         }
     }
@@ -181,9 +224,24 @@ size_t log_overflow_file_size() {
     if (f) f.close();
     return s;
 }
-void log_flush_overflow() {
-    if (!SPIFFS.exists(LOG_SPIFFS_FILE)) return;
-    // In practice: read file in chunks, base64 encode, publish to MQTT topic "power-monitor/logbin"
-    // Then delete the file.
-    SPIFFS.remove(LOG_SPIFFS_FILE);
+
+static File g_overflow_file;
+
+bool log_open_overflow_for_read() {
+    if (!SPIFFS.exists(LOG_SPIFFS_FILE)) return false;
+    g_overflow_file = SPIFFS.open(LOG_SPIFFS_FILE, FILE_READ);
+    return g_overflow_file;
+}
+
+size_t log_read_overflow_chunk(uint8_t* buf, size_t len) {
+    if (!g_overflow_file) return 0;
+    return g_overflow_file.read(buf, len);
+}
+
+void log_close_overflow() {
+    if (g_overflow_file) {
+        g_overflow_file.close();
+        SPIFFS.remove(LOG_SPIFFS_FILE);
+        g_overflow_file = File();
+    }
 }

@@ -180,11 +180,26 @@ void publish_log_batch() {
     if (!settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) return;
     if (!mqtt.connected()) return;
     uint8_t batch[512];
-    size_t batch_len = log_pop_batch(batch, sizeof(batch));
-    if (batch_len == 0) return;
     char encoded[700];
-    base64_encode(batch, batch_len, encoded);
-    mqtt.publish(MQTT_LOG_TOPIC, encoded);
+
+    // Drain RAM buffer first
+    size_t batch_len = log_pop_batch(batch, sizeof(batch));
+    while (batch_len > 0) {
+        base64_encode(batch, batch_len, encoded);
+        mqtt.publish(MQTT_LOG_TOPIC, encoded);
+        batch_len = log_pop_batch(batch, sizeof(batch));
+    }
+
+    // Then drain SPIFFS overflow file
+    if (log_open_overflow_for_read()) {
+        while (true) {
+            size_t n = log_read_overflow_chunk(batch, sizeof(batch));
+            if (n == 0) break;
+            base64_encode(batch, n, encoded);
+            mqtt.publish(MQTT_LOG_TOPIC, encoded);
+        }
+        log_close_overflow();
+    }
 }
 
 static JsonDocument g_pub_doc;
