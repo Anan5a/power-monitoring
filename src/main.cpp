@@ -54,6 +54,7 @@ static void networkTask(void* param) {
     Serial.println("[Network] task started on Core 0");
 
     init_connectivity();
+    init_ble_provisioner();  // BLE server created AFTER WiFi init to avoid IRAM conflict
 
     unsigned long last_settings_check = 0;
     SensorData data;
@@ -581,8 +582,8 @@ void setup() {
     init_data_logger();
     init_coulomb_counter();
     init_relays();
-    init_ble_provisioner();
-    init_serial1();
+    // BLE init deferred — done lazily inside network task after WiFi connects
+    // (BT controller IRAM allocation must happen after WiFi init to avoid ESP_ERR_NO_MEM)
 
     init_core_shared();
 
