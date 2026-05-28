@@ -4,6 +4,7 @@
 #include "data_logger.h"
 #include "ble_provisioner.h"
 #include "coulomb_counter.h"
+#include "energy_counter.h"
 #include "sensor_manager.h"
 #include <WiFi.h>
 #define MQTT_MAX_PACKET_SIZE 1024
@@ -480,6 +481,8 @@ void publish_data_supabase(const SensorData& data) {
         char key[16];
         snprintf(key, sizeof(key), "coulomb_mah%d", i);
         payload[key] = get_coulomb_mAh(i);
+        snprintf(key, sizeof(key), "energy_wh%d", i);
+        payload[key] = get_energy_Wh(i);
     }
     for (uint8_t i = 0; i < 4; i++) {
         BatteryConfig bat;

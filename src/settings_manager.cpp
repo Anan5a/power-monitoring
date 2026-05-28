@@ -131,6 +131,17 @@ void settings_save_coulomb_mAh(uint8_t channel, float mAh) {
     prefs.putFloat(key, mAh);
 }
 
+float settings_load_energy_Wh(uint8_t channel) {
+    char key[16];
+    snprintf(key, sizeof(key), "enwh_%d", channel);
+    return prefs.getFloat(key, 0.0f);
+}
+void settings_save_energy_Wh(uint8_t channel, float wh) {
+    char key[16];
+    snprintf(key, sizeof(key), "enwh_%d", channel);
+    prefs.putFloat(key, wh);
+}
+
 bool settings_load_battery(uint8_t channel, BatteryConfig* out) {
     char key[16];
     snprintf(key, sizeof(key), "bat_%d", channel);

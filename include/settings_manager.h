@@ -93,6 +93,9 @@ void settings_save_channel_calibration(const ChannelCalibration* in);
 float settings_load_coulomb_mAh(uint8_t channel);
 void settings_save_coulomb_mAh(uint8_t channel, float mAh);
 
+float settings_load_energy_Wh(uint8_t channel);
+void settings_save_energy_Wh(uint8_t channel, float wh);
+
 bool settings_load_battery(uint8_t channel, BatteryConfig* out);
 void settings_save_battery(uint8_t channel, const BatteryConfig* in);
 

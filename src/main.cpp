@@ -8,6 +8,7 @@
 #include "connectivity_manager.h"
 #include "data_logger.h"
 #include "coulomb_counter.h"
+#include "energy_counter.h"
 #include "relay_controller.h"
 #include "settings_manager.h"
 #include "ble_provisioner.h"
@@ -30,6 +31,7 @@ static void print_status() {
     Serial.printf("IP: %s | Entries: %lu | Overflow: %d\n", get_local_ip_str(), log_entries_count(), log_has_overflow_file());
     for (int ch = 0; ch < 4; ch++) {
         float mAh = get_coulomb_mAh(ch);
+        float wh = get_energy_Wh(ch);
         BatteryConfig bat;
         float soc = -1;
         if (settings_load_battery(ch, &bat) && bat.capacity_mAh > 0.001f) {
@@ -38,9 +40,9 @@ static void print_status() {
             if (soc > 100) soc = 100;
         }
         if (soc >= 0) {
-            Serial.printf("Ch%d: %.1fmAh SoC:%.1f%%\n", ch, mAh, soc);
+            Serial.printf("Ch%d: %.1fmAh %.2fWh SoC:%.1f%%\n", ch, mAh, wh, soc);
         } else {
-            Serial.printf("Ch%d: %.1fmAh\n", ch, mAh);
+            Serial.printf("Ch%d: %.1fmAh %.2fWh\n", ch, mAh, wh);
         }
     }
 }
@@ -102,6 +104,7 @@ static void sensorTask(void* param) {
         push_sensor_data(data);
         log_sample(data, millis());
         update_coulomb_counter(data, 1.0f);
+        update_energy_counter(data, 1.0f);
         evaluate_relays(data);
 
         // OLED display update every 5s
@@ -157,6 +160,12 @@ static void handle_serial_cli() {
                 if (sscanf(line, "reset coulomb %d", &ch) == 1 && ch >= 0 && ch <= 3) {
                     reset_coulomb_counter(ch);
                     Serial.printf("Coulomb counter ch%d reset\n", ch);
+                }
+            } else if (strncmp(line, "reset energy ", 13) == 0) {
+                int ch;
+                if (sscanf(line, "reset energy %d", &ch) == 1 && ch >= 0 && ch <= 3) {
+                    reset_energy_counter(ch);
+                    Serial.printf("Energy counter ch%d reset\n", ch);
                 }
             } else if (strncmp(line, "test relay ", 11) == 0) {
                 int idx;
@@ -536,7 +545,7 @@ static void handle_serial_cli() {
 #endif
             } else if (strcmp(line, "help") == 0) {
                 Serial.println("Commands:");
-                Serial.println("  status              — IP, log entries, coulomb/SoC");
+                Serial.println("  status              — IP, log entries, coulomb/energy/SoC");
                 Serial.println("  mem                 — free heap bytes, CPU temperature");
                 Serial.println("  sensors             — all sensor readings");
                 Serial.println("  relay status        — relay GPIO states");
@@ -552,6 +561,7 @@ static void handle_serial_cli() {
                 Serial.println("  relay auto off      — disable auto-trip");
                 Serial.println("  factory_reset       — wipe all NVS settings, reboot");
                 Serial.println("  reset coulomb N     — reset coulomb counter CH N");
+                Serial.println("  reset energy N      — reset energy counter CH N");
                 Serial.println("  flush log           — flush RAM log buffer");
                 Serial.println("  i2c_scan            — scan I2C bus for devices");
                 Serial.println("  shunt N ohms        — set shunt resistance for CH N (0 clears)");
@@ -596,6 +606,7 @@ void setup() {
     log_set_epoch(get_epoch_time());
     init_data_logger();
     init_coulomb_counter();
+    init_energy_counter();
     init_relays();
     init_core_shared();
 
