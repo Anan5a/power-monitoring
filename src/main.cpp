@@ -54,7 +54,8 @@ static void networkTask(void* param) {
     Serial.println("[Network] task started on Core 0");
 
     init_connectivity();
-    init_ble_provisioner();  // BLE server created AFTER WiFi init to avoid IRAM conflict
+    // BLE server already created in setup(); just start advertising if not yet
+    start_ble_advertising();
 
     unsigned long last_settings_check = 0;
     SensorData data;
@@ -582,10 +583,8 @@ void setup() {
     init_data_logger();
     init_coulomb_counter();
     init_relays();
-    // BLE init deferred — done lazily inside network task after WiFi connects
-    // (BT controller IRAM allocation must happen after WiFi init to avoid ESP_ERR_NO_MEM)
-
     init_core_shared();
+    init_ble_provisioner();  // BLE stack init in setup() before WiFi; original crash was ESP_ERR_NO_MEM which may have other causes
 
     xTaskCreatePinnedToCore(networkTask, "Network", 6144, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(sensorTask,    "Sensor",   12288, NULL, 10, NULL, 1);
