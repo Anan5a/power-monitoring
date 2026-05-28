@@ -546,13 +546,17 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
     bool ok = false;
     if (rc == 200) {
         // Parse: [{"ble_pin":"123456"}] — find the value between the two quotes
-        const char* response = http.getString().c_str();
+        char resp[64];
+        size_t resp_len = http.getString().length();
+        if (resp_len >= sizeof(resp)) resp_len = sizeof(resp) - 1;
+        strncpy(resp, http.getString().c_str(), sizeof(resp) - 1);
+        resp[sizeof(resp) - 1] = '\0';
         const char* needle = "\"ble_pin\":\"";
-        const char* p = strstr(response, needle);
+        const char* p = strstr(resp, needle);
         if (p) {
             p += strlen(needle);
             char* q = strchr(p, '"');
-            if (q && (size_t)(q - p) < len) {
+            if (q && (size_t)(q - p) < (int)len) {
                 memcpy(pin_str, p, q - p);
                 pin_str[q - p] = '\0';
                 ok = pin_str[0] != '\0';
@@ -595,9 +599,8 @@ void check_settings_commands() {
     http.end();
 
     if (rc == 200) {
-        const char* resp_body = http.getString().c_str();
-        // null or empty response means no pending command
-        if (resp_body == nullptr || resp_body[0] == '\0' || strncmp(resp_body, "null", 4) == 0) return;
+        String resp_body = http.getString();
+        if (resp_body.length() == 0 || resp_body.startsWith("null")) return;
 
         // Expected: {"cmd_type":"set_wifi","payload":{...}}
         JsonDocument resp;

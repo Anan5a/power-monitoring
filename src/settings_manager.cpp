@@ -10,8 +10,8 @@ void init_settings() {
 
 bool settings_load_wifi(char* ssid, char* pass, size_t buf_len) {
     if (!prefs.isKey("wifi_ssid")) return false;
-    strlcpy(ssid, prefs.getString("wifi_ssid", "").c_str(), buf_len);
-    strlcpy(pass, prefs.getString("wifi_pass", "").c_str(), buf_len);
+    prefs.getString("wifi_ssid", ssid, buf_len);
+    prefs.getString("wifi_pass", pass, buf_len);
     return true;
 }
 void settings_save_wifi(const char* ssid, const char* pass) {
@@ -21,9 +21,9 @@ void settings_save_wifi(const char* ssid, const char* pass) {
 
 bool settings_load_mqtt(char* broker, uint16_t* port, char* topic, size_t buf_len) {
     if (!prefs.isKey("mqtt_broker")) return false;
-    strlcpy(broker, prefs.getString("mqtt_broker", "").c_str(), buf_len);
+    prefs.getString("mqtt_broker", broker, buf_len);
     *port = prefs.getUShort("mqtt_port", 1883);
-    strlcpy(topic, prefs.getString("mqtt_topic", "").c_str(), buf_len);
+    prefs.getString("mqtt_topic", topic, buf_len);
     return true;
 }
 void settings_save_mqtt(const char* broker, uint16_t port, const char* topic) {
@@ -34,8 +34,8 @@ void settings_save_mqtt(const char* broker, uint16_t port, const char* topic) {
 
 bool settings_load_http_endpoint(char* url, char* auth_token, size_t buf_len) {
     if (!prefs.isKey("http_url")) return false;
-    strlcpy(url, prefs.getString("http_url", "").c_str(), buf_len);
-    strlcpy(auth_token, prefs.getString("http_token", "").c_str(), buf_len);
+    prefs.getString("http_url", url, buf_len);
+    prefs.getString("http_token", auth_token, buf_len);
     return true;
 }
 void settings_save_http_endpoint(const char* url, const char* auth_token) {
@@ -51,7 +51,7 @@ void settings_save_http_enabled(bool enabled) {
 
 bool settings_load_supabase_url(char* url, size_t buf_len) {
     if (!prefs.isKey("supa_url")) return false;
-    strlcpy(url, prefs.getString("supa_url", "").c_str(), buf_len);
+    prefs.getString("supa_url", url, buf_len);
     return true;
 }
 void settings_save_supabase_url(const char* url) {
@@ -59,7 +59,7 @@ void settings_save_supabase_url(const char* url) {
 }
 bool settings_load_supabase_anon_key(char* key, size_t buf_len) {
     if (!prefs.isKey("supa_anon")) return false;
-    strlcpy(key, prefs.getString("supa_anon", "").c_str(), buf_len);
+    prefs.getString("supa_anon", key, buf_len);
     return true;
 }
 void settings_save_supabase_anon_key(const char* key) {
@@ -67,7 +67,7 @@ void settings_save_supabase_anon_key(const char* key) {
 }
 bool settings_load_supabase_api_key(char* key, size_t buf_len) {
     if (!prefs.isKey("supa_api")) return false;
-    strlcpy(key, prefs.getString("supa_api", "").c_str(), buf_len);
+    prefs.getString("supa_api", key, buf_len);
     return true;
 }
 void settings_save_supabase_api_key(const char* key) {
@@ -75,7 +75,7 @@ void settings_save_supabase_api_key(const char* key) {
 }
 bool settings_load_supabase_device_key(char* key, size_t buf_len) {
     if (!prefs.isKey("supa_dev")) return false;
-    strlcpy(key, prefs.getString("supa_dev", "").c_str(), buf_len);
+    prefs.getString("supa_dev", key, buf_len);
     return true;
 }
 void settings_save_supabase_device_key(const char* key) {
@@ -182,7 +182,7 @@ bool settings_load_channel_name(uint8_t channel, char* out, size_t buf_len) {
     char key[16];
     snprintf(key, sizeof(key), "chan_name_%d", channel);
     if (!prefs.isKey(key)) return false;
-    strlcpy(out, prefs.getString(key, "").c_str(), buf_len);
+    prefs.getString(key, out, buf_len);
     return true;
 }
 void settings_save_channel_name(uint8_t channel, const char* name) {

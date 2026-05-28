@@ -53,10 +53,16 @@ static inline size_t free_space() {
 }
 
 static void write_bytes(const uint8_t* src, size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        buffer[head] = src[i];
-        head = next_pos(head, 1);
+    size_t avail = (head >= tail) ? LOG_BUFFER_BYTES - (head - tail) - 1 : tail - head - 1;
+    if (n > avail) n = avail;
+    size_t first = (head + n >= LOG_BUFFER_BYTES) ? LOG_BUFFER_BYTES - head : n;
+    memcpy(buffer + head, src, first);
+    head = (head + first) % LOG_BUFFER_BYTES;
+    if (n > first) {
+        memcpy(buffer + head, src + first, n - first);
+        head = (head + n - first) % LOG_BUFFER_BYTES;
     }
+    entry_count += n;
 }
 
 static bool can_fit(size_t n) {
