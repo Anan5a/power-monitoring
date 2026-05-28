@@ -8,7 +8,8 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
-#include <BlynkSimpleEsp32.h>
+// #include <BlynkSimpleEsp32.h> // Blynk disabled
+// Blynk disabled — uncomment above and set BLYNK_AUTH_TOKEN to enable
 #include <HTTPClient.h>
 #include <time.h>
 
@@ -131,16 +132,8 @@ void init_connectivity() {
         Serial.println("MQTT: not configured (skip)");
     }
 
-    if (strcmp(BLYNK_AUTH_TOKEN, "YOUR_BLYNK_TOKEN") != 0) {
-        Blynk.config(BLYNK_AUTH_TOKEN);
-        if (Blynk.connect()) {
-            Serial.println("Blynk connected");
-        } else {
-            Serial.println("Blynk connect failed");
-        }
-    } else {
-        Serial.println("Blynk: not configured (skip)");
-    }
+    // Blynk disabled — uncomment lib_deps in platformio.ini and set BLYNK_AUTH_TOKEN to enable
+    // if (strcmp(BLYNK_AUTH_TOKEN, "YOUR_BLYNK_TOKEN") != 0) { ... }
 }
 
 void loop_connectivity() {
@@ -157,9 +150,6 @@ void loop_connectivity() {
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
         if (!mqtt.connected()) connect_mqtt();
         mqtt.loop();
-    }
-    if (strcmp(BLYNK_AUTH_TOKEN, "YOUR_BLYNK_TOKEN") != 0) {
-        Blynk.run();
     }
 }
 
@@ -259,14 +249,7 @@ void publish_data(const SensorData& data) {
 
     publish_data_http(data, buffer, len);
 
-#if ENABLE_INA226
-    Blynk.virtualWrite(V0, data.ina3221_busV[0]);
-    Blynk.virtualWrite(V1, data.ina3221_current[0]);
-    Blynk.virtualWrite(V2, data.ina226_busV);
-    Blynk.virtualWrite(V3, data.ina226_current);
-    Blynk.virtualWrite(V4, data.ina226_power);
-    Blynk.virtualWrite(V5, data.ads1115_volts[0]);
-#endif
+    // Blynk virtual writes disabled — enable via platformio.ini lib_deps
 
     ble_notify_sensor_data(buffer, len);
 }
