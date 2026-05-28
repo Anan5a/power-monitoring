@@ -6,17 +6,15 @@
 #include "coulomb_counter.h"
 #include "connectivity_manager.h"
 #include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include <NimBLEDevice.h>
 #include <ArduinoJson.h>
 
-static BLECharacteristic* pCmdChar = nullptr;
-static BLECharacteristic* pRespChar = nullptr;
-static BLECharacteristic* pStatusChar = nullptr;
-static BLECharacteristic* pSensorChar = nullptr;
+static NimBLECharacteristic* pCmdChar = nullptr;
+static NimBLECharacteristic* pRespChar = nullptr;
+static NimBLECharacteristic* pStatusChar = nullptr;
+static NimBLECharacteristic* pSensorChar = nullptr;
 static bool bleClientConnected = false;
+static bool ble_initialized = false;
 
 // Rate limiting: track commands per connection window
 #define RATE_WINDOW_MS    10000   // 10-second window
@@ -29,22 +27,22 @@ static void handle_command(const char* json);
 
 static bool ble_advertising_active = false;
 
-class ProvServerCallbacks : public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
+class ProvServerCallbacks : public NimBLEServerCallbacks {
+    void onConnect(NimBLEServer* pServer) {
         bleClientConnected = true;
         rate_window_start = millis();
         rate_cmd_count = 0;
     }
-    void onDisconnect(BLEServer* pServer) {
+    void onDisconnect(NimBLEServer* pServer) {
         bleClientConnected = false;
         // Do NOT null out characteristic pointers — the server still owns them.
-        // Do NOT call BLEDevice::startAdvertising() directly — it bypasses the guard and leaks.
+        // Do NOT call NimBLEDevice::startAdvertising() directly — it bypasses the guard and leaks.
         ble_advertising_active = false;  // Reset guard so loop_ble_provisioner() restarts cleanly
     }
 };
 
-class CmdCallbacks : public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic* pCharacteristic) {
+class CmdCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* pCharacteristic) {
         std::string val = pCharacteristic->getValue();
         Serial.printf("[BLE] onWrite len=%d\n", val.length());
         if (val.empty()) return;
@@ -580,53 +578,73 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
 }
 
 void init_ble_provisioner() {
-    BLEDevice::init(BT_DEVICE_NAME);
-    BLEServer* pServer = BLEDevice::createServer();
+    if (ble_initialized) return;
+    NimBLEDevice::init(BT_DEVICE_NAME);
+    NimBLEServer* pServer = NimBLEDevice::createServer();
     pServer->setCallbacks(new ProvServerCallbacks());
-    BLEService* pService = pServer->createService(BLE_SERVICE_UUID);
+    NimBLEService* pService = pServer->createService(BLE_SERVICE_UUID);
 
     pCmdChar = pService->createCharacteristic(
         BLE_CHAR_CMD_UUID,
-        BLECharacteristic::PROPERTY_WRITE
+        NIMBLE_PROPERTY::WRITE
     );
     pCmdChar->setCallbacks(new CmdCallbacks());
 
     pRespChar = pService->createCharacteristic(
         BLE_CHAR_RESP_UUID,
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
     );
-    pRespChar->addDescriptor(new BLE2902());
 
     pStatusChar = pService->createCharacteristic(
         BLE_CHAR_STATUS_UUID,
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
     );
-    pStatusChar->addDescriptor(new BLE2902());
 
     pSensorChar = pService->createCharacteristic(
         BLE_CHARACTERISTIC_UUID,
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
     );
-    pSensorChar->addDescriptor(new BLE2902());
 
     pService->start();
     // Don't start advertising yet — wait until WiFi is online
     ble_advertising_active = false;
+    ble_initialized = true;
     Serial.println("BLE server ready (advertising deferred)");
 }
 
 void start_ble_advertising() {
-    if (ble_advertising_active) return;
-    BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+    if (!ble_initialized || ble_advertising_active) return;
+    NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
     pAdvertising->setScanResponse(true);
     pAdvertising->setMinPreferred(0x06);
-    BLEDevice::startAdvertising();
+    NimBLEDevice::startAdvertising();
     ble_advertising_active = true;
     Serial.println("BLE advertising started");
 }
 
+void stop_ble_advertising() {
+    if (!ble_initialized || !ble_advertising_active) return;
+    NimBLEDevice::stopAdvertising();
+    ble_advertising_active = false;
+    Serial.println("BLE advertising stopped");
+}
+
+void deinit_ble_provisioner() {
+    if (!ble_initialized) return;
+    stop_ble_advertising();
+    NimBLEDevice::deinit(true);
+    ble_initialized = false;
+    bleClientConnected = false;
+    pCmdChar = nullptr;
+    pRespChar = nullptr;
+    pStatusChar = nullptr;
+    pSensorChar = nullptr;
+    Serial.printf("BLE deinit'd — freed ~50KB heap (free=%u)\n", ESP.getFreeHeap());
+}
+
 void loop_ble_provisioner() {
+    if (!ble_initialized) return;
     // Lazy-start advertising if not yet active
     if (!ble_advertising_active) {
         start_ble_advertising();
@@ -649,7 +667,7 @@ void loop_ble_provisioner() {
 }
 
 void ble_notify_sensor_data(const char* data, size_t len) {
-    if (bleClientConnected && pSensorChar) {
+    if (ble_initialized && bleClientConnected && pSensorChar) {
         pSensorChar->setValue((uint8_t*)data, len);
         pSensorChar->notify();
     }

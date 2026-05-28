@@ -6,6 +6,8 @@
 
 void init_ble_provisioner();    // create server/service/chars, no advertising
 void start_ble_advertising();   // begin BLE advertising (call after WiFi is up)
+void stop_ble_advertising();    // stop BLE advertising
+void deinit_ble_provisioner();  // tear down NimBLE stack — frees ~50KB heap
 void loop_ble_provisioner();
 void ble_notify_sensor_data(const char* data, size_t len);
 void sync_ble_pin_to_supabase();

@@ -82,6 +82,8 @@ static void connect_wifi() {
     IPAddress ip = WiFi.localIP();
     snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
     Serial.println("\nWiFi connected");
+    // BLE only needed for provisioning; tear down NimBLE stack to free ~50KB heap
+    deinit_ble_provisioner();
     sync_time();
     sync_calibration_to_supabase();
 }
