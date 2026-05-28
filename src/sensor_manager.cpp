@@ -181,7 +181,8 @@ SensorData read_sensors() {
         g_meta[ch + 3] = {sd, spike};
 
         float cal_mv = (med + cal.volt_offset_mv[ch]) * cal.volt_gain[ch];
-        d.ads1115_volts[ch] = cal_mv / 1000.0f * volt_ratios[ch];
+        d.ina3221_busV[ch] = cal_mv / 1000.0f * volt_ratios[ch];
+        d.ads1115_volts[ch] = d.ina3221_busV[ch];
     }
 #else
     for (uint8_t ch = 0; ch < 3; ch++) {

@@ -27,7 +27,7 @@ void update_coulomb_counter(const SensorData& data, float dt_seconds) {
 
     for (uint8_t ch = 0; ch < 4; ch++) {
         int8_t direction = (shunt_v[ch] > 0.0f) ? 1 : -1;  // pos shunt = charging = +mAh
-        accumulated_mAh[ch] += currents[ch] * dt_seconds / 3600.0f * (float)direction;
+        accumulated_mAh[ch] += currents[ch] * dt_seconds / 3600.0f * 1000.0f * (float)direction;
     }
     if (millis() - last_persist_ms >= 300000) {
         for (uint8_t ch = 0; ch < 4; ch++) settings_save_coulomb_mAh(ch, accumulated_mAh[ch]);
