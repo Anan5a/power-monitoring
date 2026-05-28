@@ -230,8 +230,8 @@ static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v,
 #if ENABLE_INA226
     payload["ina226_v"] = v[3] / 1000.0f;
     payload["ina226_i"] = i[3] / 1000.0f;
-    payload["ina226_p"] = p[3] / 1000.0f;
-    payload["ch3_P"] = p[3] / 1000.0f;
+    payload["ina226_p"] = p[3] / 1.0f;
+    payload["ch3_P"] = p[3] / 1.0f;
 #endif
 
     payload["log_entries"] = log_entries_count();

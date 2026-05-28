@@ -69,7 +69,7 @@
 #define LOG_SPIFFS_FILE       "/log_overflow.bin"
 #define LOG_MAX_DELTA_MV      32760
 #define LOG_MAX_DELTA_MA      32760
-#define LOG_MAX_DELTA_MW      32760
+#define LOG_MAX_DELTA_POWER   32760
 
 // Relay GPIO defaults
 #define RELAY_1_GPIO    25

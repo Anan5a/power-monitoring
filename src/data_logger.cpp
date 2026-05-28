@@ -87,10 +87,10 @@ void log_sample(const SensorData& data, uint32_t timestamp_ms) {
         (int16_t)(data.ina226_current * 1000)
     };
     int16_t p[4] = {
-        (int16_t)(data.ina3221_busV[0] * data.ina3221_current[0] * 1000),
-        (int16_t)(data.ina3221_busV[1] * data.ina3221_current[1] * 1000),
-        (int16_t)(data.ina3221_busV[2] * data.ina3221_current[2] * 1000),
-        (int16_t)(data.ina226_power * 1000)
+        (int16_t)(data.ina3221_busV[0] * data.ina3221_current[0]),
+        (int16_t)(data.ina3221_busV[1] * data.ina3221_current[1]),
+        (int16_t)(data.ina3221_busV[2] * data.ina3221_current[2]),
+        (int16_t)(data.ina226_power)
     };
 
     if (!have_base) {
@@ -103,7 +103,7 @@ void log_sample(const SensorData& data, uint32_t timestamp_ms) {
         bool overflow = false;
         for (int ch = 0; ch < 4; ch++) {
             dv[ch] = v[ch] - last_v[ch]; di[ch] = i[ch] - last_i[ch]; dp[ch] = p[ch] - last_p[ch];
-            if (abs(dv[ch]) > LOG_MAX_DELTA_MV || abs(di[ch]) > LOG_MAX_DELTA_MA || abs(dp[ch]) > LOG_MAX_DELTA_MW)
+            if (abs(dv[ch]) > LOG_MAX_DELTA_MV || abs(di[ch]) > LOG_MAX_DELTA_MA || abs(dp[ch]) > LOG_MAX_DELTA_POWER)
                 overflow = true;
         }
         uint16_t dt = (uint16_t)(timestamp_ms - last_ts);
@@ -191,7 +191,7 @@ bool log_peek_latest(LogSnapshot* out) {
     for (int ch = 0; ch < 4; ch++) {
         out->voltage[ch] = last_v[ch] / 1000.0f;
         out->current[ch] = last_i[ch] / 1000.0f;
-        out->power[ch]   = last_p[ch] / 1000.0f;
+        out->power[ch]   = last_p[ch] / 1.0f;
     }
     return true;
 }
