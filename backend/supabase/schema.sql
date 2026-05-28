@@ -409,3 +409,76 @@ begin
     return jsonb_build_object('cmd_type', cmd_row.cmd_type, 'payload', cmd_row.payload);
 end;
 $$;
+
+---------------------------------------------------------------
+-- Hourly energy aggregation: snapshot cumulative Wh per device per hour
+-- Takes the latest energy_wh* values from telemetry_live each hour
+-- Dashboard computes deltas by subtracting previous hour
+---------------------------------------------------------------
+create table public.energy_hourly (
+    device_key text not null references public.devices(device_key) on delete cascade,
+    hour timestamptz not null,
+    energy_wh0 float default 0,
+    energy_wh1 float default 0,
+    energy_wh2 float default 0,
+    energy_wh3 float default 0,
+    primary key (device_key, hour)
+);
+
+create index idx_energy_hourly_device_hour on public.energy_hourly (device_key, hour desc);
+
+alter table public.energy_hourly enable row level security;
+grant select, insert, update on public.energy_hourly to authenticated;
+
+-- Users read their own device energy data
+create policy "own_energy_select" on public.energy_hourly
+    for select to authenticated
+    using (
+        exists (
+            select 1 from public.devices d
+            join public.profiles p on p.id = d.user_id
+            where d.device_key = energy_hourly.device_key
+              and p.id = auth.uid()
+        )
+    );
+
+-- Cron: snapshot latest energy values every hour at :05
+create or replace function public.snapshot_hourly_energy()
+returns void language plpgsql security definer as $$
+declare
+    rec record;
+    bucket timestamptz := date_trunc('hour', now());
+begin
+    for rec in
+        select distinct on (device_id) device_id, payload, recorded_at
+        from public.telemetry_live
+        where recorded_at >= bucket - interval '1 hour'
+          and recorded_at < bucket + interval '1 hour'
+        order by device_id, recorded_at desc
+    loop
+        insert into public.energy_hourly (device_key, hour, energy_wh0, energy_wh1, energy_wh2, energy_wh3)
+        values (
+            rec.device_id,
+            bucket,
+            coalesce((rec.payload->>'energy_wh0')::float, 0),
+            coalesce((rec.payload->>'energy_wh1')::float, 0),
+            coalesce((rec.payload->>'energy_wh2')::float, 0),
+            coalesce((rec.payload->>'energy_wh3')::float, 0)
+        )
+        on conflict (device_key, hour) do update set
+            energy_wh0 = excluded.energy_wh0,
+            energy_wh1 = excluded.energy_wh1,
+            energy_wh2 = excluded.energy_wh2,
+            energy_wh3 = excluded.energy_wh3;
+    end loop;
+end;
+$$;
+
+select cron.schedule(
+    'hourly-energy-snapshot',
+    '5 * * * *',  -- 5 min past each hour (gives telemetry time to arrive)
+    'select public.snapshot_hourly_energy()'
+);
+
+-- Add energy_hourly to realtime publication
+alter publication supabase_realtime add table public.energy_hourly;
