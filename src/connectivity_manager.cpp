@@ -304,7 +304,7 @@ static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
 }
 
 void publish_log_batch_supabase() {
-    if (ESP.getFreeHeap() < 8192) {
+    if (ESP.getFreeHeap() < 12288) {
         Serial.println("[WARN] Low heap, skipping Supabase log publish");
         return;
     }
@@ -314,53 +314,91 @@ void publish_log_batch_supabase() {
     if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
     if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
 
-    // --- Drain RAM buffer one entry at a time ---
-    uint8_t batch[sizeof(BaseEntry)];
-    int16_t ram_v[4] = {0}, ram_i[4] = {0}, ram_p[4] = {0};
-    uint32_t ram_ts = 0;
-    bool ram_have = false;
-    size_t batch_len = log_pop_batch(batch, sizeof(batch));
-    while (batch_len > 0) {
-        decode_and_send_log_entries(batch, batch_len, supabase_url, anon_key, device_key, api_key,
+    // Static state machine: drains 1 entry per call to spread heap load
+    static enum { ST_RAM, ST_SPIFFS, ST_DONE } state = ST_RAM;
+    static int16_t ram_v[4] = {0}, ram_i[4] = {0}, ram_p[4] = {0};
+    static uint32_t ram_ts = 0;
+    static bool ram_have = false;
+    static uint8_t ram_carry[sizeof(BaseEntry)];
+    static size_t ram_carry_len = 0;
+    static int16_t spiffs_v[4] = {0}, spiffs_i[4] = {0}, spiffs_p[4] = {0};
+    static uint32_t spiffs_ts = 0;
+    static bool spiffs_have = false;
+    static uint8_t spiffs_carry[sizeof(BaseEntry)];
+    static size_t spiffs_carry_len = 0;
+    static bool spiffs_file_open = false;
+
+    if (state == ST_RAM) {
+        uint8_t chunk[sizeof(BaseEntry)];
+        size_t n = log_pop_batch(chunk, sizeof(chunk));
+        if (n == 0) {
+            state = ST_SPIFFS;
+            return;
+        }
+        // Prepend carry
+        uint8_t work[sizeof(BaseEntry) * 2];
+        memcpy(work, ram_carry, ram_carry_len);
+        memcpy(work + ram_carry_len, chunk, n);
+        size_t work_len = ram_carry_len + n;
+
+        size_t consumed = decode_and_send_log_entries(work, work_len, supabase_url, anon_key, device_key, api_key,
             ram_v, ram_i, ram_p, &ram_ts, &ram_have);
-        batch_len = log_pop_batch(batch, sizeof(batch));
+
+        ram_carry_len = work_len - consumed;
+        if (ram_carry_len > 0) {
+            memcpy(ram_carry, work + consumed, ram_carry_len);
+        }
+        // Only sent 1 entry; return to let heap recover
+        return;
     }
 
-    // --- Drain SPIFFS overflow file one entry at a time ---
-    if (log_open_overflow_for_read()) {
-        uint8_t carry[sizeof(BaseEntry)];
-        size_t carry_len = 0;
-        int16_t spiffs_v[4] = {0}, spiffs_i[4] = {0}, spiffs_p[4] = {0};
-        uint32_t spiffs_ts = 0;
-        bool spiffs_have = false;
-
-        while (true) {
-            uint8_t chunk[512];
-            size_t n = log_read_overflow_chunk(chunk, sizeof(chunk));
-            if (n == 0) break;
-
-            // Prepend carry bytes
-            uint8_t work[512 + sizeof(BaseEntry)];
-            memcpy(work, carry, carry_len);
-            memcpy(work + carry_len, chunk, n);
-            size_t work_len = carry_len + n;
-
-            size_t consumed = decode_and_send_log_entries(work, work_len, supabase_url, anon_key, device_key, api_key,
-                spiffs_v, spiffs_i, spiffs_p, &spiffs_ts, &spiffs_have);
-
-            carry_len = work_len - consumed;
-            if (carry_len > 0) {
-                memcpy(carry, work + consumed, carry_len);
+    if (state == ST_SPIFFS) {
+        if (!spiffs_file_open) {
+            if (!log_open_overflow_for_read()) {
+                state = ST_DONE;
+                return;
             }
+            spiffs_file_open = true;
         }
-
-        // Final carry: attempt to decode any remaining bytes
-        if (carry_len > 0) {
-            decode_and_send_log_entries(carry, carry_len, supabase_url, anon_key, device_key, api_key,
-                spiffs_v, spiffs_i, spiffs_p, &spiffs_ts, &spiffs_have);
+        uint8_t chunk[512];
+        size_t n = log_read_overflow_chunk(chunk, sizeof(chunk));
+        if (n == 0) {
+            // EOF
+            if (spiffs_carry_len > 0) {
+                decode_and_send_log_entries(spiffs_carry, spiffs_carry_len, supabase_url, anon_key, device_key, api_key,
+                    spiffs_v, spiffs_i, spiffs_p, &spiffs_ts, &spiffs_have);
+                spiffs_carry_len = 0;
+                return; // may have sent 1 entry; return to recover
+            }
+            log_close_overflow();
+            spiffs_file_open = false;
+            state = ST_DONE;
+            return;
         }
+        uint8_t work[512 + sizeof(BaseEntry)];
+        memcpy(work, spiffs_carry, spiffs_carry_len);
+        memcpy(work + spiffs_carry_len, chunk, n);
+        size_t work_len = spiffs_carry_len + n;
 
-        log_close_overflow();
+        size_t consumed = decode_and_send_log_entries(work, work_len, supabase_url, anon_key, device_key, api_key,
+            spiffs_v, spiffs_i, spiffs_p, &spiffs_ts, &spiffs_have);
+
+        spiffs_carry_len = work_len - consumed;
+        if (spiffs_carry_len > 0) {
+            memcpy(spiffs_carry, work + consumed, spiffs_carry_len);
+        }
+        return; // only sent 1 entry; return to let heap recover
+    }
+
+    if (state == ST_DONE) {
+        // Reset for next cycle once buffer refills
+        if (log_entries_count() > 0 || log_has_overflow_file()) {
+            state = ST_RAM;
+            ram_have = false;
+            ram_carry_len = 0;
+            spiffs_have = false;
+            spiffs_carry_len = 0;
+        }
     }
 }
 
@@ -435,6 +473,10 @@ void publish_data(const SensorData& data) {
 }
 
 void publish_data_supabase(const SensorData& data) {
+    static unsigned long last_pub_ms = 0;
+    if (millis() - last_pub_ms < 1000) return; // rate limit: 1 POST per second
+    last_pub_ms = millis();
+
     if (ESP.getFreeHeap() < 8192) {
         Serial.println("[WARN] Low heap, skipping Supabase publish");
         return;
@@ -545,13 +587,17 @@ void publish_data_supabase(const SensorData& data) {
 
     g_supa_doc["p_recorded_at"] = (uint32_t)epoch_s;
 
-    char buffer[1024];
+    char buffer[2048];
     size_t len = serializeJson(g_supa_doc, buffer);
 
     int rc = http.POST((uint8_t*)buffer, len);
     http.end();
     if (rc != 200 && rc != 201 && rc != 204) {
-        Serial.print("Supabase publish failed: "); Serial.println(rc);
+        Serial.printf("Supabase publish failed: %d (heap=%u)\n", rc, ESP.getFreeHeap());
+        if (rc == 400) {
+            Serial.print("Payload preview: ");
+            Serial.println(buffer); // print first ~1024 chars
+        }
     }
 
     // Update calibration status table while baseline is collecting
