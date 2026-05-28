@@ -616,11 +616,6 @@ void loop() {
         last_heap_check = millis();
         Serial.printf("[MEM] free=%u min=%u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
     }
-    uint32_t before = ESP.getFreeHeap();
     handle_serial_cli();
-    uint32_t after = ESP.getFreeHeap();
-    if (after < before && before - after > 200) {
-        Serial.printf("[MEM] cmd used %u bytes (before=%u after=%u)\n", before - after, before, after);
-    }
     delay(10);
 }
