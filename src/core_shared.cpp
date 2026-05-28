@@ -6,16 +6,14 @@ QueueHandle_t g_cmd_queue = nullptr;
 SemaphoreHandle_t g_relay_mutex = nullptr;
 
 void init_core_shared() {
-    g_sensor_queue = xQueueCreate(2, sizeof(SensorData));
+    g_sensor_queue = xQueueCreate(16, sizeof(SensorData));
     g_cmd_queue = xQueueCreate(8, 128);
     g_relay_mutex = xSemaphoreCreateMutex();
 }
 
 void push_sensor_data(const SensorData& data) {
     if (!g_sensor_queue) return;
-    BaseType_t woken = pdFALSE;
-    xQueueSendFromISR(g_sensor_queue, &data, &woken);
-    if (woken) portYIELD_FROM_ISR();
+    xQueueSend(g_sensor_queue, &data, 0);
 }
 
 bool pop_settings_cmd(char* cmd_type_buf, char* payload_json_buf, size_t buf_len) {
