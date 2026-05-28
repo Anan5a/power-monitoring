@@ -603,5 +603,11 @@ void setup() {
 void loop() {
     // Not used — all work is in FreeRTOS tasks
     handle_serial_cli();
+    // Periodic heap diagnostic every 5s to track memory pressure
+    static uint32_t last_heap_check = 0;
+    if (millis() - last_heap_check >= 5000) {
+        last_heap_check = millis();
+        Serial.printf("[MEM] free=%u min=%u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
+    }
     delay(10);
 }
