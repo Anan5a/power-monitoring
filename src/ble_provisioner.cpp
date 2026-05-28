@@ -615,6 +615,7 @@ void start_ble_advertising() {
     if (!ble_initialized || ble_advertising_active) return;
     NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
+    pAdvertising->enableScanResponse(true);
     NimBLEDevice::startAdvertising();
     ble_advertising_active = true;
     Serial.println("BLE advertising started");
