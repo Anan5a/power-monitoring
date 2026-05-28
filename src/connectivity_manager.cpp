@@ -214,16 +214,30 @@ static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v,
     JsonObject payload = g_supa_doc["p_payload"].to<JsonObject>();
     payload["source"] = "log";
     payload["entry_type"] = entry_type;
-    payload["timestamp_s"] = log_to_epoch(timestamp_ms);
-    for (int ch = 0; ch < 4; ch++) {
-        char key[8];
-        snprintf(key, sizeof(key), "v%d", ch);
-        payload[key] = v[ch] / 1000.0f;
-        snprintf(key, sizeof(key), "i%d", ch);
-        payload[key] = i[ch] / 1000.0f;
-        snprintf(key, sizeof(key), "p%d", ch);
-        payload[key] = p[ch] / 1000.0f;
-    }
+
+    // Same keys as live telemetry
+    payload["ina3221_v0"] = v[0] / 1000.0f;
+    payload["ina3221_v1"] = v[1] / 1000.0f;
+    payload["ina3221_v2"] = v[2] / 1000.0f;
+    payload["ina3221_i0"] = i[0] / 1000.0f;
+    payload["ina3221_i1"] = i[1] / 1000.0f;
+    payload["ina3221_i2"] = i[2] / 1000.0f;
+
+    payload["ch0_P"] = (v[0] * i[0]) / 1000000.0f;
+    payload["ch1_P"] = (v[1] * i[1]) / 1000000.0f;
+    payload["ch2_P"] = (v[2] * i[2]) / 1000000.0f;
+
+#if ENABLE_INA226
+    payload["ina226_v"] = v[3] / 1000.0f;
+    payload["ina226_i"] = i[3] / 1000.0f;
+    payload["ina226_p"] = p[3] / 1000.0f;
+    payload["ch3_P"] = p[3] / 1000.0f;
+#endif
+
+    payload["log_entries"] = log_entries_count();
+    payload["log_overflow"] = log_has_overflow_file();
+    payload["log_overflow_bytes"] = log_overflow_file_size();
+
     g_supa_doc["p_recorded_at"] = (uint32_t)log_to_epoch(timestamp_ms);
 
     char buffer[512];
