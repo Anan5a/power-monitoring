@@ -8,7 +8,6 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <ArduinoJson.h>
-#include <esp_bt.h>
 
 static NimBLECharacteristic* pCmdChar = nullptr;
 static NimBLECharacteristic* pRespChar = nullptr;
@@ -580,25 +579,6 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
 
 void init_ble_provisioner() {
     if (ble_initialized) return;
-
-    // The Arduino framework may pre-initialize the BT controller in some configs.
-    // NimBLE requires a clean IDLE state; force disable + deinit if needed.
-    if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED) {
-        esp_bt_controller_disable();
-    }
-    if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_INITED) {
-        esp_bt_controller_deinit();
-    }
-
-    // Release classic BT memory before re-init — NimBLE is BLE-only.
-    if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE) {
-        esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
-    }
-
-    // esp_bt_controller_deinit() is asynchronous — wait for the controller
-    // to fully reach IDLE before re-initializing, otherwise init() fails.
-    delay(100);
-
     NimBLEDevice::init(BT_DEVICE_NAME);
     NimBLEServer* pServer = NimBLEDevice::createServer();
     pServer->setCallbacks(new ProvServerCallbacks());
@@ -625,7 +605,6 @@ void init_ble_provisioner() {
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
     );
 
-    pService->start();
     // Don't start advertising yet — wait until WiFi is online
     ble_advertising_active = false;
     ble_initialized = true;
@@ -636,8 +615,6 @@ void start_ble_advertising() {
     if (!ble_initialized || ble_advertising_active) return;
     NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
-    pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06);
     NimBLEDevice::startAdvertising();
     ble_advertising_active = true;
     Serial.println("BLE advertising started");
