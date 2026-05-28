@@ -115,7 +115,7 @@ static void sensorTask(void* param) {
             update_display(data, get_local_ip_str(), total_power);
         }
 
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(500));
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000));
     }
 }
 
