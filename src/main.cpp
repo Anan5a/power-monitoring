@@ -129,6 +129,15 @@ static void handle_serial_cli() {
         if ((c == '\n' || c == '\r') && len > 0) {
             line[len] = '\0';
             len = 0;
+            // Consume trailing CRLF — prevents \n from being stored as line[0]
+            while (Serial.available()) {
+                char next = Serial.peek();
+                if (next == '\n' || next == '\r') {
+                    Serial.read();
+                } else {
+                    break;
+                }
+            }
 
             // Commands that use the line buffer directly (for startsWith / contains checks)
             if (strncmp(line, "relay ", 6) == 0) {
