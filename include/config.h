@@ -19,7 +19,7 @@
 // I2C bus pins
 #define I2C_SDA         16
 #define I2C_SCL         17
-#define I2C_FREQ        50000
+#define I2C_FREQ        100000
 
 // Hardware enable/disable
 #define ENABLE_INA3221         1   // current module 0x40
@@ -79,7 +79,7 @@
 
 // Serial1 interface (external device: inverter, generator, etc.)
 // TX not needed — RX only on D23
-#define ENABLE_SERIAL1       1   // set to 1 to enable Serial1 reader
+#define ENABLE_SERIAL1       0   // set to 1 to enable Serial1 reader
 #define SERIAL1_RX_PIN       23
 #define SERIAL1_BAUD         9600
 #define SERIAL1_BUFFER       256  // ring buffer size in bytes
