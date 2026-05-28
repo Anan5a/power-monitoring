@@ -68,7 +68,7 @@ export default function DashboardPage() {
   // Build VC data for cards — use virtual channel keys directly (ch{N}_V/I/P)
   const vcCards = [0, 1, 2, 3].map(vcIdx => {
     if (!latestReading) {
-      return { vcIdx, vcName: `VC${vcIdx}`, voltage: null, current: null, power: null, socPct: null, batteryCapacity: 0, relayOn: false }
+      return { vcIdx, vcName: `VC${vcIdx}`, voltage: null, current: null, power: null, energyWh: null, socPct: null, batteryCapacity: 0, relayOn: false }
     }
     const payload = latestReading.payload as Record<string, number>
 
@@ -81,6 +81,7 @@ export default function DashboardPage() {
       voltage: payload[`ch${vcIdx}_V`] ?? null,
       current: payload[`ch${vcIdx}_I`] ?? null,
       power: payload[`ch${vcIdx}_P`] ?? null,
+      energyWh: payload[`energy_wh${vcIdx}`] ?? null,
       socPct: payload[`soc_pct${vcIdx}`] ?? null,
       batteryCapacity,
       relayOn: relayOn[vcIdx],
@@ -144,6 +145,7 @@ export default function DashboardPage() {
                   voltage={card.voltage}
                   current={card.current}
                   power={card.power}
+                  energyWh={card.energyWh}
                   socPct={card.socPct}
                   batteryCapacity={card.batteryCapacity}
                   relayOn={card.relayOn}

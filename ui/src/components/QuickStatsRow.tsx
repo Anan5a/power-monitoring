@@ -14,15 +14,34 @@ export default function QuickStatsRow({ latestReading, deviceChannels, relayOn }
         .reduce((sum, [, v]) => sum + (v as number), 0)
     : 0
 
+  // Sum all energy values from payload
+  const totalEnergyWh = latestReading
+    ? Object.entries(latestReading)
+        .filter(([k]) => k.startsWith('energy_wh'))
+        .reduce((sum, [, v]) => sum + (v as number), 0)
+    : 0
+
   const batteryProfiles = deviceChannels?.battery_profiles ?? []
   return (
     <div className="flex flex-wrap gap-4 items-center justify-between bg-white rounded-lg shadow px-6 py-4 mb-6">
-      {/* Total power */}
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-gray-500">Total Power</span>
-        <span className="text-xl font-bold text-blue-600">
-          {totalPower > 0 ? `${totalPower.toFixed(1)} W` : '--'}
-        </span>
+      {/* Total power + energy */}
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500">Total Power</span>
+          <span className="text-xl font-bold text-blue-600">
+            {totalPower > 0 ? `${totalPower.toFixed(1)} W` : '--'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500">Total Energy</span>
+          <span className="text-xl font-bold text-green-600">
+            {totalEnergyWh > 0
+              ? totalEnergyWh >= 1000
+                ? `${(totalEnergyWh / 1000).toFixed(2)} kWh`
+                : `${totalEnergyWh.toFixed(1)} Wh`
+              : '--'}
+          </span>
+        </div>
       </div>
 
       {/* SoC bars for VCs with batteries */}

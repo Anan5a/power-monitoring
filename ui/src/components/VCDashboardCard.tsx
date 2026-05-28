@@ -3,6 +3,7 @@ interface Props {
   voltage: number | null
   current: number | null
   power: number | null
+  energyWh: number | null
   socPct: number | null
   batteryCapacity: number
   relayOn: boolean
@@ -10,7 +11,7 @@ interface Props {
 }
 
 export default function VCDashboardCard({
-  vcName, voltage, current, power,
+  vcName, voltage, current, power, energyWh,
   socPct, batteryCapacity, relayOn, online
 }: Props) {
   const hasBattery = batteryCapacity > 0
@@ -54,6 +55,16 @@ export default function VCDashboardCard({
           </div>
         </div>
       </div>
+
+      {/* Energy */}
+      {energyWh !== null && (
+        <div className="text-center mb-3">
+          <span className="text-xs text-gray-400">Energy: </span>
+          <span className="text-sm font-medium text-gray-700">
+            {energyWh >= 1000 ? `${(energyWh / 1000).toFixed(2)} kWh` : `${energyWh.toFixed(1)} Wh`}
+          </span>
+        </div>
+      )}
 
       {/* SoC bar (only if battery configured) */}
       {hasBattery && (
