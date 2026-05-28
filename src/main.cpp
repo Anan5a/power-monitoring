@@ -584,10 +584,14 @@ void setup() {
     init_coulomb_counter();
     init_relays();
     init_core_shared();
-    init_ble_provisioner();  // BLE stack init in setup() before WiFi; original crash was ESP_ERR_NO_MEM which may have other causes
 
-    xTaskCreatePinnedToCore(networkTask, "Network", 6144, NULL, 5, NULL, 0);
-    xTaskCreatePinnedToCore(sensorTask,    "Sensor",   12288, NULL, 10, NULL, 1);
+    Serial.printf("Free heap before BLE: %u bytes\n", ESP.getFreeHeap());
+    Serial.printf("Min free heap: %u bytes\n", ESP.getMinFreeHeap());
+    Serial.printf("Largest alloc: %u bytes\n", ESP.getMaxAllocHeap());
+    init_ble_provisioner();  // BLE stack needs ~60-80KB contiguous heap
+
+    xTaskCreatePinnedToCore(networkTask, "Network", 4096, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(sensorTask,    "Sensor",   8192, NULL, 10, NULL, 1);
 
     Serial.println("Type 'help' for serial commands");
 }
