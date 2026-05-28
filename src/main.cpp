@@ -122,31 +122,11 @@ static void handle_serial_cli() {
         if ((c == '\n' || c == '\r') && len > 0) {
             line[len] = '\0';
             len = 0;
-            String cmd = String(line);
-            cmd.trim();
-            if (cmd == "status") {
-                print_status();
-            } else if (cmd == "mem") {
-                Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
-                Serial.printf("Heap size: %u bytes\n", ESP.getHeapSize());
-                Serial.printf("Min free heap: %u bytes\n", ESP.getMinFreeHeap());
-                Serial.printf("CPU temperature: %.1f C\n", temperatureRead());
-                Serial.printf("PSRAM: %u bytes\n", ESP.getPsramSize());
-            } else if (cmd == "sensors") {
-                SensorData data = read_sensors();
-                print_sensor_data(data);
-            } else if (cmd == "relay status") {
-                uint8_t count = settings_load_relay_count();
-                for (uint8_t i = 0; i < count; i++) {
-                    RelayRule rt;
-                    if (settings_load_relay(i, &rt)) {
-                        int state = digitalRead(rt.gpio_pin);
-                        Serial.printf("Relay %d: ch=%d pin=%d state=%d\n", i, rt.channel, rt.gpio_pin, state);
-                    }
-                }
-            } else if (cmd.startsWith("relay ")) {
+
+            // Commands that use the line buffer directly (for startsWith / contains checks)
+            if (strncmp(line, "relay ", 6) == 0) {
                 int idx, st;
-                if (sscanf(cmd.c_str(), "relay %d %d", &idx, &st) == 2) {
+                if (sscanf(line, "relay %d %d", &idx, &st) == 2) {
                     RelayRule rt;
                     if (settings_load_relay(idx, &rt)) {
                         digitalWrite(rt.gpio_pin, st ? HIGH : LOW);
@@ -155,33 +135,15 @@ static void handle_serial_cli() {
                         Serial.println("Relay not found");
                     }
                 }
-            } else if (cmd.startsWith("reset coulomb ")) {
+            } else if (strncmp(line, "reset coulomb ", 14) == 0) {
                 int ch;
-                if (sscanf(cmd.c_str(), "reset coulomb %d", &ch) == 1 && ch >= 0 && ch <= 3) {
+                if (sscanf(line, "reset coulomb %d", &ch) == 1 && ch >= 0 && ch <= 3) {
                     reset_coulomb_counter(ch);
                     Serial.printf("Coulomb counter ch%d reset\n", ch);
                 }
-            } else if (cmd == "flush log") {
-                size_t flushed = 0;
-                uint8_t batch[512];
-                size_t n;
-                while ((n = log_pop_batch(batch, sizeof(batch))) > 0) {
-                    flushed += n;
-                }
-                Serial.printf("Flushed %u bytes from log buffer\n", (unsigned)flushed);
-            } else if (cmd == "i2c_scan") {
-                Wire.begin(I2C_SDA, I2C_SCL);
-                Serial.println("I2C scan:");
-                for (uint8_t addr = 1; addr < 127; addr++) {
-                    Wire.beginTransmission(addr);
-                    if (Wire.endTransmission() == 0) {
-                        Serial.print("  0x"); Serial.println(addr, HEX);
-                    }
-                }
-                Serial.println("done");
-            } else if (cmd.startsWith("test relay ")) {
+            } else if (strncmp(line, "test relay ", 11) == 0) {
                 int idx;
-                if (sscanf(cmd.c_str(), "test relay %d", &idx) == 1 && idx >= 0 && idx <= 3) {
+                if (sscanf(line, "test relay %d", &idx) == 1 && idx >= 0 && idx <= 3) {
                     RelayRule rt;
                     if (settings_load_relay(idx, &rt)) {
                         Serial.printf("Testing relay %d on GPIO %d...\n", idx, rt.gpio_pin);
@@ -196,50 +158,129 @@ static void handle_serial_cli() {
                 } else {
                     Serial.println("Usage: test relay 0-3");
                 }
-            } else if (cmd == "test all relays") {
-                Serial.println("Testing all relays in sequence...");
-                for (int i = 0; i < 4; i++) {
-                    RelayRule rt;
-                    if (settings_load_relay(i, &rt)) {
-                        Serial.printf("Relay %d (GPIO %d)...\n", i, rt.gpio_pin);
-                        digitalWrite(rt.gpio_pin, HIGH);
-                        delay(1000);
-                        digitalWrite(rt.gpio_pin, LOW);
-                        delay(500);
+            } else if (strncmp(line, "shunt ", 6) == 0) {
+                int ch; float ohms;
+                if (sscanf(line, "shunt %d %f", &ch, &ohms) == 2 && ch >= 0 && ch <= 3) {
+                    if (ohms <= 0.0f) {
+                        Serial.printf("CH%d shunt cleared (using default)\n", ch);
+                    } else {
+                        Serial.printf("CH%d shunt set to %.6f Ohm\n", ch, ohms);
                     }
+                    settings_save_shunt(ch, ohms);
+                } else {
+                    Serial.println("Usage: shunt N ohms (e.g. shunt 0 0.0003) or shunt N 0 to clear");
                 }
-                Serial.println("All relays tested.");
-            } else if (cmd.startsWith("test sensor ")) {
+            } else if (strncmp(line, "vratio ", 7) == 0) {
+                int ch; float ratio;
+                if (sscanf(line, "vratio %d %f", &ch, &ratio) == 2 && ch >= 0 && ch <= 2) {
+                    if (ratio <= 0.0f) {
+                        Serial.printf("CH%d vratio cleared\n", ch);
+                    } else {
+                        Serial.printf("CH%d vratio set to %.4f\n", ch, ratio);
+                    }
+                    settings_save_volt_ratio(ch, ratio);
+                } else {
+                    Serial.println("Usage: vratio N ratio (e.g. vratio 2 3.521) or vratio N 0 to clear");
+                }
+            } else if (strncmp(line, "resistor ", 9) == 0) {
+                int ch; float rh, rl;
+                if (sscanf(line, "resistor %d %f %f", &ch, &rh, &rl) == 3 && ch >= 0 && ch <= 2) {
+                    if (rh <= 0.0f || rl <= 0.0f) {
+                        Serial.printf("CH%d resistors cleared\n", ch);
+                    } else {
+                        float ratio = (rh + rl) / rl;
+                        Serial.printf("CH%d R=%.0f+%.0f -> ratio=%.4f\n", ch, rh, rl, ratio);
+                    }
+                    settings_save_resistors(ch, rh, rl);
+                } else {
+                    Serial.println("Usage: resistor N r_high r_low (e.g. resistor 2 900000 68000)");
+                }
+            } else if (strncmp(line, "cal ", 4) == 0) {
+                int ch, type; float value;
+                if (sscanf(line, "cal %d %d %f", &ch, &type, &value) == 3 && ch >= 0 && ch <= 2 && type >= 0 && type <= 3) {
+                    sensor_set_calibration(ch, type, value);
+                    Serial.printf("CH%d cal type=%d value=%.4f saved\n", ch, type, value);
+                } else {
+                    Serial.println("Usage: cal N type value — type: 0=volt_offset_mv, 1=volt_gain, 2=curr_offset_ma, 3=curr_gain");
+                }
+            } else if (strncmp(line, "wifi_ssid ", 9) == 0) {
+                char new_ssid[64];
+                if (sscanf(line, "wifi_ssid %s", new_ssid) == 1) {
+                    char old_ssid[64] = "", old_pass[64] = "";
+                    settings_load_wifi(old_ssid, old_pass, sizeof(old_ssid));
+                    settings_save_wifi(new_ssid, old_pass);
+                    Serial.printf("WiFi SSID set to: %s\n", new_ssid);
+                } else {
+                    Serial.println("Usage: wifi_ssid <ssid>");
+                }
+            } else if (strncmp(line, "wifi_pass ", 10) == 0) {
+                char new_pass[64];
+                if (sscanf(line, "wifi_pass %s", new_pass) == 1) {
+                    char old_ssid[64] = "", old_pass[64] = "";
+                    settings_load_wifi(old_ssid, old_pass, sizeof(old_ssid));
+                    settings_save_wifi(old_ssid, new_pass);
+                    Serial.println("WiFi password updated");
+                } else {
+                    Serial.println("Usage: wifi_pass <pass>");
+                }
+            } else if (strncmp(line, "set_wifi ", 9) == 0) {
+                char new_ssid[64], new_pass[64];
+                if (sscanf(line, "set_wifi %s %s", new_ssid, new_pass) == 2) {
+                    settings_save_wifi(new_ssid, new_pass);
+                    Serial.printf("WiFi set: %s (reboot to apply)\n", new_ssid);
+                } else {
+                    Serial.println("Usage: set_wifi <ssid> <pass>");
+                }
+            } else if (strncmp(line, "supabase ", 9) == 0) {
+                char url[128], anon_key[128], service_role_key[128], device_key[64];
+                int n = sscanf(line, "supabase %s %s %s %s",
+                    url, anon_key, service_role_key, device_key);
+                if (n == 4) {
+                    settings_save_supabase_url(url);
+                    settings_save_supabase_anon_key(anon_key);
+                    settings_save_supabase_api_key(service_role_key);
+                    settings_save_supabase_device_key(device_key);
+                    Serial.println("Supabase configured. Reboot to apply.");
+                } else {
+                    Serial.println("Usage: supabase <url> <anon_key> <service_role_key> <device_key>");
+                }
+            } else if (strncmp(line, "test sensor ", 12) == 0) {
                 int ch;
-                if (sscanf(cmd.c_str(), "test sensor %d", &ch) == 1 && ch >= 0 && ch <= 2) {
+                if (sscanf(line, "test sensor %d", &ch) == 1 && ch >= 0 && ch <= 2) {
                     SensorData d = read_sensors();
                     Serial.printf("Sensor CH%d: %.3fV, %.3fA\n", ch, d.ads1115_volts[ch], d.ina3221_current[ch]);
                     Serial.printf("  raw shunt voltage: %.2fmV\n", ina3221_getShuntVoltage(ch) * 1000.0f);
                 } else {
                     Serial.println("Usage: test sensor 0-2");
                 }
-            } else if (cmd == "test all sensors") {
-                SensorData d = read_sensors();
-                Serial.println("All sensor channels:");
-                for (int i = 0; i < 3; i++) {
-                    Serial.printf("  CH%d: %.3fV  %.3fA\n", i, d.ads1115_volts[i], d.ina3221_current[i]);
+            } else if (strncmp(line, "virtual_channel ", 16) == 0) {
+                int ch, vs = -1, vidx = -1, cs = -1, cidx = -1;
+                int n = sscanf(line, "virtual_channel %d %d %d %d %d", &ch, &vs, &vidx, &cs, &cidx);
+                if (n == 1 && ch >= 0 && ch <= 3) {
+                    VirtualChannelConfig vc;
+                    if (settings_load_virtual_channel(ch, &vc)) {
+                        Serial.printf("CH%d: V=src%d:idx%d I=src%d:idx%d\n",
+                            ch, vc.voltage_src, vc.voltage_idx, vc.current_src, vc.current_idx);
+                    } else {
+                        Serial.printf("CH%d: not configured\n", ch);
+                    }
+                } else if (n == 5 && ch >= 0 && ch <= 3 && vs >= 0 && vidx >= 0 && cs >= 0 && cidx >= 0) {
+                    VirtualChannelConfig vc = {};
+                    vc.voltage_src = (uint8_t)vs;
+                    vc.voltage_idx = (uint8_t)vidx;
+                    vc.current_src = (uint8_t)cs;
+                    vc.current_idx = (uint8_t)cidx;
+                    settings_save_virtual_channel(ch, &vc);
+                    Serial.printf("CH%d: V=src%d:idx%d I=src%d:idx%d saved\n", ch, vs, vidx, cs, cidx);
+                } else {
+                    Serial.println("Usage: virtual_channel show | virtual_channel N | virtual_channel N vs vidx cs cidx");
                 }
-            } else if (cmd == "test display") {
-                Serial.println("Display test: OLED should show cycling pages");
-                extern void init_display();
-                extern void update_display(const SensorData&, const char*, float);
-                SensorData d = read_sensors();
-                for (int i = 0; i < 5; i++) {
-                    update_display(d, "192.168.1.1", 123.4f);
-                    delay(1000);
-                }
-                Serial.println("Display test done.");
-            } else if (cmd.startsWith("display ")) {
+            } else if (strncmp(line, "display ", 8) == 0) {
                 SensorData d = read_sensors();
                 float total_power = 0;
                 for (int ch = 0; ch < 3; ch++) total_power += d.ads1115_volts[ch] * d.ina3221_current[ch];
                 total_power += d.ina226_power;
-                if (cmd == "display all") {
+                if (strcmp(line, "display all") == 0) {
                     for (int p = 0; p < 5; p++) {
                         Serial.printf("=== Display page %d ===\n", p);
                         if (p == 0) {
@@ -275,7 +316,7 @@ static void handle_serial_cli() {
                     Serial.printf("INA226: %.2fV %.3fA %.2fW\n", d.ina226_busV, d.ina226_current, d.ina226_power);
                 } else {
                     int pn;
-                    if (sscanf(cmd.c_str(), "display page %d", &pn) == 1 && pn >= 0 && pn <= 4) {
+                    if (sscanf(line, "display page %d", &pn) == 1 && pn >= 0 && pn <= 4) {
                         Serial.printf("=== Display page %d ===\n", pn);
                         if (pn == 0) {
                             Serial.printf("  IP: %s | Power: %.1fW | Log: %lu %s\n",
@@ -310,123 +351,132 @@ static void handle_serial_cli() {
                         Serial.println("Usage: display page 0-4  |  display all");
                     }
                 }
-            } else if (cmd == "relay auto on") {
+            // Exact-match commands below (no startsWith variants)
+            } else if (strcmp(line, "status") == 0) {
+                print_status();
+            } else if (strcmp(line, "mem") == 0) {
+                Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
+                Serial.printf("Heap size: %u bytes\n", ESP.getHeapSize());
+                Serial.printf("Min free heap: %u bytes\n", ESP.getMinFreeHeap());
+                Serial.printf("CPU temperature: %.1f C\n", temperatureRead());
+                Serial.printf("PSRAM: %u bytes\n", ESP.getPsramSize());
+            } else if (strcmp(line, "sensors") == 0) {
+                SensorData data = read_sensors();
+                print_sensor_data(data);
+            } else if (strcmp(line, "relay status") == 0) {
+                uint8_t count = settings_load_relay_count();
+                for (uint8_t i = 0; i < count; i++) {
+                    RelayRule rt;
+                    if (settings_load_relay(i, &rt)) {
+                        int state = digitalRead(rt.gpio_pin);
+                        Serial.printf("Relay %d: ch=%d pin=%d state=%d\n", i, rt.channel, rt.gpio_pin, state);
+                    }
+                }
+            } else if (strcmp(line, "flush log") == 0) {
+                size_t flushed = 0;
+                uint8_t batch[512];
+                size_t n;
+                while ((n = log_pop_batch(batch, sizeof(batch))) > 0) {
+                    flushed += n;
+                }
+                Serial.printf("Flushed %u bytes from log buffer\n", (unsigned)flushed);
+            } else if (strcmp(line, "i2c_scan") == 0) {
+                Wire.begin(I2C_SDA, I2C_SCL);
+                Serial.println("I2C scan:");
+                for (uint8_t addr = 1; addr < 127; addr++) {
+                    Wire.beginTransmission(addr);
+                    if (Wire.endTransmission() == 0) {
+                        Serial.print("  0x"); Serial.println(addr, HEX);
+                    }
+                }
+                Serial.println("done");
+            } else if (strcmp(line, "test all relays") == 0) {
+                Serial.println("Testing all relays in sequence...");
+                for (int i = 0; i < 4; i++) {
+                    RelayRule rt;
+                    if (settings_load_relay(i, &rt)) {
+                        Serial.printf("Relay %d (GPIO %d)...\n", i, rt.gpio_pin);
+                        digitalWrite(rt.gpio_pin, HIGH);
+                        delay(1000);
+                        digitalWrite(rt.gpio_pin, LOW);
+                        delay(500);
+                    }
+                }
+                Serial.println("All relays tested.");
+            } else if (strcmp(line, "test all sensors") == 0) {
+                SensorData d = read_sensors();
+                Serial.println("All sensor channels:");
+                for (int i = 0; i < 3; i++) {
+                    Serial.printf("  CH%d: %.3fV  %.3fA\n", i, d.ads1115_volts[i], d.ina3221_current[i]);
+                }
+            } else if (strcmp(line, "test display") == 0) {
+                Serial.println("Display test: OLED should show cycling pages");
+                extern void init_display();
+                extern void update_display(const SensorData&, const char*, float);
+                SensorData d = read_sensors();
+                for (int i = 0; i < 5; i++) {
+                    update_display(d, "192.168.1.1", 123.4f);
+                    delay(1000);
+                }
+                Serial.println("Display test done.");
+            } else if (strcmp(line, "relay auto on") == 0) {
                 relay_set_auto(true);
                 Serial.println("Relay auto-trip ENABLED");
-            } else if (cmd == "relay auto off") {
+            } else if (strcmp(line, "relay auto off") == 0) {
                 relay_set_auto(false);
                 Serial.println("Relay auto-trip DISABLED");
-            } else if (cmd == "factory_reset") {
+            } else if (strcmp(line, "factory_reset") == 0) {
                 Serial.println("Wiping NVS and rebooting...");
                 delay(500);
                 settings_factory_reset();
                 ESP.restart();
-            } else if (cmd == "shunt show") {
+            } else if (strcmp(line, "shunt show") == 0) {
                 for (int ch = 0; ch < 3; ch++) {
                     float s; bool ok = settings_load_shunt(ch, &s);
-                    Serial.printf("CH%d shunt: %s\n", ch, ok ? String(s, 6).c_str() : "(default)");
-                }
-            } else if (cmd.startsWith("shunt ")) {
-                int ch; float ohms;
-                if (sscanf(cmd.c_str(), "shunt %d %f", &ch, &ohms) == 2 && ch >= 0 && ch <= 3) {
-                    if (ohms <= 0.0f) {
-                        Serial.printf("CH%d shunt cleared (using default)\n", ch);
+                    if (ok) {
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), "%.6f", s);
+                        Serial.printf("CH%d shunt: %s\n", ch, buf);
                     } else {
-                        Serial.printf("CH%d shunt set to %.6f Ohm\n", ch, ohms);
+                        Serial.printf("CH%d shunt: (default)\n", ch);
                     }
-                    settings_save_shunt(ch, ohms);
-                } else {
-                    Serial.println("Usage: shunt N ohms (e.g. shunt 0 0.0003) or shunt N 0 to clear");
                 }
-            } else if (cmd == "vratio show") {
+            } else if (strcmp(line, "vratio show") == 0) {
                 for (int ch = 0; ch < 3; ch++) {
                     float r; bool ok = settings_load_volt_ratio(ch, &r);
                     float def = (ch == 0) ? VOLT_RATIO_CH0 : (ch == 1) ? VOLT_RATIO_CH1 : VOLT_RATIO_CH2;
-                    Serial.printf("CH%d vratio: %s\n", ch, ok ? String(r, 4).c_str() : String("default:") + String(def, 4));
-                }
-            } else if (cmd.startsWith("vratio ")) {
-                int ch; float ratio;
-                if (sscanf(cmd.c_str(), "vratio %d %f", &ch, &ratio) == 2 && ch >= 0 && ch <= 2) {
-                    if (ratio <= 0.0f) {
-                        Serial.printf("CH%d vratio cleared\n", ch);
+                    if (ok) {
+                        Serial.printf("CH%d vratio: %.4f\n", ch, r);
                     } else {
-                        Serial.printf("CH%d vratio set to %.4f\n", ch, ratio);
+                        Serial.printf("CH%d vratio: default:%.4f\n", ch, def);
                     }
-                    settings_save_volt_ratio(ch, ratio);
-                } else {
-                    Serial.println("Usage: vratio N ratio (e.g. vratio 2 3.521) or vratio N 0 to clear");
                 }
-            } else if (cmd == "resistor show") {
+            } else if (strcmp(line, "resistor show") == 0) {
                 for (int ch = 0; ch < 3; ch++) {
                     float rh, rl; bool ok = settings_load_resistors(ch, &rh, &rl);
-                    Serial.printf("CH%d resistors: %s\n", ch, ok ? (String(rh, 0) + "+" + rl + " = " + String((rh+rl)/rl, 4)).c_str() : "(not set)");
-                }
-            } else if (cmd.startsWith("resistor ")) {
-                int ch; float rh, rl;
-                if (sscanf(cmd.c_str(), "resistor %d %f %f", &ch, &rh, &rl) == 3 && ch >= 0 && ch <= 2) {
-                    if (rh <= 0.0f || rl <= 0.0f) {
-                        Serial.printf("CH%d resistors cleared\n", ch);
+                    if (ok) {
+                        Serial.printf("CH%d resistors: %.0f+%.0f = %.4f\n", ch, rh, rl, (rh+rl)/rl);
                     } else {
-                        float ratio = (rh + rl) / rl;
-                        Serial.printf("CH%d R=%.0f+%.0f -> ratio=%.4f\n", ch, rh, rl, ratio);
+                        Serial.printf("CH%d resistors: (not set)\n", ch);
                     }
-                    settings_save_resistors(ch, rh, rl);
-                } else {
-                    Serial.println("Usage: resistor N r_high r_low (e.g. resistor 2 900000 68000)");
                 }
-            } else if (cmd == "cal show") {
+            } else if (strcmp(line, "cal show") == 0) {
                 for (int ch = 0; ch < 3; ch++) {
                     float vo, vg, co, cg;
                     sensor_get_calibration(ch, &vo, &vg, &co, &cg);
                     Serial.printf("CH%d: vo=%.2fmV vg=%.4f co=%.2fmA cg=%.4f\n", ch, vo, vg, co, cg);
                 }
-            } else if (cmd == "calibrate_baseline") {
+            } else if (strcmp(line, "calibrate_baseline") == 0) {
                 sensor_calibrate_baseline();
                 Serial.println("Baseline recalibration started — collecting new baseline over next 10 ticks");
-            } else if (cmd.startsWith("cal ")) {
-                int ch, type; float value;
-                if (sscanf(cmd.c_str(), "cal %d %d %f", &ch, &type, &value) == 3 && ch >= 0 && ch <= 2 && type >= 0 && type <= 3) {
-                    sensor_set_calibration(ch, type, value);
-                    Serial.printf("CH%d cal type=%d value=%.4f saved\n", ch, type, value);
-                } else {
-                    Serial.println("Usage: cal N type value — type: 0=volt_offset_mv, 1=volt_gain, 2=curr_offset_ma, 3=curr_gain");
-                }
-            } else if (cmd == "wifi_show") {
+            } else if (strcmp(line, "wifi_show") == 0) {
                 char ssid[64] = "", pass[64] = "";
                 if (settings_load_wifi(ssid, pass, sizeof(ssid))) {
                     Serial.printf("WiFi SSID: %s\n", ssid);
                 } else {
                     Serial.println("WiFi: not configured");
                 }
-            } else if (cmd.startsWith("wifi_ssid ")) {
-                char new_ssid[64];
-                if (sscanf(cmd.c_str(), "wifi_ssid %s", new_ssid) == 1) {
-                    char old_ssid[64] = "", old_pass[64] = "";
-                    settings_load_wifi(old_ssid, old_pass, sizeof(old_ssid));
-                    settings_save_wifi(new_ssid, old_pass);
-                    Serial.printf("WiFi SSID set to: %s\n", new_ssid);
-                } else {
-                    Serial.println("Usage: wifi_ssid <ssid>");
-                }
-            } else if (cmd.startsWith("wifi_pass ")) {
-                char new_pass[64];
-                if (sscanf(cmd.c_str(), "wifi_pass %s", new_pass) == 1) {
-                    char old_ssid[64] = "", old_pass[64] = "";
-                    settings_load_wifi(old_ssid, old_pass, sizeof(old_ssid));
-                    settings_save_wifi(old_ssid, new_pass);
-                    Serial.println("WiFi password updated");
-                } else {
-                    Serial.println("Usage: wifi_pass <password>");
-                }
-            } else if (cmd.startsWith("set_wifi ")) {
-                char new_ssid[64], new_pass[64];
-                if (sscanf(cmd.c_str(), "set_wifi %s %s", new_ssid, new_pass) == 2) {
-                    settings_save_wifi(new_ssid, new_pass);
-                    Serial.printf("WiFi set: %s (reboot to apply)\n", new_ssid);
-                } else {
-                    Serial.println("Usage: set_wifi <ssid> <password>");
-                }
-            } else if (cmd == "supabase_show") {
+            } else if (strcmp(line, "supabase_show") == 0) {
                 char url[128] = "", anon_key[128] = "", device_key[64] = "", api_key[64] = "";
                 bool has_url = settings_load_supabase_url(url, sizeof(url));
                 bool has_akey = settings_load_supabase_anon_key(anon_key, sizeof(anon_key));
@@ -438,20 +488,22 @@ static void handle_serial_cli() {
                 if (has_dkey) Serial.printf("Device key: %s\n", device_key);
                 if (has_apikey) Serial.printf("Device API key: %s\n", api_key);
                 if (!has_url && !has_akey) Serial.println("Supabase: not configured");
-            } else if (cmd.startsWith("supabase ")) {
-                char url[128], anon_key[128], service_role_key[128], device_key[64];
-                int n = sscanf(cmd.c_str(), "supabase %s %s %s %s",
-                    url, anon_key, service_role_key, device_key);
-                if (n == 4) {
-                    settings_save_supabase_url(url);
-                    settings_save_supabase_anon_key(anon_key);
-                    settings_save_supabase_api_key(service_role_key);
-                    settings_save_supabase_device_key(device_key);
-                    Serial.println("Supabase configured. Reboot to apply.");
-                } else {
-                    Serial.println("Usage: supabase <url> <anon_key> <service_role_key> <device_key>");
+            } else if (strcmp(line, "virtual_channel show") == 0) {
+                Serial.println("Virtual channel configs:");
+                for (int ch = 0; ch < 4; ch++) {
+                    VirtualChannelConfig vc;
+                    if (settings_load_virtual_channel(ch, &vc)) {
+                        Serial.printf("  CH%d: V=src%d:idx%d I=src%d:idx%d\n",
+                            ch, vc.voltage_src, vc.voltage_idx, vc.current_src, vc.current_idx);
+                    } else {
+                        Serial.printf("  CH%d: not configured\n", ch);
+                    }
                 }
-            } else if (cmd == "serial1peek") {
+            } else if (strcmp(line, "reboot") == 0) {
+                Serial.println("Rebooting...");
+                delay(100);
+                ESP.restart();
+            } else if (strcmp(line, "serial1peek") == 0) {
 #if ENABLE_SERIAL1
                 char buf[80];
                 int count = 0;
@@ -465,46 +517,7 @@ static void handle_serial_cli() {
 #else
                 Serial.println("Serial1 disabled");
 #endif
-            } else if (cmd == "virtual_channel show") {
-                Serial.println("Virtual channel configs:");
-                for (int ch = 0; ch < 4; ch++) {
-                    VirtualChannelConfig vc;
-                    if (settings_load_virtual_channel(ch, &vc)) {
-                        Serial.printf("  CH%d: V=src%d:idx%d I=src%d:idx%d\n",
-                            ch, vc.voltage_src, vc.voltage_idx, vc.current_src, vc.current_idx);
-                    } else {
-                        Serial.printf("  CH%d: not configured\n", ch);
-                    }
-                }
-            } else if (cmd.startsWith("virtual_channel ")) {
-                int ch, vs = -1, vidx = -1, cs = -1, cidx = -1;
-                int n = sscanf(cmd.c_str(), "virtual_channel %d %d %d %d %d", &ch, &vs, &vidx, &cs, &cidx);
-                if (n == 1 && ch >= 0 && ch <= 3) {
-                    VirtualChannelConfig vc;
-                    if (settings_load_virtual_channel(ch, &vc)) {
-                        Serial.printf("CH%d: V=src%d:idx%d I=src%d:idx%d\n",
-                            ch, vc.voltage_src, vc.voltage_idx, vc.current_src, vc.current_idx);
-                    } else {
-                        Serial.printf("CH%d: not configured\n", ch);
-                    }
-                } else if (n == 5 && ch >= 0 && ch <= 3 && vs >= 0 && vs <= 4 && vidx >= 0 && cs >= 0 && cs <= 3 && cidx >= 0 && cidx <= 2) {
-                    VirtualChannelConfig vc = {};
-                    vc.voltage_src = (uint8_t)vs;
-                    vc.voltage_idx = (uint8_t)vidx;
-                    vc.current_src = (uint8_t)cs;
-                    vc.current_idx = (uint8_t)cidx;
-                    settings_save_virtual_channel(ch, &vc);
-                    Serial.printf("CH%d: V=src%d:idx%d I=src%d:idx%d saved\n", ch, vs, vidx, cs, cidx);
-                } else {
-                    Serial.println("Usage: virtual_channel show | virtual_channel N | virtual_channel N vs vidx cs cidx");
-                    Serial.println("  src: 0=none 1=volt(0x42) 2=curr(0x40) 3=ina226 4=ads1115");
-                    Serial.println("  e.g. virtual_channel 0 1 0 2 0 → CH0: V=volt:0, I=curr:0");
-                }
-            } else if (cmd == "reboot") {
-                Serial.println("Rebooting...");
-                delay(100);
-                ESP.restart();
-            } else if (cmd == "help") {
+            } else if (strcmp(line, "help") == 0) {
                 Serial.println("Commands:");
                 Serial.println("  status              — IP, log entries, coulomb/SoC");
                 Serial.println("  mem                 — free heap bytes, CPU temperature");
@@ -542,7 +555,7 @@ static void handle_serial_cli() {
                 Serial.println("  supabase <url> <anon_key> <service_role_key> <device_key>");
                 Serial.println("  reboot              — reboot the device");
                 Serial.println("  help                — this list");
-            } else if (cmd.length() > 0) {
+            } else if (len > 0) {
                 Serial.println("Unknown command. Type 'help'.");
             }
         } else {

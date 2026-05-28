@@ -55,7 +55,7 @@ class CmdCallbacks : public BLECharacteristicCallbacks {
 };
 
 static void send_response(const char* msg) {
-    if (!bleClientConnected || !pRespChar) { Serial.println("[BLE] send_response: not connected or pRespChar is null"); return; }
+    if (!bleClientConnected || !pRespChar) { Serial.println(F("[BLE] send_response: not connected or pRespChar is null")); return; }
     size_t len = strlen(msg);
     pRespChar->setValue((uint8_t*)msg, len);
     pRespChar->notify();
@@ -88,7 +88,7 @@ static bool check_rate_limit() {
     if (now - rate_last_cmd < 100) {
         rate_cmd_count++;
         if (rate_cmd_count > MAX_COMMANDS) {
-            Serial.println("[BLE] rate limited");
+            Serial.println(F("[BLE] rate limited"));
             send_response("{\"ok\":false,\"error\":\"rate_limited\"}");
             return false;
         }
@@ -101,10 +101,10 @@ static bool check_rate_limit() {
 
 static void handle_command(const char* json) {
     Serial.printf("[BLE] command: %s\n", json);
-    if (!check_rate_limit()) { Serial.println("[BLE] rate limited"); return; }
+    if (!check_rate_limit()) { Serial.println(F("[BLE] rate limited")); return; }
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
-    if (err) { Serial.println("[BLE] bad json"); send_response("{\"ok\":false,\"error\":\"bad_json\"}"); return; }
+    if (err) { Serial.println(F("[BLE] bad json")); send_response("{\"ok\":false,\"error\":\"bad_json\"}"); return; }
 
     const char* cmd = doc["cmd"] | "";
     Serial.printf("[BLE] cmd: %s\n", cmd);
