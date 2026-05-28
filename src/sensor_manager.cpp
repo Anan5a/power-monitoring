@@ -47,8 +47,15 @@ uint8_t baseline_count = 0;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 static float median_of(float arr[], int n) {
-    std::nth_element(arr, arr + n/2, arr + n);
-    return arr[n/2];
+    // Bubble sort for n=4 — no heap allocation, deterministic
+    for (int i = 0; i < n - 1; i++) {
+        for (int j = 0; j < n - i - 1; j++) {
+            if (arr[j] > arr[j + 1]) {
+                float t = arr[j]; arr[j] = arr[j + 1]; arr[j + 1] = t;
+            }
+        }
+    }
+    return arr[n / 2];
 }
 
 static float stddev_of(float arr[], int n, float med) {

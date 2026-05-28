@@ -27,6 +27,8 @@ static unsigned long rate_last_cmd = 0;
 
 static void handle_command(const char* json);
 
+static bool ble_advertising_active = false;
+
 class ProvServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
         bleClientConnected = true;
@@ -35,19 +37,15 @@ class ProvServerCallbacks : public BLEServerCallbacks {
     }
     void onDisconnect(BLEServer* pServer) {
         bleClientConnected = false;
-        // Clear pointers so send_response/nofity bail out cleanly
-        pCmdChar = nullptr;
-        pRespChar = nullptr;
-        pStatusChar = nullptr;
-        pSensorChar = nullptr;
-        // Restart advertising so next connection attempt succeeds
-        BLEDevice::startAdvertising();
+        // Do NOT null out characteristic pointers — the server still owns them.
+        // Do NOT call BLEDevice::startAdvertising() directly — it bypasses the guard and leaks.
+        ble_advertising_active = false;  // Reset guard so loop_ble_provisioner() restarts cleanly
     }
 };
 
 class CmdCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* pCharacteristic) {
-        std::string val = pCharacteristic->getValue().c_str();
+        std::string val = pCharacteristic->getValue();
         Serial.printf("[BLE] onWrite len=%d\n", val.length());
         if (val.empty()) return;
         handle_command(val.c_str());
@@ -580,8 +578,6 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         Serial.printf("[CMD] unknown: %s\n", cmd_type);
     }
 }
-
-static bool ble_advertising_active = false;
 
 void init_ble_provisioner() {
     BLEDevice::init(BT_DEVICE_NAME);

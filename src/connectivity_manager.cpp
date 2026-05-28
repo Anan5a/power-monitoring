@@ -6,6 +6,7 @@
 #include "coulomb_counter.h"
 #include "sensor_manager.h"
 #include <WiFi.h>
+#define MQTT_MAX_PACKET_SIZE 1024
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 // #include <BlynkSimpleEsp32.h> // Blynk disabled
@@ -102,6 +103,7 @@ const char* get_local_ip_str() { return ip_str; }
 time_t get_epoch_time() { return epoch_time; }
 
 void publish_data_http(const SensorData& data, const char* json_buffer, size_t json_len) {
+    if (ESP.getFreeHeap() < 4096) return;
     if (!settings_load_http_enabled()) return;
     char url[128], token[64];
     if (!settings_load_http_endpoint(url, token, sizeof(url))) return;
@@ -183,12 +185,14 @@ void publish_log_batch() {
     mqtt.publish(MQTT_LOG_TOPIC, encoded);
 }
 
+static JsonDocument g_pub_doc;
+
 void publish_data(const SensorData& data) {
     if (skip_network) return;
 
-    JsonDocument doc;
+    g_pub_doc.clear();
 
-    JsonArray ina3221Arr = doc["ina3221"].to<JsonArray>();
+    JsonArray ina3221Arr = g_pub_doc["ina3221"].to<JsonArray>();
     for (uint8_t i = 0; i < 3; i++) {
         JsonObject ch = ina3221Arr.add<JsonObject>();
         ch["v"] = data.ina3221_busV[i];
@@ -196,20 +200,20 @@ void publish_data(const SensorData& data) {
     }
 
 #if ENABLE_INA226
-    JsonObject ina226Obj = doc["ina226"].to<JsonObject>();
+    JsonObject ina226Obj = g_pub_doc["ina226"].to<JsonObject>();
     ina226Obj["v"] = data.ina226_busV;
     ina226Obj["i"] = data.ina226_current;
     ina226Obj["p"] = data.ina226_power;
 #endif
 
-    JsonArray adcArr = doc["ads1115"].to<JsonArray>();
+    JsonArray adcArr = g_pub_doc["ads1115"].to<JsonArray>();
     for (uint8_t i = 0; i < 4; i++) {
         adcArr.add(data.ads1115_volts[i]);
     }
 
-    doc["log_entries"] = log_entries_count();
-    doc["log_overflow"] = log_has_overflow_file();
-    doc["log_overflow_bytes"] = log_overflow_file_size();
+    g_pub_doc["log_entries"] = log_entries_count();
+    g_pub_doc["log_overflow"] = log_has_overflow_file();
+    g_pub_doc["log_overflow_bytes"] = log_overflow_file_size();
 
     // Virtual channels: compute V, I, P per channel from configured sources
     for (uint8_t ch = 0; ch < 4; ch++) {
@@ -228,19 +232,16 @@ void publish_data(const SensorData& data) {
                 p = v * i;
             }
         }
-        if (vc.voltage_src > 0 && vc.current_src == 0) {
-            // Current-only source (INA226 with separate power calc)
-        }
         snprintf(key, sizeof(key), "ch%d_V", ch);
-        doc[key] = v;
+        g_pub_doc[key] = v;
         snprintf(key, sizeof(key), "ch%d_I", ch);
-        doc[key] = i;
+        g_pub_doc[key] = i;
         snprintf(key, sizeof(key), "ch%d_P", ch);
-        doc[key] = p;
+        g_pub_doc[key] = p;
     }
 
     char buffer[512];
-    size_t len = serializeJson(doc, buffer);
+    size_t len = serializeJson(g_pub_doc, buffer);
 
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
@@ -254,7 +255,13 @@ void publish_data(const SensorData& data) {
     ble_notify_sensor_data(buffer, len);
 }
 
+static JsonDocument g_supa_doc;
+
 void publish_data_supabase(const SensorData& data) {
+    if (ESP.getFreeHeap() < 8192) {
+        Serial.println("[WARN] Low heap, skipping Supabase publish");
+        return;
+    }
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
@@ -276,11 +283,11 @@ void publish_data_supabase(const SensorData& data) {
     uint32_t ms = millis();
     time_t epoch_s = (epoch_time > 0) ? epoch_time + ms / 1000 : time(nullptr);
 
-    JsonDocument doc;
-    doc["p_device_key"] = device_key;
-    doc["p_device_api_key"] = api_key;
+    g_supa_doc.clear();
+    g_supa_doc["p_device_key"] = device_key;
+    g_supa_doc["p_device_api_key"] = api_key;
 
-    JsonObject payload = doc["p_payload"].to<JsonObject>();
+    JsonObject payload = g_supa_doc["p_payload"].to<JsonObject>();
     for (uint8_t i = 0; i < 3; i++) {
         char key[16];
         snprintf(key, sizeof(key), "ina3221_v%d", i);
@@ -352,15 +359,15 @@ void publish_data_supabase(const SensorData& data) {
         payload[key] = m.spike;
     }
 
-    JsonObject metadata = doc["p_metadata"].to<JsonObject>();
+    JsonObject metadata = g_supa_doc["p_metadata"].to<JsonObject>();
     metadata["rssi"] = WiFi.RSSI();
     metadata["vcc"] = analogRead(0) / 4095.0f * 3.3f;
     metadata["uptime_s"] = millis() / 1000;
 
-    doc["p_recorded_at"] = (uint32_t)epoch_s;
+    g_supa_doc["p_recorded_at"] = (uint32_t)epoch_s;
 
     char buffer[1024];
-    size_t len = serializeJson(doc, buffer);
+    size_t len = serializeJson(g_supa_doc, buffer);
 
     int rc = http.POST((uint8_t*)buffer, len);
     http.end();
@@ -372,7 +379,10 @@ void publish_data_supabase(const SensorData& data) {
     publish_calibration_status();
 }
 
+static JsonDocument g_cal_doc;
+
 void sync_calibration_to_supabase() {
+    if (ESP.getFreeHeap() < 4096) return;
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
@@ -395,8 +405,8 @@ void sync_calibration_to_supabase() {
     }
     http.addHeader("Prefer", "precision=exact");
 
-    JsonDocument doc;
-    JsonObject cal_obj = doc["channel_calibration"].to<JsonObject>();
+    g_cal_doc.clear();
+    JsonObject cal_obj = g_cal_doc["channel_calibration"].to<JsonObject>();
     JsonArray volt_offset = cal_obj["volt_offset_mv"].to<JsonArray>();
     JsonArray volt_gain = cal_obj["volt_gain"].to<JsonArray>();
     JsonArray curr_offset = cal_obj["curr_offset_ma"].to<JsonArray>();
@@ -409,7 +419,7 @@ void sync_calibration_to_supabase() {
     }
 
     char buffer[512];
-    size_t len = serializeJson(doc, buffer);
+    size_t len = serializeJson(g_cal_doc, buffer);
     int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
     http.end();
     if (rc >= 200 && rc < 300) {
@@ -420,6 +430,7 @@ void sync_calibration_to_supabase() {
 }
 
 void sync_ble_pin_to_supabase() {
+    if (ESP.getFreeHeap() < 4096) return;
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
@@ -442,10 +453,10 @@ void sync_ble_pin_to_supabase() {
         http.addHeader("Authorization", auth_hdr);
     }
 
-    JsonDocument doc;
-    doc["ble_pin"] = pin_str;
+    g_cal_doc.clear();
+    g_cal_doc["ble_pin"] = pin_str;
     char buffer[256];
-    size_t len = serializeJson(doc, buffer);
+    size_t len = serializeJson(g_cal_doc, buffer);
     int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
     http.end();
     if (rc >= 200 && rc < 300) {
@@ -457,6 +468,7 @@ void sync_ble_pin_to_supabase() {
 
 void publish_calibration_status() {
     if (!sensor_is_calibrating()) return;  // nothing to report
+    if (ESP.getFreeHeap() < 4096) return;
 
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
@@ -472,11 +484,11 @@ void publish_calibration_status() {
     char url[256];
     snprintf(url, sizeof(url), "%s/rest/v1/sensor_calibration_status", supabase_url);
 
-    JsonDocument doc;
-    doc["device_key"] = device_key;
-    doc["calibrating"] = sensor_is_calibrating();
-    doc["baseline_tick"] = tick_count;
-    JsonObject sd = doc["baseline_stddev"].to<JsonObject>();
+    g_cal_doc.clear();
+    g_cal_doc["device_key"] = device_key;
+    g_cal_doc["calibrating"] = sensor_is_calibrating();
+    g_cal_doc["baseline_tick"] = tick_count;
+    JsonObject sd = g_cal_doc["baseline_stddev"].to<JsonObject>();
     char key[16];
     for (int i = 0; i < 3; i++) {
         snprintf(key, sizeof(key), "ina3221_i%d", i);
@@ -486,10 +498,10 @@ void publish_calibration_status() {
         snprintf(key, sizeof(key), "ina3221_v%d", i);
         sd[key] = stddev_out[i + 3];
     }
-    doc["updated_at"] = "now";
+    g_cal_doc["updated_at"] = "now";
 
     char buffer[512];
-    size_t len = serializeJson(doc, buffer);
+    size_t len = serializeJson(g_cal_doc, buffer);
     http.begin(url);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("apikey", anon_key);
@@ -553,6 +565,7 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
 }
 
 void check_settings_commands() {
+    if (ESP.getFreeHeap() < 4096) return;
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
@@ -575,10 +588,10 @@ void check_settings_commands() {
         http.addHeader("Authorization", auth_hdr);
     }
 
-    JsonDocument doc;
-    doc["p_device_key"] = device_key;
+    g_cal_doc.clear();
+    g_cal_doc["p_device_key"] = device_key;
     char buffer[256];
-    size_t len = serializeJson(doc, buffer);
+    size_t len = serializeJson(g_cal_doc, buffer);
 
     int rc = http.POST((uint8_t*)buffer, len);
     http.end();
@@ -596,12 +609,12 @@ void check_settings_commands() {
         if (resp_len == 0 || strncmp(resp_buf, "null", 4) == 0) return;
 
         // Expected: {"cmd_type":"set_wifi","payload":{...}}
-        JsonDocument resp;
-        DeserializationError err = deserializeJson(resp, resp_buf);
+        g_cal_doc.clear();
+        DeserializationError err = deserializeJson(g_cal_doc, resp_buf);
         if (err) { Serial.println("[SETTINGS] parse error"); return; }
 
-        const char* cmd_type = resp["cmd_type"] | "";
-        const char* payload = resp["payload"] | "{}";
+        const char* cmd_type = g_cal_doc["cmd_type"] | "";
+        const char* payload = g_cal_doc["payload"] | "{}";
         if (strlen(cmd_type) > 0) {
             apply_settings_command(cmd_type, payload);
         }
