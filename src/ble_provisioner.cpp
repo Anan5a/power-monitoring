@@ -8,6 +8,7 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <ArduinoJson.h>
+#include <esp_bt.h>
 
 static NimBLECharacteristic* pCmdChar = nullptr;
 static NimBLECharacteristic* pRespChar = nullptr;
@@ -579,6 +580,21 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
 
 void init_ble_provisioner() {
     if (ble_initialized) return;
+
+    // The Arduino framework may pre-initialize the BT controller in some configs.
+    // NimBLE requires a clean IDLE state; force disable + deinit if needed.
+    if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED) {
+        esp_bt_controller_disable();
+    }
+    if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_INITED) {
+        esp_bt_controller_deinit();
+    }
+
+    // Release classic BT memory before re-init — NimBLE is BLE-only.
+    if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE) {
+        esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+    }
+
     NimBLEDevice::init(BT_DEVICE_NAME);
     NimBLEServer* pServer = NimBLEDevice::createServer();
     pServer->setCallbacks(new ProvServerCallbacks());
