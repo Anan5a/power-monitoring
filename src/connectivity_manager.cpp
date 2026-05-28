@@ -202,6 +202,153 @@ void publish_log_batch() {
     }
 }
 
+static JsonDocument g_supa_doc;
+
+static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v, const int16_t* i, const int16_t* p,
+    const char* entry_type, const char* supabase_url, const char* anon_key,
+    const char* device_key, const char* api_key) {
+    g_supa_doc.clear();
+    g_supa_doc["p_device_key"] = device_key;
+    g_supa_doc["p_device_api_key"] = api_key;
+
+    JsonObject payload = g_supa_doc["p_payload"].to<JsonObject>();
+    payload["source"] = "log";
+    payload["entry_type"] = entry_type;
+    payload["timestamp_s"] = log_to_epoch(timestamp_ms);
+    for (int ch = 0; ch < 4; ch++) {
+        char key[8];
+        snprintf(key, sizeof(key), "v%d", ch);
+        payload[key] = v[ch] / 1000.0f;
+        snprintf(key, sizeof(key), "i%d", ch);
+        payload[key] = i[ch] / 1000.0f;
+        snprintf(key, sizeof(key), "p%d", ch);
+        payload[key] = p[ch] / 1000.0f;
+    }
+    g_supa_doc["p_recorded_at"] = (uint32_t)log_to_epoch(timestamp_ms);
+
+    char buffer[512];
+    size_t len = serializeJson(g_supa_doc, buffer);
+
+    HTTPClient http;
+    char url[256];
+    snprintf(url, sizeof(url), "%s/rest/v1/rpc/insert_telemetry", supabase_url);
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", anon_key);
+    char auth_hdr[384];
+    snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
+    http.addHeader("Authorization", auth_hdr);
+
+    int rc = http.POST((uint8_t*)buffer, len);
+    http.end();
+    if (rc != 200 && rc != 201 && rc != 204) {
+        Serial.printf("[Supabase] log entry POST failed: %d\n", rc);
+    }
+}
+
+static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
+    const char* supabase_url, const char* anon_key,
+    const char* device_key, const char* api_key,
+    int16_t* abs_v, int16_t* abs_i, int16_t* abs_p, uint32_t* abs_ts, bool* have_abs) {
+    size_t offset = 0;
+    while (offset < len) {
+        uint8_t type = data[offset];
+        if (type == ENTRY_BASE) {
+            if (offset + sizeof(BaseEntry) > len) break;
+            BaseEntry e;
+            memcpy(&e, data + offset, sizeof(e));
+            *abs_ts = e.timestamp_ms;
+            for (int ch = 0; ch < 4; ch++) {
+                abs_v[ch] = e.v[ch];
+                abs_i[ch] = e.i[ch];
+                abs_p[ch] = e.p[ch];
+            }
+            *have_abs = true;
+            send_one_log_entry_supabase(*abs_ts, abs_v, abs_i, abs_p, "base",
+                supabase_url, anon_key, device_key, api_key);
+            offset += sizeof(BaseEntry);
+        } else if (type == ENTRY_DELTA) {
+            if (offset + sizeof(DeltaEntry) > len) break;
+            if (!*have_abs) { offset++; continue; }
+            DeltaEntry e;
+            memcpy(&e, data + offset, sizeof(e));
+            *abs_ts += e.dt_ms;
+            for (int ch = 0; ch < 4; ch++) {
+                abs_v[ch] += e.dv[ch];
+                abs_i[ch] += e.di[ch];
+                abs_p[ch] += e.dp[ch];
+            }
+            send_one_log_entry_supabase(*abs_ts, abs_v, abs_i, abs_p, "delta",
+                supabase_url, anon_key, device_key, api_key);
+            offset += sizeof(DeltaEntry);
+        } else {
+            offset++;
+        }
+    }
+    return offset;
+}
+
+void publish_log_batch_supabase() {
+    if (ESP.getFreeHeap() < 8192) {
+        Serial.println("[WARN] Low heap, skipping Supabase log publish");
+        return;
+    }
+    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
+
+    // --- Drain RAM buffer one entry at a time ---
+    uint8_t batch[sizeof(BaseEntry)];
+    int16_t ram_v[4] = {0}, ram_i[4] = {0}, ram_p[4] = {0};
+    uint32_t ram_ts = 0;
+    bool ram_have = false;
+    size_t batch_len = log_pop_batch(batch, sizeof(batch));
+    while (batch_len > 0) {
+        decode_and_send_log_entries(batch, batch_len, supabase_url, anon_key, device_key, api_key,
+            ram_v, ram_i, ram_p, &ram_ts, &ram_have);
+        batch_len = log_pop_batch(batch, sizeof(batch));
+    }
+
+    // --- Drain SPIFFS overflow file one entry at a time ---
+    if (log_open_overflow_for_read()) {
+        uint8_t carry[sizeof(BaseEntry)];
+        size_t carry_len = 0;
+        int16_t spiffs_v[4] = {0}, spiffs_i[4] = {0}, spiffs_p[4] = {0};
+        uint32_t spiffs_ts = 0;
+        bool spiffs_have = false;
+
+        while (true) {
+            uint8_t chunk[512];
+            size_t n = log_read_overflow_chunk(chunk, sizeof(chunk));
+            if (n == 0) break;
+
+            // Prepend carry bytes
+            uint8_t work[512 + sizeof(BaseEntry)];
+            memcpy(work, carry, carry_len);
+            memcpy(work + carry_len, chunk, n);
+            size_t work_len = carry_len + n;
+
+            size_t consumed = decode_and_send_log_entries(work, work_len, supabase_url, anon_key, device_key, api_key,
+                spiffs_v, spiffs_i, spiffs_p, &spiffs_ts, &spiffs_have);
+
+            carry_len = work_len - consumed;
+            if (carry_len > 0) {
+                memcpy(carry, work + consumed, carry_len);
+            }
+        }
+
+        // Final carry: attempt to decode any remaining bytes
+        if (carry_len > 0) {
+            decode_and_send_log_entries(carry, carry_len, supabase_url, anon_key, device_key, api_key,
+                spiffs_v, spiffs_i, spiffs_p, &spiffs_ts, &spiffs_have);
+        }
+
+        log_close_overflow();
+    }
+}
+
 static JsonDocument g_pub_doc;
 
 void publish_data(const SensorData& data) {
@@ -271,8 +418,6 @@ void publish_data(const SensorData& data) {
 
     ble_notify_sensor_data(buffer, len);
 }
-
-static JsonDocument g_supa_doc;
 
 void publish_data_supabase(const SensorData& data) {
     if (ESP.getFreeHeap() < 8192) {

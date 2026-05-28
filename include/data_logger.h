@@ -6,6 +6,24 @@
 #include <time.h>
 #include "sensor_manager.h"
 
+enum EntryType : uint8_t { ENTRY_BASE = 0xB0, ENTRY_DELTA = 0xD0 };
+
+struct BaseEntry {
+    uint8_t  type;
+    uint32_t timestamp_ms;
+    int16_t  v[4];
+    int16_t  i[4];
+    int16_t  p[4];
+} __attribute__((packed));
+
+struct DeltaEntry {
+    uint8_t  type;
+    uint16_t dt_ms;
+    int16_t  dv[4];
+    int16_t  di[4];
+    int16_t  dp[4];
+} __attribute__((packed));
+
 struct LogSnapshot {
     uint32_t timestamp_s;    // epoch seconds
     float voltage[4];
