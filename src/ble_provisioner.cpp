@@ -595,6 +595,10 @@ void init_ble_provisioner() {
         esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
     }
 
+    // esp_bt_controller_deinit() is asynchronous — wait for the controller
+    // to fully reach IDLE before re-initializing, otherwise init() fails.
+    delay(100);
+
     NimBLEDevice::init(BT_DEVICE_NAME);
     NimBLEServer* pServer = NimBLEDevice::createServer();
     pServer->setCallbacks(new ProvServerCallbacks());
