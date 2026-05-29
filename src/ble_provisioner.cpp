@@ -582,6 +582,7 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
 void init_ble_provisioner() {
     if (ble_initialized) return;
     NimBLEDevice::init(BT_DEVICE_NAME);
+    NimBLEDevice::deleteAllBonds();  // Clear stale bonding info after reflash/factory reset
     NimBLEServer* pServer = NimBLEDevice::createServer();
     pServer->setCallbacks(new ProvServerCallbacks());
     pServer->advertiseOnDisconnect(true);  // NimBLE auto-restarts advertising on disconnect
