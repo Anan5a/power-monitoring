@@ -163,14 +163,13 @@ static void connect_wifi() {
 
 static void connect_mqtt() {
     if (skip_network) return;
-    while (!mqtt.connected()) {
-        if (mqtt.connect("power-monitor-esp32")) {
-            Serial.println("MQTT connected");
-        } else {
-            Serial.print("MQTT fail rc=");
-            Serial.println(mqtt.state());
-            delay(5000);
-        }
+    static uint32_t last_mqtt_retry = -30000UL; // underflow so first call passes
+    if (millis() - last_mqtt_retry < 30000) return; // rate limit: 1 attempt per 30s
+    last_mqtt_retry = millis();
+    if (mqtt.connect("power-monitor-esp32")) {
+        Serial.println("MQTT connected");
+    } else {
+        Serial.printf("MQTT fail rc=%d\n", mqtt.state());
     }
 }
 
@@ -575,7 +574,7 @@ void publish_data(const SensorData& data) {
 
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
-        mqtt.publish(MQTT_TOPIC, buffer, len);
+        if (mqtt.connected()) mqtt.publish(MQTT_TOPIC, buffer, len);
     }
 
     publish_data_http(data, buffer, len);

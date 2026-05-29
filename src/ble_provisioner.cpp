@@ -113,11 +113,13 @@ static void handle_command(const char* json) {
         Serial.printf("[BLE] stored_pin=%lu expected=%lu\n", stored_pin, pin);
         if (!check_pin(doc)) { Serial.println("[BLE] pin check failed"); return; }
         settings_save_wifi(doc["ssid"], doc["pass"]);
-        send_response("{\"ok\":true,\"msg\":\"wifi_saved_reboot\"}");
+        apply_settings_posthook("set_wifi");
+        send_response("{\"ok\":true,\"msg\":\"wifi_saved_reconnecting\"}");
         Serial.println("[BLE] wifi saved");
     } else if (strcmp(cmd, "set_mqtt") == 0) {
         if (!check_pin(doc)) return;
         settings_save_mqtt(doc["broker"], doc["port"], doc["topic"]);
+        apply_settings_posthook("set_mqtt");
         send_response("{\"ok\":true,\"msg\":\"mqtt_saved\"}");
     } else if (strcmp(cmd, "set_http") == 0) {
         if (!check_pin(doc)) return;
@@ -272,6 +274,7 @@ static void handle_command(const char* json) {
         settings_save_supabase_anon_key(doc["anon_key"] | "");
         settings_save_supabase_api_key(doc["api_key"] | "");
         settings_save_supabase_device_key(doc["device_key"] | "");
+        apply_settings_posthook("set_supabase");
         send_response("{\"ok\":true,\"msg\":\"supabase_saved\"}");
     } else if (strcmp(cmd, "get_supabase") == 0) {
         if (!check_pin(doc)) return;

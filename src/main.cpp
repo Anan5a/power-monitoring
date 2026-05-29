@@ -255,7 +255,8 @@ static void handle_serial_cli() {
                 char new_ssid[64], new_pass[64];
                 if (sscanf(line, "set_wifi %s %s", new_ssid, new_pass) == 2) {
                     settings_save_wifi(new_ssid, new_pass);
-                    Serial.printf("WiFi set: %s (reboot to apply)\n", new_ssid);
+                    apply_settings_posthook("set_wifi");
+                    Serial.printf("WiFi set: %s (reconnecting)\n", new_ssid);
                 } else {
                     Serial.println("Usage: set_wifi <ssid> <pass>");
                 }
@@ -268,7 +269,8 @@ static void handle_serial_cli() {
                     settings_save_supabase_anon_key(anon_key);
                     settings_save_supabase_api_key(device_api_key);
                     settings_save_supabase_device_key(device_key);
-                    Serial.println("Supabase configured. Reboot to apply.");
+                    apply_settings_posthook("set_supabase");
+                    Serial.println("Supabase configured (client reset).");
                 } else {
                     Serial.println("Usage: supabase <url> <anon_key> <device_api_key> <device_key>");
                 }
