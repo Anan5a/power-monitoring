@@ -33,16 +33,14 @@ class ProvServerCallbacks : public NimBLEServerCallbacks {
         rate_window_start = millis();
         rate_cmd_count = 0;
         Serial.printf("[BLE] client connected (addr=%s)\n", connInfo.getAddress().toString().c_str());
-        // Use conservative params matching NimBLE example (30-60ms interval, 1.8s timeout)
-        pServer->updateConnParams(connInfo.getConnHandle(), 24, 48, 0, 180);
+        // Do NOT update connection params — let NimBLE use the defaults negotiated by the central.
+        // Windows/Web Bluetooth often disconnects immediately when the peripheral overrides params.
     }
     void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
         bleClientConnected = false;
-        // Reset guard so loop_ble_provisioner() doesn't double-start
+        // Reset guard so loop_ble_provisioner() restarts advertising cleanly
         ble_advertising_active = false;
         Serial.printf("[BLE] client disconnected (reason=%d)\n", reason);
-        // Restart advertising immediately — matches NimBLE_Server example pattern
-        start_ble_advertising();
     }
 };
 
