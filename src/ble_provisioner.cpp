@@ -496,6 +496,18 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
             settings_save_supabase_device_key(doc["device_key"] | "");
             Serial.println("[CMD] supabase saved");
         }
+    } else if (strcmp(cmd_type, "set_shunt") == 0) {
+        uint8_t ch = doc["channel"] | 0;
+        settings_save_shunt(ch, doc["ohms"] | 0.0f);
+        Serial.println("[CMD] shunt saved");
+    } else if (strcmp(cmd_type, "set_volt_ratio") == 0) {
+        uint8_t ch = doc["channel"] | 0;
+        settings_save_volt_ratio(ch, doc["ratio"] | 0.0f);
+        Serial.println("[CMD] volt_ratio saved");
+    } else if (strcmp(cmd_type, "set_resistors") == 0) {
+        uint8_t ch = doc["channel"] | 0;
+        settings_save_resistors(ch, doc["r_high"] | 0.0f, doc["r_low"] | 0.0f);
+        Serial.println("[CMD] resistors saved");
     } else if (strcmp(cmd_type, "set_relay") == 0) {
         RelayRule rt = {};
         rt.channel = doc["channel"] | 0;

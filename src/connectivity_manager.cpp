@@ -742,8 +742,10 @@ void sync_calibration_to_supabase() {
 
     static char buffer[512];
     size_t len = serializeJson(g_cal_doc, buffer);
+    supabase_http_reset();
     g_supa_http.addHeader("Prefer", "precision=exact");
     int rc = supabase_patch(path, buffer, len, supabase_url, anon_key);
+    supabase_http_reset();
     if (rc >= 200 && rc < 300) {
         Serial.println("Calibration synced to Supabase");
     } else {
@@ -776,6 +778,29 @@ void sync_ble_pin_to_supabase() {
         Serial.println("BLE PIN synced to Supabase");
     } else {
         print_http_error(g_supa_http, rc);
+    }
+}
+
+void apply_settings_posthook(const char* cmd_type) {
+    if (strcmp(cmd_type, "set_wifi") == 0) {
+        char ssid[64] = "", pass[64] = "";
+        if (settings_load_wifi(ssid, pass, sizeof(ssid))) {
+            WiFi.disconnect(true);
+            delay(100);
+            WiFi.begin(ssid, pass);
+            Serial.println("[CMD] WiFi reconnecting with new credentials");
+        }
+    } else if (strcmp(cmd_type, "set_mqtt") == 0) {
+        char broker[64], topic[64];
+        uint16_t port;
+        if (settings_load_mqtt(broker, &port, topic, sizeof(broker))) {
+            mqtt.disconnect();
+            mqtt.setServer(broker, port);
+            Serial.println("[CMD] MQTT reconnecting with new broker");
+        }
+    } else if (strcmp(cmd_type, "set_supabase") == 0) {
+        supabase_http_reset();
+        Serial.println("[CMD] Supabase client reset with new URL/key");
     }
 }
 
@@ -915,6 +940,7 @@ void check_settings_commands() {
             serializeJson(payload_var, payload_buf, sizeof(payload_buf));
         }
         apply_settings_command(cmd_type, payload_buf);
+        apply_settings_posthook(cmd_type);
     } else {
         print_http_error(g_supa_http, rc);
     }
