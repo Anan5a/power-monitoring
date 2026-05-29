@@ -73,7 +73,7 @@ static void networkTask(void* param) {
             publish_data_supabase(data);
         }
 
-        // Flush log batch (RAM + SPIFFS overflow) if MQTT connected
+        // Flush log batch (RAM + LittleFS overflow) if MQTT connected
         publish_log_batch();
         // Flush log entries one by one via Supabase
         publish_log_batch_supabase();

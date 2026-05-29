@@ -306,7 +306,7 @@ void publish_log_batch() {
         batch_len = log_pop_batch(batch, sizeof(batch));
     }
 
-    // Then drain SPIFFS overflow file
+    // Then drain LittleFS overflow file
     if (log_open_overflow_for_read()) {
         while (true) {
             size_t n = log_read_overflow_chunk(batch, sizeof(batch));
@@ -426,24 +426,24 @@ void publish_log_batch_supabase() {
     if (!is_valid_uuid(api_key)) return;
 
     // Static state machine: drains 1 entry per call to spread heap load
-    static enum { ST_RAM, ST_SPIFFS, ST_DONE } state = ST_RAM;
+    static enum { ST_RAM, ST_FS, ST_DONE } state = ST_RAM;
     static int16_t ram_v[4] = {0}, ram_i[4] = {0}, ram_p[4] = {0};
     static uint32_t ram_ts = 0;
     static bool ram_have = false;
     static uint8_t ram_carry[sizeof(BaseEntry)];
     static size_t ram_carry_len = 0;
-    static int16_t spiffs_v[4] = {0}, spiffs_i[4] = {0}, spiffs_p[4] = {0};
-    static uint32_t spiffs_ts = 0;
-    static bool spiffs_have = false;
-    static uint8_t spiffs_carry[sizeof(BaseEntry)];
-    static size_t spiffs_carry_len = 0;
-    static bool spiffs_file_open = false;
+    static int16_t fs_v[4] = {0}, fs_i[4] = {0}, fs_p[4] = {0};
+    static uint32_t fs_ts = 0;
+    static bool fs_have = false;
+    static uint8_t fs_carry[sizeof(BaseEntry)];
+    static size_t fs_carry_len = 0;
+    static bool fs_file_open = false;
 
     if (state == ST_RAM) {
         uint8_t chunk[sizeof(BaseEntry)];
         size_t n = log_pop_batch(chunk, sizeof(chunk));
         if (n == 0) {
-            state = ST_SPIFFS;
+            state = ST_FS;
             return;
         }
         // Prepend carry
@@ -463,40 +463,40 @@ void publish_log_batch_supabase() {
         return;
     }
 
-    if (state == ST_SPIFFS) {
-        if (!spiffs_file_open) {
+    if (state == ST_FS) {
+        if (!fs_file_open) {
             if (!log_open_overflow_for_read()) {
                 state = ST_DONE;
                 return;
             }
-            spiffs_file_open = true;
+            fs_file_open = true;
         }
         uint8_t chunk[512];
         size_t n = log_read_overflow_chunk(chunk, sizeof(chunk));
         if (n == 0) {
             // EOF
-            if (spiffs_carry_len > 0) {
-                decode_and_send_log_entries(spiffs_carry, spiffs_carry_len, supabase_url, anon_key, device_key, api_key,
-                    spiffs_v, spiffs_i, spiffs_p, &spiffs_ts, &spiffs_have);
-                spiffs_carry_len = 0;
+            if (fs_carry_len > 0) {
+                decode_and_send_log_entries(fs_carry, fs_carry_len, supabase_url, anon_key, device_key, api_key,
+                    fs_v, fs_i, fs_p, &fs_ts, &fs_have);
+                fs_carry_len = 0;
                 return; // may have sent 1 entry; return to recover
             }
             log_close_overflow();
-            spiffs_file_open = false;
+            fs_file_open = false;
             state = ST_DONE;
             return;
         }
         uint8_t work[512 + sizeof(BaseEntry)];
-        memcpy(work, spiffs_carry, spiffs_carry_len);
-        memcpy(work + spiffs_carry_len, chunk, n);
-        size_t work_len = spiffs_carry_len + n;
+        memcpy(work, fs_carry, fs_carry_len);
+        memcpy(work + fs_carry_len, chunk, n);
+        size_t work_len = fs_carry_len + n;
 
         size_t consumed = decode_and_send_log_entries(work, work_len, supabase_url, anon_key, device_key, api_key,
-            spiffs_v, spiffs_i, spiffs_p, &spiffs_ts, &spiffs_have);
+            fs_v, fs_i, fs_p, &fs_ts, &fs_have);
 
-        spiffs_carry_len = work_len - consumed;
-        if (spiffs_carry_len > 0) {
-            memcpy(spiffs_carry, work + consumed, spiffs_carry_len);
+        fs_carry_len = work_len - consumed;
+        if (fs_carry_len > 0) {
+            memcpy(fs_carry, work + consumed, fs_carry_len);
         }
         return; // only sent 1 entry; return to let heap recover
     }
@@ -507,8 +507,8 @@ void publish_log_batch_supabase() {
             state = ST_RAM;
             ram_have = false;
             ram_carry_len = 0;
-            spiffs_have = false;
-            spiffs_carry_len = 0;
+            fs_have = false;
+            fs_carry_len = 0;
         }
     }
 }

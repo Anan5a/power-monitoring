@@ -4,7 +4,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 
 static uint8_t buffer[LOG_BUFFER_BYTES];
 static size_t head = 0, tail = 0;
@@ -56,17 +56,17 @@ void init_data_logger() {
     head = tail = 0;
     entry_count = 0;
     have_base = false;
-    if (!SPIFFS.begin(true)) {
-        Serial.println("SPIFFS init failed");
+    if (!LittleFS.begin(true)) {
+        Serial.println("LittleFS init failed");
     } else {
-        size_t total = SPIFFS.totalBytes();
-        size_t used = SPIFFS.usedBytes();
-        Serial.printf("SPIFFS ready: %u/%u bytes used (%.1f%% free)\n",
+        size_t total = LittleFS.totalBytes();
+        size_t used = LittleFS.usedBytes();
+        Serial.printf("LittleFS ready: %u/%u bytes used (%.1f%% free)\n",
                       used, total, (total - used) * 100.0f / total);
-        if (SPIFFS.exists(LOG_SPIFFS_FILE)) {
-            File f = SPIFFS.open(LOG_SPIFFS_FILE, FILE_READ);
+        if (LittleFS.exists(LOG_OVERFLOW_FILE)) {
+            File f = LittleFS.open(LOG_OVERFLOW_FILE, FILE_READ);
             if (f) {
-                Serial.printf("SPIFFS overflow file exists: %u bytes\n", f.size());
+                Serial.printf("LittleFS overflow file exists: %u bytes\n", f.size());
                 f.close();
             }
         }
@@ -121,17 +121,17 @@ void log_sample(const SensorData& data, uint32_t timestamp_ms) {
     memcpy(last_v, v, sizeof(v)); memcpy(last_i, i, sizeof(i)); memcpy(last_p, p, sizeof(p));
     last_ts = timestamp_ms;
 
-    // Fallback: if buffer full and network likely down, write to SPIFFS
+    // Fallback: if buffer full and network likely down, write to LittleFS
     if (!can_fit(sizeof(DeltaEntry))) {
         if (WiFi.status() != WL_CONNECTED) {
-            size_t spiffs_total = SPIFFS.totalBytes();
-            size_t spiffs_used  = SPIFFS.usedBytes();
+            size_t spiffs_total = LittleFS.totalBytes();
+            size_t spiffs_used  = LittleFS.usedBytes();
             if (spiffs_used >= spiffs_total || (spiffs_total - spiffs_used) < 4096) {
-                Serial.println("[SPIFFS] full, dropping oldest batch");
+                Serial.println("[LittleFS] full, dropping oldest batch");
                 tail = head;
                 entry_count = 0;
             } else {
-                File f = SPIFFS.open(LOG_SPIFFS_FILE, FILE_APPEND);
+                File f = LittleFS.open(LOG_OVERFLOW_FILE, FILE_APPEND);
                 if (f) {
                     bool ok = true;
                     size_t written = 0;
@@ -160,10 +160,10 @@ void log_sample(const SensorData& data, uint32_t timestamp_ms) {
                         tail = head;
                         entry_count = 0;
                     } else {
-                        Serial.printf("[SPIFFS] partial write %u bytes, keeping buffer\n", written);
+                        Serial.printf("[LittleFS] partial write %u bytes, keeping buffer\n", written);
                     }
                 } else {
-                    Serial.println("[SPIFFS] open failed for log append");
+                    Serial.println("[LittleFS] open failed for log append");
                 }
             }
         }
@@ -199,9 +199,9 @@ bool log_peek_latest(LogSnapshot* out) {
 uint32_t log_entries_count() { return entry_count; }
 bool log_is_full() { return free_space() < sizeof(DeltaEntry); }
 
-bool log_has_overflow_file() { return SPIFFS.exists(LOG_SPIFFS_FILE); }
+bool log_has_overflow_file() { return LittleFS.exists(LOG_OVERFLOW_FILE); }
 size_t log_overflow_file_size() {
-    File f = SPIFFS.open(LOG_SPIFFS_FILE, FILE_READ);
+    File f = LittleFS.open(LOG_OVERFLOW_FILE, FILE_READ);
     size_t s = f ? f.size() : 0;
     if (f) f.close();
     return s;
@@ -210,8 +210,8 @@ size_t log_overflow_file_size() {
 static File g_overflow_file;
 
 bool log_open_overflow_for_read() {
-    if (!SPIFFS.exists(LOG_SPIFFS_FILE)) return false;
-    g_overflow_file = SPIFFS.open(LOG_SPIFFS_FILE, FILE_READ);
+    if (!LittleFS.exists(LOG_OVERFLOW_FILE)) return false;
+    g_overflow_file = LittleFS.open(LOG_OVERFLOW_FILE, FILE_READ);
     return g_overflow_file;
 }
 
@@ -223,7 +223,7 @@ size_t log_read_overflow_chunk(uint8_t* buf, size_t len) {
 void log_close_overflow() {
     if (g_overflow_file) {
         g_overflow_file.close();
-        SPIFFS.remove(LOG_SPIFFS_FILE);
+        LittleFS.remove(LOG_OVERFLOW_FILE);
         g_overflow_file = File();
     }
 }

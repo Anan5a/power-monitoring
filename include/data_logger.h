@@ -41,7 +41,7 @@ bool log_peek_latest(LogSnapshot* out);
 uint32_t log_entries_count();
 bool log_is_full();
 
-// SPIFFS overflow management
+// LittleFS overflow management
 bool log_has_overflow_file();
 size_t log_overflow_file_size();
 bool log_open_overflow_for_read();
