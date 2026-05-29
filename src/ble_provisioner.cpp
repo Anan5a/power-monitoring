@@ -659,9 +659,10 @@ void loop_ble_provisioner() {
         return;
     }
     if (!bleClientConnected || !pStatusChar) return;
-    // Broadcast status every 10s
+    // Broadcast status every 2s to keep connection alive
+    // (supervision timeout ~6s; 10s was too long and caused drops on some OSes)
     static unsigned long last_status = 0;
-    if (millis() - last_status >= 10000) {
+    if (millis() - last_status >= 2000) {
         last_status = millis();
         JsonDocument doc;
         doc["uptime_s"] = millis() / 1000;

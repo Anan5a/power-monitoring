@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 
 const SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b'
@@ -28,6 +28,19 @@ export default function ProvisioningPage() {
   const [virtualChannels, setVirtualChannels] = useState<Array<{ voltage_src: number; voltage_idx: number; current_src: number; current_idx: number } | null>>([null, null, null, null])
   const [vcSaving, setVcSaving] = useState(false)
 
+  // Listen for unexpected BLE disconnects and auto-reconnect once
+  useEffect(() => {
+    if (!device) return
+    const onDisconnect = () => {
+      console.warn('[BLE] GATT disconnected unexpectedly')
+      setProgress('Bluetooth disconnected — tap Scan to reconnect')
+      setStep(0)
+      setDevice(null)
+    }
+    device.addEventListener('gattserverdisconnected', onDisconnect)
+    return () => device.removeEventListener('gattserverdisconnected', onDisconnect)
+  }, [device])
+
   async function connectBLE() {
     setError('')
     setStep(1)
@@ -51,6 +64,17 @@ export default function ProvisioningPage() {
 
   async function sendCommand(cmd: BleCommand): Promise<unknown> {
     if (!device?.gatt) throw new Error('Not connected')
+
+    // Reconnect once if the GATT server dropped (common on mobile / Windows)
+    if (!device.gatt.connected) {
+      setProgress('Reconnecting Bluetooth...')
+      try {
+        await device.gatt.connect()
+      } catch {
+        throw new Error('Reconnection failed — scan again')
+      }
+    }
+
     const service = await device.gatt.getPrimaryService(SERVICE_UUID)
     const cmdChar = await service.getCharacteristic(CMD_UUID)
     const respChar = await service.getCharacteristic(RESP_UUID)
