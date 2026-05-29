@@ -258,13 +258,13 @@ static void handle_serial_cli() {
                     Serial.println("Usage: set_wifi <ssid> <pass>");
                 }
             } else if (strncmp(line, "supabase ", 9) == 0) {
-                char url[128], anon_key[128], service_role_key[128], device_key[64];
+                char url[128], anon_key[128], device_api_key[128], device_key[64];
                 int n = sscanf(line, "supabase %s %s %s %s",
-                    url, anon_key, service_role_key, device_key);
+                    url, anon_key, device_api_key, device_key);
                 if (n == 4) {
                     settings_save_supabase_url(url);
                     settings_save_supabase_anon_key(anon_key);
-                    settings_save_supabase_api_key(service_role_key);
+                    settings_save_supabase_api_key(device_api_key);
                     settings_save_supabase_device_key(device_key);
                     Serial.println("Supabase configured. Reboot to apply.");
                 } else {
@@ -615,7 +615,7 @@ void setup() {
     Serial.printf("Largest alloc: %u bytes\n", ESP.getMaxAllocHeap());
     init_ble_provisioner();  // BLE stack needs ~60-80KB contiguous heap
 
-    xTaskCreatePinnedToCore(networkTask, "Network", 8192, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(networkTask, "Network", 12288, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(sensorTask,    "Sensor",   4096, NULL, 10, NULL, 1);
 
     Serial.println("Type 'help' for serial commands");

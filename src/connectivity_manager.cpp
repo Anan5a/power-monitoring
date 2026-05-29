@@ -109,7 +109,7 @@ static void print_http_error(HTTPClient& http, int rc) {
     Serial.printf("HTTP error %d (heap=%u)\n", rc, ESP.getFreeHeap());
     WiFiClient* stream = http.getStreamPtr();
     if (!stream) return;
-    char body[1024];
+    char body[512];
     int n = 0;
     unsigned long t0 = millis();
     while (stream->available() && n < (int)sizeof(body) - 1 && millis() - t0 < 300) {
@@ -604,7 +604,7 @@ void publish_data_supabase(const SensorData& data) {
 
     g_supa_doc["p_recorded_at"] = (uint32_t)epoch_s;
 
-    char buffer[2048];
+    static char buffer[2048];
     size_t len = serializeJson(g_supa_doc, buffer);
 
     int rc = http.POST((uint8_t*)buffer, len);
