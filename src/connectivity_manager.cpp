@@ -573,8 +573,12 @@ void publish_data(const SensorData& data) {
     size_t len = serializeJson(g_pub_doc, buffer);
 
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
+    static unsigned long last_mqtt_pub = 0;
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
-        if (mqtt.connected()) mqtt.publish(MQTT_TOPIC, buffer, len);
+        if (mqtt.connected() && millis() - last_mqtt_pub >= 1000) {
+            last_mqtt_pub = millis();
+            mqtt.publish(MQTT_TOPIC, buffer, len);
+        }
     }
 
     publish_data_http(data, buffer, len);
@@ -582,6 +586,7 @@ void publish_data(const SensorData& data) {
     // Blynk virtual writes disabled — enable via platformio.ini lib_deps
 
     ble_notify_sensor_data(buffer, len);
+    delay(25);  // space out notifies — avoids BLE stack crowding / UX jitter
 }
 
 void publish_data_supabase(const SensorData& data) {
