@@ -28,7 +28,7 @@ static void handle_command(const char* json);
 static bool ble_advertising_active = false;
 
 class ProvServerCallbacks : public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
+    void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
         bleClientConnected = true;
         rate_window_start = millis();
         rate_cmd_count = 0;
@@ -36,7 +36,7 @@ class ProvServerCallbacks : public NimBLEServerCallbacks {
         // Do NOT update connection params — let NimBLE use the defaults negotiated by the central.
         // Windows/Web Bluetooth often disconnects immediately when the peripheral overrides params.
     }
-    void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
+    void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
         bleClientConnected = false;
         // advertiseOnDisconnect(true) handles restart automatically
         Serial.printf("[BLE] client disconnected (reason=%d)\n", reason);
@@ -44,7 +44,8 @@ class ProvServerCallbacks : public NimBLEServerCallbacks {
 };
 
 class CmdCallbacks : public NimBLECharacteristicCallbacks {
-    void onWrite(NimBLECharacteristic* pCharacteristic) {
+    void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
+        (void)connInfo;
         std::string val = pCharacteristic->getValue();
         Serial.printf("[BLE] onWrite len=%d\n", val.length());
         if (val.empty()) return;
