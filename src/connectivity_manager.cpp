@@ -352,6 +352,7 @@ static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v,
 #endif
 
     payload["log_entries"] = log_entries_count();
+    payload["log_buffer_kb"] = log_buffer_capacity() / 1024;
     payload["log_overflow"] = log_has_overflow_file();
     payload["log_overflow_bytes"] = log_overflow_file_size();
 
@@ -540,6 +541,7 @@ void publish_data(const SensorData& data) {
     }
 
     g_pub_doc["log_entries"] = log_entries_count();
+    g_pub_doc["log_buffer_kb"] = log_buffer_capacity() / 1024;
     g_pub_doc["log_overflow"] = log_has_overflow_file();
     g_pub_doc["log_overflow_bytes"] = log_overflow_file_size();
 
@@ -641,6 +643,7 @@ void publish_data_supabase(const SensorData& data) {
         }
     }
     payload["log_entries"] = log_entries_count();
+    payload["log_buffer_kb"] = log_buffer_capacity() / 1024;
     payload["log_overflow"] = log_has_overflow_file();
     payload["log_overflow_bytes"] = log_overflow_file_size();
 

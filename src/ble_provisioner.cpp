@@ -161,6 +161,7 @@ static void handle_command(const char* json) {
         JsonDocument resp;
         resp["ok"] = true;
         resp["entries"] = log_entries_count();
+        resp["buffer_kb"] = log_buffer_capacity() / 1024;
         resp["overflow"] = log_has_overflow_file();
         resp["relay_count"] = settings_load_relay_count();
         char buf[256];
@@ -660,6 +661,7 @@ void loop_ble_provisioner() {
         JsonDocument doc;
         doc["uptime_s"] = millis() / 1000;
         doc["entries"] = log_entries_count();
+        doc["buffer_kb"] = log_buffer_capacity() / 1024;
         doc["overflow"] = log_has_overflow_file();
         char buf[128];
         serializeJson(doc, buf);
