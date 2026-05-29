@@ -33,15 +33,16 @@ class ProvServerCallbacks : public NimBLEServerCallbacks {
         rate_window_start = millis();
         rate_cmd_count = 0;
         Serial.printf("[BLE] client connected (addr=%s)\n", connInfo.getAddress().toString().c_str());
-        // Windows-friendly connection parameters: short interval, no latency, 5s timeout
-        pServer->updateConnParams(connInfo.getConnHandle(), 6, 12, 0, 500);
+        // Use conservative params matching NimBLE example (30-60ms interval, 1.8s timeout)
+        pServer->updateConnParams(connInfo.getConnHandle(), 24, 48, 0, 180);
     }
     void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
         bleClientConnected = false;
-        // Do NOT null out characteristic pointers — the server still owns them.
-        // Reset guard so loop_ble_provisioner() restarts advertising cleanly
+        // Reset guard so loop_ble_provisioner() doesn't double-start
         ble_advertising_active = false;
         Serial.printf("[BLE] client disconnected (reason=%d)\n", reason);
+        // Restart advertising immediately — matches NimBLE_Server example pattern
+        start_ble_advertising();
     }
 };
 
@@ -617,20 +618,10 @@ void init_ble_provisioner() {
 void start_ble_advertising() {
     if (!ble_initialized || ble_advertising_active) return;
     NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-
-    // Primary advertisement: name only (14 bytes / 31). UUID goes in scan response
-    // because 14 + 18 = 32 bytes exceeds the BLE advertisement limit.
-    NimBLEAdvertisementData advData;
-    advData.setName(BT_DEVICE_NAME);
-    pAdvertising->setAdvertisementData(advData);
-
-    // Scan response: service UUID (for discovery) + name redundancy
-    NimBLEAdvertisementData scanData;
-    scanData.addServiceUUID(BLE_SERVICE_UUID);
-    pAdvertising->setScanResponseData(scanData);
-
+    pAdvertising->setName(BT_DEVICE_NAME);
+    pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
     pAdvertising->enableScanResponse(true);
-    NimBLEDevice::startAdvertising();
+    pAdvertising->start();
     ble_advertising_active = true;
     Serial.println("BLE advertising started");
 }
