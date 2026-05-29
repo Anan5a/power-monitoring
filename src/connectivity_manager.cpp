@@ -873,7 +873,10 @@ void check_settings_commands() {
         // Expected: {"cmd_type":"set_wifi","payload":{...}}
         g_cal_doc.clear();
         DeserializationError err = deserializeJson(g_cal_doc, resp_buf);
-        if (err) { Serial.println("[SETTINGS] parse error"); return; }
+        if (err) {
+            Serial.printf("[SETTINGS] parse error: %s | body: %.200s\n", err.c_str(), resp_buf);
+            return;
+        }
 
         const char* cmd_type = g_cal_doc["cmd_type"] | "";
         const char* payload = g_cal_doc["payload"] | "{}";
