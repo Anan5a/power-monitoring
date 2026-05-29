@@ -24,6 +24,78 @@ static bool skip_network = false;
 
 static time_t epoch_time = 0;
 
+static bool is_valid_uuid(const char* s) {
+    if (!s || strlen(s) != 36) return false;
+    for (int i = 0; i < 36; i++) {
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (s[i] != '-') return false;
+        } else {
+            if (!isxdigit((unsigned char)s[i])) return false;
+        }
+    }
+    return true;
+}
+
+// Persistent HTTPS client for Supabase — avoids repeated TLS handshakes / heap churn
+static WiFiClientSecure g_supa_client;
+static HTTPClient       g_supa_http;
+static bool             g_supa_http_ready = false;
+
+static void supabase_http_reset() {
+    if (g_supa_http_ready) {
+        g_supa_http.end();
+        g_supa_http_ready = false;
+    }
+}
+
+static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
+    if (!g_supa_http_ready) {
+        g_supa_client.setInsecure(); // skip cert verification
+        g_supa_http.setReuse(true);
+        if (!g_supa_http.begin(g_supa_client, full_url)) {
+            return false;
+        }
+        g_supa_http.addHeader("Content-Type", "application/json");
+        g_supa_http.addHeader("apikey", anon_key);
+        char auth_hdr[384];
+        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
+        g_supa_http.addHeader("Authorization", auth_hdr);
+        g_supa_http_ready = true;
+    } else {
+        g_supa_http.begin(g_supa_client, full_url); // same host → keeps connection alive
+    }
+    return true;
+}
+
+static int supabase_post(const char* url_path, const char* payload, size_t len,
+    const char* supabase_url, const char* anon_key) {
+    char full_url[256];
+    snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
+    if (!supabase_http_prepare(full_url, anon_key)) return -1;
+    int rc = g_supa_http.POST((uint8_t*)payload, len);
+    if (rc < 0) supabase_http_reset();
+    return rc;
+}
+
+static int supabase_patch(const char* url_path, const char* payload, size_t len,
+    const char* supabase_url, const char* anon_key) {
+    char full_url[256];
+    snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
+    if (!supabase_http_prepare(full_url, anon_key)) return -1;
+    int rc = g_supa_http.sendRequest("PATCH", (uint8_t*)payload, len);
+    if (rc < 0) supabase_http_reset();
+    return rc;
+}
+
+static int supabase_get(const char* url_path, const char* supabase_url, const char* anon_key) {
+    char full_url[256];
+    snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
+    if (!supabase_http_prepare(full_url, anon_key)) return -1;
+    int rc = g_supa_http.GET();
+    if (rc < 0) supabase_http_reset();
+    return rc;
+}
+
 // src: 0=none, 1=ina3221_volt(0x42), 2=ina3221_curr(0x40), 3=ina226, 4=ads1115
 float get_sensor_voltage(uint8_t src, uint8_t idx, const SensorData& data) {
     if (src == 1) return data.ads1115_volts[idx < 4 ? idx : 0];        // INA3221 voltage module
@@ -225,6 +297,7 @@ static JsonDocument g_supa_doc;
 static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v, const int16_t* i, const int16_t* p,
     const char* entry_type, const char* supabase_url, const char* anon_key,
     const char* device_key, const char* api_key) {
+    if (!is_valid_uuid(api_key)) return;
     g_supa_doc.clear();
     g_supa_doc["p_device_key"] = device_key;
     g_supa_doc["p_device_api_key"] = api_key;
@@ -258,24 +331,13 @@ static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v,
 
     g_supa_doc["p_recorded_at"] = (uint32_t)log_to_epoch(timestamp_ms);
 
-    char buffer[512];
+    static char buffer[512];
     size_t len = serializeJson(g_supa_doc, buffer);
 
-    HTTPClient http;
-    char url[256];
-    snprintf(url, sizeof(url), "%s/rest/v1/rpc/insert_telemetry", supabase_url);
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("apikey", anon_key);
-    char auth_hdr[384];
-    snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
-    http.addHeader("Authorization", auth_hdr);
-
-    int rc = http.POST((uint8_t*)buffer, len);
+    int rc = supabase_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
     if (rc != 200 && rc != 201 && rc != 204) {
-        print_http_error(http, rc);
+        print_http_error(g_supa_http, rc);
     }
-    http.end();
 }
 
 static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
@@ -321,6 +383,10 @@ static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
 }
 
 void publish_log_batch_supabase() {
+    static unsigned long last_log_pub_ms = 0;
+    if (millis() - last_log_pub_ms < 1000) return; // rate limit: 1 log POST per second
+    last_log_pub_ms = millis();
+
     if (ESP.getFreeHeap() < 12288) {
         Serial.println("[WARN] Low heap, skipping Supabase log publish");
         return;
@@ -330,6 +396,7 @@ void publish_log_batch_supabase() {
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
     if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
     if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
+    if (!is_valid_uuid(api_key)) return;
 
     // Static state machine: drains 1 entry per call to spread heap load
     static enum { ST_RAM, ST_SPIFFS, ST_DONE } state = ST_RAM;
@@ -503,17 +570,9 @@ void publish_data_supabase(const SensorData& data) {
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
     if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
     if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
-
-    HTTPClient http;
-    char url[256];
-    snprintf(url, sizeof(url), "%s/rest/v1/rpc/insert_telemetry", supabase_url);
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("apikey", anon_key);
-    {
-        char auth_hdr[384];
-        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
-        http.addHeader("Authorization", auth_hdr);
+    if (!is_valid_uuid(api_key)) {
+        Serial.println("[WARN] device_api_key is not a valid UUID — skip Supabase publish. Use device_api_key from Supabase devices table (not sb_secret_...)");
+        return;
     }
 
     uint32_t ms = millis();
@@ -607,15 +666,14 @@ void publish_data_supabase(const SensorData& data) {
     static char buffer[2048];
     size_t len = serializeJson(g_supa_doc, buffer);
 
-    int rc = http.POST((uint8_t*)buffer, len);
+    int rc = supabase_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
     if (rc != 200 && rc != 201 && rc != 204) {
-        print_http_error(http, rc);
+        print_http_error(g_supa_http, rc);
         if (rc == 400) {
             Serial.print("Payload preview: ");
             Serial.println(buffer);
         }
     }
-    http.end();
 
     // Update calibration status table while baseline is collecting
     publish_calibration_status();
@@ -634,18 +692,8 @@ void sync_calibration_to_supabase() {
     ChannelCalibration cal;
     if (!settings_load_channel_calibration(&cal)) return;
 
-    HTTPClient http;
-    char url[256];
-    snprintf(url, sizeof(url), "%s/rest/v1/device_channels?device_key=eq.%s", supabase_url, device_key);
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("apikey", anon_key);
-    {
-        char auth_hdr[384];
-        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
-        http.addHeader("Authorization", auth_hdr);
-    }
-    http.addHeader("Prefer", "precision=exact");
+    char path[256];
+    snprintf(path, sizeof(path), "/rest/v1/device_channels?device_key=eq.%s", device_key);
 
     g_cal_doc.clear();
     JsonObject cal_obj = g_cal_doc["channel_calibration"].to<JsonObject>();
@@ -660,15 +708,15 @@ void sync_calibration_to_supabase() {
         curr_gain.add(cal.curr_gain[i]);
     }
 
-    char buffer[512];
+    static char buffer[512];
     size_t len = serializeJson(g_cal_doc, buffer);
-    int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
+    g_supa_http.addHeader("Prefer", "precision=exact");
+    int rc = supabase_patch(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
         Serial.println("Calibration synced to Supabase");
     } else {
-        print_http_error(http, rc);
+        print_http_error(g_supa_http, rc);
     }
-    http.end();
 }
 
 void sync_ble_pin_to_supabase() {
@@ -683,33 +731,26 @@ void sync_ble_pin_to_supabase() {
     char pin_str[16];
     snprintf(pin_str, sizeof(pin_str), "%lu", (unsigned long)pin);
 
-    HTTPClient http;
-    char url[256];
-    snprintf(url, sizeof(url), "%s/rest/v1/device_channels?device_key=eq.%s", supabase_url, device_key);
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("apikey", anon_key);
-    {
-        char auth_hdr[384];
-        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
-        http.addHeader("Authorization", auth_hdr);
-    }
+    char path[256];
+    snprintf(path, sizeof(path), "/rest/v1/device_channels?device_key=eq.%s", device_key);
 
     g_cal_doc.clear();
     g_cal_doc["ble_pin"] = pin_str;
-    char buffer[256];
+    static char buffer[256];
     size_t len = serializeJson(g_cal_doc, buffer);
-    int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
+    int rc = supabase_patch(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
         Serial.println("BLE PIN synced to Supabase");
     } else {
-        print_http_error(http, rc);
+        print_http_error(g_supa_http, rc);
     }
-    http.end();
 }
 
 void publish_calibration_status() {
     if (!sensor_is_calibrating()) return;  // nothing to report
+    static unsigned long last_cal_pub_ms = 0;
+    if (millis() - last_cal_pub_ms < 5000) return; // rate limit: 1 cal publish per 5s
+    last_cal_pub_ms = millis();
     if (ESP.getFreeHeap() < 4096) return;
 
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
@@ -721,10 +762,6 @@ void publish_calibration_status() {
     float stddev_out[8];
     uint8_t tick_count;
     sensor_get_baseline_progress(stddev_out, &tick_count);
-
-    HTTPClient http;
-    char url[256];
-    snprintf(url, sizeof(url), "%s/rest/v1/sensor_calibration_status", supabase_url);
 
     g_cal_doc.clear();
     g_cal_doc["device_key"] = device_key;
@@ -742,25 +779,15 @@ void publish_calibration_status() {
     }
     g_cal_doc["updated_at"] = "now";
 
-    char buffer[512];
+    static char buffer[512];
     size_t len = serializeJson(g_cal_doc, buffer);
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("apikey", anon_key);
-    {
-        char auth_hdr[384];
-        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
-        http.addHeader("Authorization", auth_hdr);
-    }
-    http.addHeader("Prefer", "resolution=merge-duplicates");
-
-    int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
+    g_supa_http.addHeader("Prefer", "resolution=merge-duplicates");
+    int rc = supabase_patch("/rest/v1/sensor_calibration_status", buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
         Serial.printf("[CALIB] status published: tick=%d\n", tick_count);
     } else {
-        print_http_error(http, rc);
+        print_http_error(g_supa_http, rc);
     }
-    http.end();
 }
 
 bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
@@ -770,24 +797,15 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
     if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return false;
     if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return false;
 
-    HTTPClient http;
-    char url[256];
-    snprintf(url, sizeof(url), "%s/rest/v1/device_channels?device_key=eq.%s&select=ble_pin", supabase_url, device_key);
-    http.begin(url);
-    http.addHeader("apikey", anon_key);
-    {
-        char auth_hdr[384];
-        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
-        http.addHeader("Authorization", auth_hdr);
-    }
-
-    int rc = http.GET();
+    char path[256];
+    snprintf(path, sizeof(path), "/rest/v1/device_channels?device_key=eq.%s&select=ble_pin", device_key);
+    int rc = supabase_get(path, supabase_url, anon_key);
     bool ok = false;
     if (rc == 200) {
         // Parse: [{"ble_pin":"123456"}] — read into stack buffer, no String heap allocation
         char resp[64];
         size_t resp_len = 0;
-        WiFiClient* stream = http.getStreamPtr();
+        WiFiClient* stream = g_supa_http.getStreamPtr();
         while (stream->available() && resp_len < sizeof(resp) - 1) {
             resp[resp_len++] = stream->read();
         }
@@ -804,7 +822,6 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
             }
         }
     }
-    http.end();
     return ok;
 }
 
@@ -820,35 +837,22 @@ void check_settings_commands() {
     if (millis() - last_check < 30000) return;  // poll every 30s
     last_check = millis();
 
-    HTTPClient http;
-    char url[256];
-    snprintf(url, sizeof(url), "%s/rest/v1/rpc/claim_settings_command", supabase_url);
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("apikey", anon_key);
-    {
-        char auth_hdr[384];
-        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
-        http.addHeader("Authorization", auth_hdr);
-    }
-
     g_cal_doc.clear();
     g_cal_doc["p_device_key"] = device_key;
     char buffer[256];
     size_t len = serializeJson(g_cal_doc, buffer);
 
-    int rc = http.POST((uint8_t*)buffer, len);
+    int rc = supabase_post("/rest/v1/rpc/claim_settings_command", buffer, len, supabase_url, anon_key);
 
     if (rc == 200) {
         // Read into stack buffer — no String heap allocation
         char resp_buf[512];
         size_t resp_len = 0;
-        WiFiClient* stream = http.getStreamPtr();
+        WiFiClient* stream = g_supa_http.getStreamPtr();
         while (stream->available() && resp_len < sizeof(resp_buf) - 1) {
             resp_buf[resp_len++] = stream->read();
         }
         resp_buf[resp_len] = '\0';
-        http.end();
 
         if (resp_len == 0 || strncmp(resp_buf, "null", 4) == 0) return;
 
@@ -863,7 +867,6 @@ void check_settings_commands() {
             apply_settings_command(cmd_type, payload);
         }
     } else {
-        print_http_error(http, rc);
-        http.end();
+        print_http_error(g_supa_http, rc);
     }
 }

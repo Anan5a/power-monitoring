@@ -268,7 +268,7 @@ static void handle_serial_cli() {
                     settings_save_supabase_device_key(device_key);
                     Serial.println("Supabase configured. Reboot to apply.");
                 } else {
-                    Serial.println("Usage: supabase <url> <anon_key> <service_role_key> <device_key>");
+                    Serial.println("Usage: supabase <url> <anon_key> <device_api_key> <device_key>");
                 }
             } else if (strncmp(line, "test sensor ", 12) == 0) {
                 int ch;
@@ -579,7 +579,8 @@ static void handle_serial_cli() {
                 Serial.println("  wifi_pass <pass>  — set WiFi password");
                 Serial.println("  set_wifi <ssid> <pass> — set both SSID and password");
                 Serial.println("  supabase_show     — show Supabase config");
-                Serial.println("  supabase <url> <anon_key> <service_role_key> <device_key>");
+                Serial.println("  supabase <url> <anon_key> <device_api_key> <device_key>");
+                Serial.println("     device_api_key = UUID from Supabase devices table (not sb_secret_...)");
                 Serial.println("  reboot              — reboot the device");
                 Serial.println("  help                — this list");
             } else if (len > 0) {
