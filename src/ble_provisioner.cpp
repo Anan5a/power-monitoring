@@ -56,8 +56,7 @@ class CmdCallbacks : public NimBLECharacteristicCallbacks {
 static void send_response(const char* msg) {
     if (!bleClientConnected || !pRespChar) { Serial.println(F("[BLE] send_response: not connected or pRespChar is null")); return; }
     size_t len = strlen(msg);
-    pRespChar->setValue((uint8_t*)msg, len);
-    pRespChar->notify();
+    pRespChar->notify((const uint8_t*)msg, len);
     Serial.printf("[BLE] sent resp: %s\n", msg);
 }
 
@@ -583,7 +582,6 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
 void init_ble_provisioner() {
     if (ble_initialized) return;
     NimBLEDevice::init(BT_DEVICE_NAME);
-    NimBLEDevice::deleteAllBonds();  // Clear stale bonding info after reflash/factory reset
     NimBLEServer* pServer = NimBLEDevice::createServer();
     pServer->setCallbacks(new ProvServerCallbacks());
     pServer->advertiseOnDisconnect(true);  // NimBLE auto-restarts advertising on disconnect
@@ -665,14 +663,12 @@ void loop_ble_provisioner() {
         doc["overflow"] = log_has_overflow_file();
         char buf[128];
         serializeJson(doc, buf);
-        pStatusChar->setValue((uint8_t*)buf, strlen(buf));
-        pStatusChar->notify();
+        pStatusChar->notify((const uint8_t*)buf, strlen(buf));
     }
 }
 
 void ble_notify_sensor_data(const char* data, size_t len) {
     if (ble_initialized && bleClientConnected && pSensorChar) {
-        pSensorChar->setValue((uint8_t*)data, len);
-        pSensorChar->notify();
+        pSensorChar->notify((const uint8_t*)data, len);
     }
 }
