@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 import type { TelemetryPoint } from '../lib/types'
 
 // EMA alpha — higher = more responsive, lower = smoother
-const EMA = 0.3
+const EMA = 0.7
 // Reasonable physical limits per channel — values outside these are dropped as noise
 const MAX_V_PER_CHANNEL = 200   // V  (covers 48V battery + margin)
 const MAX_I_PER_CHANNEL = 100   // A
@@ -17,19 +17,16 @@ function isAbsurd(key: string, val: number): boolean {
   return false
 }
 
-function applyEMA(
-  reading: Record<string, number>,
+function smoothEMA(
+  raw: Record<string, number>,
   prev: Record<string, number>
 ): Record<string, number> {
-  const next: Record<string, number> = {}
-  for (const k of Object.keys(reading)) {
-    const raw = reading[k]
-    const prevVal = prev[k] ?? raw
-    next[k] = isAbsurd(k, raw) && prevVal !== 0
-      ? prevVal   // absurd new reading — keep previous, don't corrupt EMA state
-      : prevVal + EMA * (raw - prevVal)
+  const next = { ...prev }
+  for (const k of Object.keys(raw)) {
+    const v = raw[k]
+    const p = prev[k] ?? v
+    next[k] = isAbsurd(k, v) && p !== 0 ? p : p + EMA * (v - p)
   }
-  // Don't carry forward stale keys — each payload defines the current value set
   return next
 }
 
@@ -42,10 +39,14 @@ export function useRealtime(deviceKey: string | null) {
   const handlePayload = useCallback((payload: { new: TelemetryPoint }) => {
     const newPoint = payload.new as TelemetryPoint
     const raw = newPoint.payload as Record<string, number>
-    emaRef.current = applyEMA(raw, emaRef.current)
-    // Chart gets raw data; cards get smoothed data
+    emaRef.current = smoothEMA(raw, emaRef.current)
+    // Chart gets raw data; cards get EMA-smoothed data
     setDataPoints(prev => [...prev.slice(-199), newPoint])
-    setLatestReading({ ...newPoint, payload: { ...emaRef.current } })
+    // Use EMA state directly — persists all keys even if a new payload skips them
+    setLatestReading(prev => prev
+      ? { ...prev, recorded_at: newPoint.recorded_at, payload: { ...emaRef.current } }
+      : { ...newPoint, payload: { ...emaRef.current } }
+    )
   }, [])
 
   useEffect(() => {

@@ -411,7 +411,7 @@ static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
 void publish_log_batch_supabase() {
     if (skip_network) return;
     static unsigned long last_log_pub_ms = 0;
-    if (millis() - last_log_pub_ms < 1000) return; // rate limit: 1 log POST per second
+    if (millis() - last_log_pub_ms < 1000) return; // rate limit: 1 call per second
     last_log_pub_ms = millis();
 
     if (ESP.getFreeHeap() < 12288) {
@@ -425,7 +425,7 @@ void publish_log_batch_supabase() {
     if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
     if (!is_valid_uuid(api_key)) return;
 
-    // Static state machine: drains 1 entry per call to spread heap load
+    // Static state machine: drains entries per call to keep up with 1s sensor rate
     static enum { ST_RAM, ST_FS, ST_DONE } state = ST_RAM;
     static int16_t ram_v[4] = {0}, ram_i[4] = {0}, ram_p[4] = {0};
     static uint32_t ram_ts = 0;
@@ -440,26 +440,27 @@ void publish_log_batch_supabase() {
     static bool fs_file_open = false;
 
     if (state == ST_RAM) {
-        uint8_t chunk[sizeof(BaseEntry)];
-        size_t n = log_pop_batch(chunk, sizeof(chunk));
-        if (n == 0) {
-            state = ST_FS;
-            return;
-        }
-        // Prepend carry
-        uint8_t work[sizeof(BaseEntry) * 2];
-        memcpy(work, ram_carry, ram_carry_len);
-        memcpy(work + ram_carry_len, chunk, n);
-        size_t work_len = ram_carry_len + n;
+        // Drain up to 5 entries per call to outpace 1s sensor arrival rate
+        for (int sent = 0; sent < 5; sent++) {
+            uint8_t chunk[sizeof(BaseEntry)];
+            size_t n = log_pop_batch(chunk, sizeof(chunk));
+            if (n == 0) {
+                state = ST_FS;
+                break;
+            }
+            uint8_t work[sizeof(BaseEntry) * 2];
+            memcpy(work, ram_carry, ram_carry_len);
+            memcpy(work + ram_carry_len, chunk, n);
+            size_t work_len = ram_carry_len + n;
 
-        size_t consumed = decode_and_send_log_entries(work, work_len, supabase_url, anon_key, device_key, api_key,
-            ram_v, ram_i, ram_p, &ram_ts, &ram_have);
+            size_t consumed = decode_and_send_log_entries(work, work_len, supabase_url, anon_key, device_key, api_key,
+                ram_v, ram_i, ram_p, &ram_ts, &ram_have);
 
-        ram_carry_len = work_len - consumed;
-        if (ram_carry_len > 0) {
-            memcpy(ram_carry, work + consumed, ram_carry_len);
+            ram_carry_len = work_len - consumed;
+            if (ram_carry_len > 0) {
+                memcpy(ram_carry, work + consumed, ram_carry_len);
+            }
         }
-        // Only sent 1 entry; return to let heap recover
         return;
     }
 
@@ -471,38 +472,38 @@ void publish_log_batch_supabase() {
             }
             fs_file_open = true;
         }
-        uint8_t chunk[512];
-        size_t n = log_read_overflow_chunk(chunk, sizeof(chunk));
-        if (n == 0) {
-            // EOF
-            if (fs_carry_len > 0) {
-                decode_and_send_log_entries(fs_carry, fs_carry_len, supabase_url, anon_key, device_key, api_key,
-                    fs_v, fs_i, fs_p, &fs_ts, &fs_have);
-                fs_carry_len = 0;
-                return; // may have sent 1 entry; return to recover
+        // Drain up to 5 FS chunks per call
+        for (int sent = 0; sent < 5; sent++) {
+            uint8_t chunk[512];
+            size_t n = log_read_overflow_chunk(chunk, sizeof(chunk));
+            if (n == 0) {
+                if (fs_carry_len > 0) {
+                    decode_and_send_log_entries(fs_carry, fs_carry_len, supabase_url, anon_key, device_key, api_key,
+                        fs_v, fs_i, fs_p, &fs_ts, &fs_have);
+                    fs_carry_len = 0;
+                }
+                log_close_overflow();
+                fs_file_open = false;
+                state = ST_DONE;
+                break;
             }
-            log_close_overflow();
-            fs_file_open = false;
-            state = ST_DONE;
-            return;
-        }
-        uint8_t work[512 + sizeof(BaseEntry)];
-        memcpy(work, fs_carry, fs_carry_len);
-        memcpy(work + fs_carry_len, chunk, n);
-        size_t work_len = fs_carry_len + n;
+            uint8_t work[512 + sizeof(BaseEntry)];
+            memcpy(work, fs_carry, fs_carry_len);
+            memcpy(work + fs_carry_len, chunk, n);
+            size_t work_len = fs_carry_len + n;
 
-        size_t consumed = decode_and_send_log_entries(work, work_len, supabase_url, anon_key, device_key, api_key,
-            fs_v, fs_i, fs_p, &fs_ts, &fs_have);
+            size_t consumed = decode_and_send_log_entries(work, work_len, supabase_url, anon_key, device_key, api_key,
+                fs_v, fs_i, fs_p, &fs_ts, &fs_have);
 
-        fs_carry_len = work_len - consumed;
-        if (fs_carry_len > 0) {
-            memcpy(fs_carry, work + consumed, fs_carry_len);
+            fs_carry_len = work_len - consumed;
+            if (fs_carry_len > 0) {
+                memcpy(fs_carry, work + consumed, fs_carry_len);
+            }
         }
-        return; // only sent 1 entry; return to let heap recover
+        return;
     }
 
     if (state == ST_DONE) {
-        // Reset for next cycle once buffer refills
         if (log_entries_count() > 0 || log_has_overflow_file()) {
             state = ST_RAM;
             ram_have = false;
