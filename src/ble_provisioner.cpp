@@ -28,16 +28,18 @@ static void handle_command(const char* json);
 static bool ble_advertising_active = false;
 
 class ProvServerCallbacks : public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer) {
+    void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
         bleClientConnected = true;
         rate_window_start = millis();
         rate_cmd_count = 0;
+        Serial.printf("[BLE] client connected (addr=%s)\n", connInfo.getAddress().toString().c_str());
     }
-    void onDisconnect(NimBLEServer* pServer) {
+    void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
         bleClientConnected = false;
         // Do NOT null out characteristic pointers — the server still owns them.
-        // Do NOT call NimBLEDevice::startAdvertising() directly — it bypasses the guard and leaks.
-        ble_advertising_active = false;  // Reset guard so loop_ble_provisioner() restarts cleanly
+        // Reset guard so loop_ble_provisioner() restarts advertising cleanly
+        ble_advertising_active = false;
+        Serial.printf("[BLE] client disconnected (reason=%d)\n", reason);
     }
 };
 
