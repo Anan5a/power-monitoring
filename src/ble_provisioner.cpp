@@ -38,8 +38,7 @@ class ProvServerCallbacks : public NimBLEServerCallbacks {
     }
     void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
         bleClientConnected = false;
-        // Reset guard so loop_ble_provisioner() restarts advertising cleanly
-        ble_advertising_active = false;
+        // advertiseOnDisconnect(true) handles restart automatically
         Serial.printf("[BLE] client disconnected (reason=%d)\n", reason);
     }
 };
@@ -585,6 +584,7 @@ void init_ble_provisioner() {
     NimBLEDevice::init(BT_DEVICE_NAME);
     NimBLEServer* pServer = NimBLEDevice::createServer();
     pServer->setCallbacks(new ProvServerCallbacks());
+    pServer->advertiseOnDisconnect(true);  // NimBLE auto-restarts advertising on disconnect
     NimBLEService* pService = pServer->createService(BLE_SERVICE_UUID);
 
     pCmdChar = pService->createCharacteristic(
@@ -608,6 +608,12 @@ void init_ble_provisioner() {
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
     );
 
+    // Configure advertising ONCE — addServiceUUID is cumulative; never repeat it
+    NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+    pAdvertising->setName(BT_DEVICE_NAME);
+    pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
+    pAdvertising->enableScanResponse(true);
+
     ble_initialized = true;
     start_ble_advertising();
     Serial.println("BLE server ready");
@@ -616,12 +622,12 @@ void init_ble_provisioner() {
 void start_ble_advertising() {
     if (!ble_initialized || ble_advertising_active) return;
     NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-    pAdvertising->setName(BT_DEVICE_NAME);
-    pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
-    pAdvertising->enableScanResponse(true);
-    pAdvertising->start();
-    ble_advertising_active = true;
-    Serial.println("BLE advertising started");
+    if (pAdvertising->start()) {
+        ble_advertising_active = true;
+        Serial.println("BLE advertising started");
+    } else {
+        Serial.println("BLE advertising start failed");
+    }
 }
 
 void stop_ble_advertising() {
@@ -645,13 +651,7 @@ void deinit_ble_provisioner() {
 }
 
 void loop_ble_provisioner() {
-    if (!ble_initialized) return;
-    // Lazy-start advertising if not yet active
-    if (!ble_advertising_active) {
-        start_ble_advertising();
-        return;
-    }
-    if (!bleClientConnected || !pStatusChar) return;
+    if (!ble_initialized || !bleClientConnected || !pStatusChar) return;
     // Broadcast status every 2s to keep connection alive
     // (supervision timeout ~6s; 10s was too long and caused drops on some OSes)
     static unsigned long last_status = 0;
