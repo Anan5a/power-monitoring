@@ -179,13 +179,13 @@ time_t get_epoch_time() { return epoch_time; }
 static void print_http_error(HTTPClient& http, int rc) {
     Serial.printf("HTTP error %d (heap=%u)\n", rc, ESP.getFreeHeap());
     if (rc < 0) return; // no body on connection-level failure
-    WiFiClient* stream = http.getStreamPtr();
-    if (!stream) return;
+    Stream& stream = http.getStream();
     char body[512];
     int n = 0;
     unsigned long t0 = millis();
-    while (stream->available() && n < (int)sizeof(body) - 1 && millis() - t0 < 300) {
-        body[n++] = stream->read();
+    while (stream.available() && n < (int)sizeof(body) - 1 && millis() - t0 < 300) {
+        int c = stream.read();
+        if (c >= 0) body[n++] = (char)c;
     }
     body[n] = '\0';
     if (n > 0) {
@@ -867,9 +867,10 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
         // Parse: [{"ble_pin":"123456"}] — read into stack buffer, no String heap allocation
         char resp[64];
         size_t resp_len = 0;
-        WiFiClient* stream = g_supa_http.getStreamPtr();
-        while (stream->available() && resp_len < sizeof(resp) - 1) {
-            resp[resp_len++] = stream->read();
+        Stream& stream = g_supa_http.getStream();
+        while (stream.available() && resp_len < sizeof(resp) - 1) {
+            int c = stream.read();
+            if (c >= 0) resp[resp_len++] = (char)c;
         }
         resp[resp_len] = '\0';
         const char* needle = "\"ble_pin\":\"";
@@ -911,9 +912,10 @@ void check_settings_commands() {
         // Read into stack buffer — no String heap allocation
         char resp_buf[512];
         size_t resp_len = 0;
-        WiFiClient* stream = g_supa_http.getStreamPtr();
-        while (stream->available() && resp_len < sizeof(resp_buf) - 1) {
-            resp_buf[resp_len++] = stream->read();
+        Stream& stream = g_supa_http.getStream();
+        while (stream.available() && resp_len < sizeof(resp_buf) - 1) {
+            int c = stream.read();
+            if (c >= 0) resp_buf[resp_len++] = (char)c;
         }
         resp_buf[resp_len] = '\0';
 
