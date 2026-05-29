@@ -135,6 +135,29 @@ void init_sensors() {
 #endif
 }
 
+void reinit_sensors() {
+    for (uint8_t ch = 0; ch < 3; ch++) {
+        float ratio = 0.0f;
+        if (settings_load_volt_ratio(ch, &ratio) && ratio > 0.0f) {
+            volt_ratios[ch] = ratio;
+        } else {
+            float r_h = 0.0f, r_l = 0.0f;
+            if (settings_load_resistors(ch, &r_h, &r_l) && r_h > 0.0f && r_l > 0.0f) {
+                volt_ratios[ch] = (r_h + r_l) / r_l;
+            }
+        }
+    }
+
+#if ENABLE_INA3221
+    for (uint8_t ch = 0; ch < 3; ch++) {
+        float shunt = 0.0f;
+        if (settings_load_shunt(ch, &shunt) && shunt > 0.0f) {
+            ina3221.setShuntResistance(ch, shunt);
+        }
+    }
+#endif
+}
+
 // ── Read with burst sampling ──────────────────────────────────────────────────
 
 SensorData read_sensors() {

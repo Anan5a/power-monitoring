@@ -195,6 +195,7 @@ static void handle_serial_cli() {
                         Serial.printf("CH%d shunt set to %.6f Ohm\n", ch, ohms);
                     }
                     settings_save_shunt(ch, ohms);
+                    apply_settings_posthook("set_shunt");
                 } else {
                     Serial.println("Usage: shunt N ohms (e.g. shunt 0 0.0003) or shunt N 0 to clear");
                 }
@@ -207,6 +208,7 @@ static void handle_serial_cli() {
                         Serial.printf("CH%d vratio set to %.4f\n", ch, ratio);
                     }
                     settings_save_volt_ratio(ch, ratio);
+                    apply_settings_posthook("set_volt_ratio");
                 } else {
                     Serial.println("Usage: vratio N ratio (e.g. vratio 2 3.521) or vratio N 0 to clear");
                 }
@@ -220,6 +222,7 @@ static void handle_serial_cli() {
                         Serial.printf("CH%d R=%.0f+%.0f -> ratio=%.4f\n", ch, rh, rl, ratio);
                     }
                     settings_save_resistors(ch, rh, rl);
+                    apply_settings_posthook("set_resistors");
                 } else {
                     Serial.println("Usage: resistor N r_high r_low (e.g. resistor 2 900000 68000)");
                 }

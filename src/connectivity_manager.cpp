@@ -64,7 +64,9 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
         g_supa_http.addHeader("Authorization", auth_hdr);
         g_supa_http_ready = true;
     } else {
-        g_supa_http.begin(g_supa_client, full_url); // same host → keeps connection alive
+        // Connection already active — begin() reuses it, no need to end()/begin()
+        // setReuse(true) ensures HTTPClient keeps the TCP connection alive across calls
+        g_supa_http.begin(g_supa_client, full_url);
     }
     return true;
 }
@@ -548,20 +550,35 @@ void publish_data(const SensorData& data) {
     // Virtual channels: compute V, I, P per channel from configured sources
     for (uint8_t ch = 0; ch < 4; ch++) {
         VirtualChannelConfig vc;
-        if (!settings_load_virtual_channel(ch, &vc)) continue;
         char key[16];
         float v = 0, i = 0, p = 0;
-        if (vc.voltage_src > 0) {
-            v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data);
-        }
-        if (vc.current_src > 0) {
-            i = get_sensor_current(vc.current_src, vc.current_idx, data);
-            if (vc.current_src == 3) {
-                p = get_sensor_power(vc.current_src, vc.current_idx, data);
-            } else if (vc.voltage_src > 0) {
-                p = v * i;
+
+        if (settings_load_virtual_channel(ch, &vc) && (vc.voltage_src > 0 || vc.current_src > 0)) {
+            if (vc.voltage_src > 0) {
+                v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data);
             }
+            if (vc.current_src > 0) {
+                i = get_sensor_current(vc.current_src, vc.current_idx, data);
+                if (vc.current_src == 3) {
+                    p = get_sensor_power(vc.current_src, vc.current_idx, data);
+                } else if (vc.voltage_src > 0) {
+                    p = v * i;
+                }
+            }
+        } else if (ch < 3) {
+            // Default fallback when no VC configured — voltage from INA3221 voltage module (0x42),
+            // current from INA3221 current module (0x40). ads1115_volts[] is where sensor_manager
+            // stores the INA3221 voltage module reading (see sensor_manager.cpp:214).
+            v = data.ads1115_volts[ch];
+            i = data.ina3221_current[ch];
+            p = v * i;
+        } else {
+            // ch == 3 → INA226
+            v = data.ina226_busV;
+            i = data.ina226_current;
+            p = data.ina226_power;
         }
+
         snprintf(key, sizeof(key), "ch%d_V", ch);
         g_pub_doc[key] = v;
         snprintf(key, sizeof(key), "ch%d_I", ch);
@@ -655,20 +672,31 @@ void publish_data_supabase(const SensorData& data) {
     // Virtual channels: compute V, I, P per channel from configured sources
     for (uint8_t ch = 0; ch < 4; ch++) {
         VirtualChannelConfig vc;
-        if (!settings_load_virtual_channel(ch, &vc)) continue;
         char key[16];
         float v = 0, i = 0, p = 0;
-        if (vc.voltage_src > 0) {
-            v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data);
-        }
-        if (vc.current_src > 0) {
-            i = get_sensor_current(vc.current_src, vc.current_idx, data);
-            if (vc.current_src == 3) {
-                p = get_sensor_power(vc.current_src, vc.current_idx, data);
-            } else if (vc.voltage_src > 0) {
-                p = v * i;
+
+        if (settings_load_virtual_channel(ch, &vc) && (vc.voltage_src > 0 || vc.current_src > 0)) {
+            if (vc.voltage_src > 0) {
+                v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data);
             }
+            if (vc.current_src > 0) {
+                i = get_sensor_current(vc.current_src, vc.current_idx, data);
+                if (vc.current_src == 3) {
+                    p = get_sensor_power(vc.current_src, vc.current_idx, data);
+                } else if (vc.voltage_src > 0) {
+                    p = v * i;
+                }
+            }
+        } else if (ch < 3) {
+            v = data.ads1115_volts[ch];
+            i = data.ina3221_current[ch];
+            p = v * i;
+        } else {
+            v = data.ina226_busV;
+            i = data.ina226_current;
+            p = data.ina226_power;
         }
+
         snprintf(key, sizeof(key), "ch%d_V", ch);
         payload[key] = v;
         snprintf(key, sizeof(key), "ch%d_I", ch);
@@ -806,6 +834,9 @@ void apply_settings_posthook(const char* cmd_type) {
     } else if (strcmp(cmd_type, "set_supabase") == 0) {
         supabase_http_reset();
         Serial.println("[CMD] Supabase client reset with new URL/key");
+    } else if (strcmp(cmd_type, "set_shunt") == 0 || strcmp(cmd_type, "set_volt_ratio") == 0 || strcmp(cmd_type, "set_resistors") == 0) {
+        reinit_sensors();
+        Serial.println("[CMD] Sensor params reloaded from NVS");
     }
 }
 
@@ -915,13 +946,22 @@ void check_settings_commands() {
     int rc = supabase_post("/rest/v1/rpc/claim_settings_command", buffer, len, supabase_url, anon_key);
 
     if (rc == 200) {
-        // Read into stack buffer — no String heap allocation
-        char resp_buf[512];
+        // Read full response — spool until stream returns 0 (EOF or timeout)
+        // 512 bytes was too small for richly-equipped commands (e.g. set_relay with many fields)
+        static char resp_buf[1024];
         size_t resp_len = 0;
+        unsigned long t0 = millis();
         Stream& stream = g_supa_http.getStream();
-        while (stream.available() && resp_len < sizeof(resp_buf) - 1) {
+        while (resp_len < sizeof(resp_buf) - 1) {
             int c = stream.read();
-            if (c >= 0) resp_buf[resp_len++] = (char)c;
+            if (c < 0) {
+                // No data available — wait up to 500ms for chunk to arrive
+                if (millis() - t0 > 500) break;
+                delay(10);
+                continue;
+            }
+            resp_buf[resp_len++] = (char)c;
+            t0 = millis(); // reset timer on each byte
         }
         resp_buf[resp_len] = '\0';
 

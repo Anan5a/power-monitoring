@@ -88,7 +88,7 @@ export default function SettingsPage() {
     })
   }
 
-  const tabs = ['network', 'supabase', 'relays', 'batteries', 'calibration', 'virtual', 'groups', 'names', 'system']
+  const tabs = ['network', 'supabase', 'relays', 'batteries', 'calibration', 'sensors', 'virtual', 'groups', 'names', 'system']
 
   if (loadingDevices) {
     return <div className="flex items-center justify-center h-screen text-gray-500">Loading...</div>
@@ -256,6 +256,131 @@ export default function SettingsPage() {
               <CalibrationTab deviceChannels={deviceChannels} onSave={(ch, type, value) =>
                 sendCommand('set_calibration', { channel: ch, type, value })
               } />
+            )}
+
+            {/* Sensors tab — shunt, volt_ratio, resistor parameters */}
+            {activeTab === 'sensors' && (
+              <div className="bg-white rounded-lg shadow p-6 space-y-6">
+                <h3 className="font-semibold">Sensor Parameters</h3>
+
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">Shunt Resistance (Ohms) — INA3221</h4>
+                  <p className="text-xs text-gray-500 mb-3">Per-channel shunt value for current measurement. Example: 0.0003 for 0.3mΩ.</p>
+                  <div className="grid grid-cols-4 gap-3">
+                    {[0,1,2].map(ch => (
+                      <div key={ch}>
+                        <label className="text-xs text-gray-500">CH{ch} shunt (Ω)</label>
+                        <input
+                          id={`shunt-${ch}`}
+                          type="number"
+                          step="0.000001"
+                          min="0"
+                          placeholder="0.0003"
+                          className="w-full rounded border border-gray-300 px-2 py-1 mt-1"
+                          defaultValue=""
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => {
+                      [0,1,2].forEach(ch => {
+                        const input = document.getElementById(`shunt-${ch}`) as HTMLInputElement
+                        const val = parseFloat(input.value) || 0
+                        sendCommand('set_shunt', { channel: ch, ohms: val })
+                      })
+                    }}
+                    className="mt-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm"
+                  >
+                    Save Shunts
+                  </button>
+                </div>
+
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">Voltage Divider Ratio — INA3221 Voltage</h4>
+                  <p className="text-xs text-gray-500 mb-3">R_high / R_low ratio for voltage channels. Set ratio directly, or set R_high + R_low below.</p>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[0,1,2].map(ch => (
+                      <div key={ch}>
+                        <label className="text-xs text-gray-500">CH{ch} ratio</label>
+                        <input
+                          id={`vratio-${ch}`}
+                          type="number"
+                          step="0.001"
+                          min="0"
+                          placeholder="3.5"
+                          className="w-full rounded border border-gray-300 px-2 py-1 mt-1"
+                          defaultValue=""
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => {
+                      [0,1,2].forEach(ch => {
+                        const input = document.getElementById(`vratio-${ch}`) as HTMLInputElement
+                        const val = parseFloat(input.value) || 0
+                        sendCommand('set_volt_ratio', { channel: ch, ratio: val })
+                      })
+                    }}
+                    className="mt-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm"
+                  >
+                    Save Ratios
+                  </button>
+                </div>
+
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">Voltage Divider Resistors — alternative to ratio</h4>
+                  <p className="text-xs text-gray-500 mb-3">R_high (top) and R_low (bottom) in Ohms. Ratio = (R_high + R_low) / R_low.</p>
+                  <div className="space-y-2">
+                    {[0,1,2].map(ch => (
+                      <div key={ch} className="flex items-center gap-3 border rounded p-2">
+                        <span className="text-sm font-medium w-16">CH{ch}</span>
+                        <div className="flex items-center gap-1">
+                          <label className="text-xs text-gray-500">R_high (Ω)</label>
+                          <input
+                            id={`rhigh-${ch}`}
+                            type="number"
+                            step="1"
+                            min="0"
+                            placeholder="100000"
+                            className="w-32 rounded border border-gray-300 px-2 py-1"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <label className="text-xs text-gray-500">R_low (Ω)</label>
+                          <input
+                            id={`rlow-${ch}`}
+                            type="number"
+                            step="1"
+                            min="0"
+                            placeholder="30000"
+                            className="w-32 rounded border border-gray-300 px-2 py-1"
+                          />
+                        </div>
+                        <button
+                          onClick={() => {
+                            const rhInput = document.getElementById(`rhigh-${ch}`) as HTMLInputElement
+                            const rlInput = document.getElementById(`rlow-${ch}`) as HTMLInputElement
+                            const r_high = parseFloat(rhInput.value) || 0
+                            const r_low = parseFloat(rlInput.value) || 0
+                            sendCommand('set_resistors', { channel: ch, r_high, r_low })
+                          }}
+                          className="text-xs bg-blue-600 text-white px-3 py-1 rounded"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-2">Setting resistors auto-computes volt_ratio. Set ratio OR resistors, not both.</p>
+                </div>
+
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">ADS1115 PGA Gain</h4>
+                  <p className="text-xs text-gray-500 mb-3">Set the gain for ADS1115 readings (affects voltage range). Not yet exposed via command — configure via BLE/serial.</p>
+                </div>
+              </div>
             )}
 
             {/* Virtual channels tab */}

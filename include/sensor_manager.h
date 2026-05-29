@@ -28,6 +28,7 @@ bool settings_load_channel_calibration(struct ChannelCalibration* out);
 void settings_save_channel_calibration(const struct ChannelCalibration* in);
 
 void init_sensors();
+void reinit_sensors();  // reload shunt/volt_ratio/resistor settings from NVS
 SensorData read_sensors();
 SampleMeta sensor_get_meta(uint8_t ch);  // ch 0-2=INA3221current, 3-5=INA3221voltage, 6=INA226, 7=ADS1115
 void sensor_calibrate_baseline();

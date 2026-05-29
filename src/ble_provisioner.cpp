@@ -149,6 +149,24 @@ static void handle_command(const char* json) {
         bat.initial_soc_pct = doc["initial_soc_pct"] | 100.0f;
         settings_save_battery(bat.channel, &bat);
         send_response("{\"ok\":true,\"msg\":\"battery_saved\"}");
+    } else if (strcmp(cmd, "set_shunt") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        settings_save_shunt(ch, doc["ohms"] | 0.0f);
+        apply_settings_posthook("set_shunt");
+        send_response("{\"ok\":true,\"msg\":\"shunt_saved\"}");
+    } else if (strcmp(cmd, "set_volt_ratio") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        settings_save_volt_ratio(ch, doc["ratio"] | 0.0f);
+        apply_settings_posthook("set_volt_ratio");
+        send_response("{\"ok\":true,\"msg\":\"vratio_saved\"}");
+    } else if (strcmp(cmd, "set_resistors") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        settings_save_resistors(ch, doc["r_high"] | 0.0f, doc["r_low"] | 0.0f);
+        apply_settings_posthook("set_resistors");
+        send_response("{\"ok\":true,\"msg\":\"resistors_saved\"}");
     } else if (strcmp(cmd, "set_pin") == 0) {
         uint32_t old = settings_load_ble_pin();
         uint32_t provided = doc["old_pin"] | 0;
@@ -503,14 +521,17 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         uint8_t ch = doc["channel"] | 0;
         settings_save_shunt(ch, doc["ohms"] | 0.0f);
         Serial.println("[CMD] shunt saved");
+        apply_settings_posthook("set_shunt");
     } else if (strcmp(cmd_type, "set_volt_ratio") == 0) {
         uint8_t ch = doc["channel"] | 0;
         settings_save_volt_ratio(ch, doc["ratio"] | 0.0f);
         Serial.println("[CMD] volt_ratio saved");
+        apply_settings_posthook("set_volt_ratio");
     } else if (strcmp(cmd_type, "set_resistors") == 0) {
         uint8_t ch = doc["channel"] | 0;
         settings_save_resistors(ch, doc["r_high"] | 0.0f, doc["r_low"] | 0.0f);
         Serial.println("[CMD] resistors saved");
+        apply_settings_posthook("set_resistors");
     } else if (strcmp(cmd_type, "set_relay") == 0) {
         RelayRule rt = {};
         rt.channel = doc["channel"] | 0;
