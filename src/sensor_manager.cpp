@@ -150,9 +150,12 @@ SensorData read_sensors() {
         float med = median_of(samples, BURST_N);
         float sd = stddev_of(samples, BURST_N, med);
         float max_dev = max_deviation(samples, BURST_N, med);
-        bool spike = baseline_count >= BASELINE_TICKS &&
-                     sd > SPIKE_STDDEV_MULT * baseline_stddev[ch] &&
-                     max_dev > SPIKE_DEVIATION_MA;
+        bool spike = false;
+#if ENABLE_BASELINE_CALIBRATION
+        spike = baseline_count >= BASELINE_TICKS &&
+                sd > SPIKE_STDDEV_MULT * baseline_stddev[ch] &&
+                max_dev > SPIKE_DEVIATION_MA;
+#endif
         g_meta[ch] = {sd, spike};
 
         float cal_ma = (med - cal.curr_offset_ma[ch]) * cal.curr_gain[ch];
@@ -175,9 +178,12 @@ SensorData read_sensors() {
         float med = median_of(samples, BURST_N);
         float sd = stddev_of(samples, BURST_N, med);
         float max_dev = max_deviation(samples, BURST_N, med);
-        bool spike = baseline_count >= BASELINE_TICKS &&
-                     sd > SPIKE_STDDEV_MULT * baseline_stddev[ch + 3] &&
-                     max_dev > SPIKE_DEVIATION_MV;
+        bool spike = false;
+#if ENABLE_BASELINE_CALIBRATION
+        spike = baseline_count >= BASELINE_TICKS &&
+                sd > SPIKE_STDDEV_MULT * baseline_stddev[ch + 3] &&
+                max_dev > SPIKE_DEVIATION_MV;
+#endif
         g_meta[ch + 3] = {sd, spike};
 
         float cal_mv = (med + cal.volt_offset_mv[ch]) * cal.volt_gain[ch];
@@ -212,6 +218,7 @@ SensorData read_sensors() {
 #endif
 
     // Baseline calibration: accumulate stddev for first BASELINE_TICKS
+#if ENABLE_BASELINE_CALIBRATION
     if (baseline_count < BASELINE_TICKS) {
         baseline_count++;
         for (int i = 0; i < 6; i++) { // ch 0-5 (INA3221 current + voltage)
@@ -222,6 +229,7 @@ SensorData read_sensors() {
                 baseline_stddev[0], baseline_stddev[1], baseline_stddev[2]);
         }
     }
+#endif
 
     return d;
 }
@@ -239,9 +247,13 @@ extern float baseline_stddev[8];
 extern uint8_t baseline_count;
 
 void sensor_calibrate_baseline() {
+#if ENABLE_BASELINE_CALIBRATION
     baseline_count = 0;
     for (int i = 0; i < 8; i++) baseline_stddev[i] = 0;
     Serial.println("Baseline recalibration started");
+#else
+    Serial.println("Baseline calibration disabled at compile time");
+#endif
 }
 
 void sensor_get_baseline_progress(float* stddev_out, uint8_t* tick_count_out) {
@@ -252,7 +264,11 @@ void sensor_get_baseline_progress(float* stddev_out, uint8_t* tick_count_out) {
 }
 
 bool sensor_is_calibrating() {
+#if ENABLE_BASELINE_CALIBRATION
     return baseline_count > 0 && baseline_count < BASELINE_TICKS;
+#else
+    return false;
+#endif
 }
 
 float ina3221_getShuntVoltage(uint8_t ch) {

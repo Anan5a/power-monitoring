@@ -59,6 +59,9 @@
 #define FAST_SAMPLE_INTERVAL_MS 500
 #define DISPLAY_INTERVAL_MS 1000
 
+// Baseline noise calibration / spike detection (disable if noisy hardware causes false spikes)
+#define ENABLE_BASELINE_CALIBRATION 0
+
 // BLE settings
 #define BT_DEVICE_NAME          "PowerMonitor"
 #define BLE_SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
