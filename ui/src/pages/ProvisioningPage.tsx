@@ -56,6 +56,9 @@ export default function ProvisioningPage() {
     const cmdChar = await service.getCharacteristic(CMD_UUID)
     const respChar = await service.getCharacteristic(RESP_UUID)
 
+    // Must start notifications before we can receive characteristicvaluechanged events
+    await respChar.startNotifications()
+
     return new Promise((resolve, reject) => {
       const handler = (e: Event) => {
         const val = (e.target as BluetoothRemoteGATTCharacteristic).value
@@ -64,14 +67,21 @@ export default function ProvisioningPage() {
         try {
           const parsed = JSON.parse(text)
           respChar.removeEventListener('characteristicvaluechanged', handler)
+          respChar.stopNotifications().catch(() => {}) // best-effort cleanup
           resolve(parsed)
         } catch {
+          respChar.removeEventListener('characteristicvaluechanged', handler)
+          respChar.stopNotifications().catch(() => {})
           reject(new Error('Invalid JSON response'))
         }
       }
       respChar.addEventListener('characteristicvaluechanged', handler)
       cmdChar.writeValue(new TextEncoder().encode(JSON.stringify(cmd)))
-      setTimeout(() => reject(new Error('BLE command timeout (10s) — check BLE connection and PIN')), 10000)
+      setTimeout(() => {
+        respChar.removeEventListener('characteristicvaluechanged', handler)
+        respChar.stopNotifications().catch(() => {})
+        reject(new Error('BLE command timeout (10s) — check BLE connection and PIN'))
+      }, 10000)
     })
   }
 

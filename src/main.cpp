@@ -55,9 +55,10 @@ static void networkTask(void* param) {
     (void)param;
     Serial.println("[Network] task started on Core 0");
 
-    init_connectivity();
-    // BLE server already created in setup(); just start advertising if not yet
+    // Start BLE advertising immediately so provisioning is available
+    // while WiFi is still connecting (init_connectivity may block for 10s)
     start_ble_advertising();
+    init_connectivity();
 
     unsigned long last_settings_check = 0;
     SensorData data;

@@ -156,9 +156,6 @@ static void connect_wifi() {
     IPAddress ip = WiFi.localIP();
     snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
     Serial.println("\nWiFi connected");
-    // WiFi is up — stop BLE advertising to save power and reduce attack surface
-    // (BLE server stays alive for re-provisioning if WiFi drops later)
-    stop_ble_advertising();
     sync_time();
     sync_calibration_to_supabase();
 }

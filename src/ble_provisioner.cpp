@@ -605,10 +605,9 @@ void init_ble_provisioner() {
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
     );
 
-    // Don't start advertising yet — wait until WiFi is online
-    ble_advertising_active = false;
     ble_initialized = true;
-    Serial.println("BLE server ready (advertising deferred)");
+    start_ble_advertising();
+    Serial.println("BLE server ready");
 }
 
 void start_ble_advertising() {
