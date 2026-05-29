@@ -7,6 +7,7 @@
 #include "energy_counter.h"
 #include "sensor_manager.h"
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #define MQTT_MAX_PACKET_SIZE 1024
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
