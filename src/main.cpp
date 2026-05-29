@@ -495,6 +495,9 @@ static void handle_serial_cli() {
             } else if (strcmp(line, "calibrate_baseline") == 0) {
                 sensor_calibrate_baseline();
                 Serial.println("Baseline recalibration started — collecting new baseline over next 10 ticks");
+            } else if (strcmp(line, "ble_on") == 0) {
+                start_ble_advertising();
+                Serial.println("BLE advertising restarted");
             } else if (strcmp(line, "wifi_show") == 0) {
                 char ssid[64] = "", pass[64] = "";
                 if (settings_load_wifi(ssid, pass, sizeof(ssid))) {
@@ -573,6 +576,7 @@ static void handle_serial_cli() {
                 Serial.println("  cal N type value    — set calibration (type: 0=vo_mv, 1=vg, 2=co_ma, 3=cg)");
                 Serial.println("  cal show            — show all channel calibration values");
                 Serial.println("  calibrate_baseline  — restart baseline noise calibration (10 ticks)");
+                Serial.println("  ble_on              — restart BLE advertising (for re-provisioning)");
                 Serial.println("  serial1peek         — dump up to 5 lines from Serial1");
                 Serial.println("  wifi_show          — show current WiFi SSID");
                 Serial.println("  wifi_ssid <ssid>  — set WiFi SSID");

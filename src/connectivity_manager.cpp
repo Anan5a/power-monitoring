@@ -156,8 +156,9 @@ static void connect_wifi() {
     IPAddress ip = WiFi.localIP();
     snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
     Serial.println("\nWiFi connected");
-    // BLE only needed for provisioning; tear down NimBLE stack to free ~50KB heap
-    deinit_ble_provisioner();
+    // WiFi is up — stop BLE advertising to save power and reduce attack surface
+    // (BLE server stays alive for re-provisioning if WiFi drops later)
+    stop_ble_advertising();
     sync_time();
     sync_calibration_to_supabase();
 }
@@ -232,13 +233,23 @@ void init_connectivity() {
 }
 
 void loop_connectivity() {
+    static bool wifi_was_connected = false;
+    bool wifi_connected = (WiFi.status() == WL_CONNECTED);
+
     // WiFi reconnection — attempt every 30s when disconnected
     static uint32_t last_wifi_retry = 0;
-    if (WiFi.status() != WL_CONNECTED && millis() - last_wifi_retry > 30000) {
+    if (!wifi_connected && millis() - last_wifi_retry > 30000) {
         last_wifi_retry = millis();
         WiFi.reconnect();
         Serial.println("[WiFi] reconnecting...");
     }
+
+    // WiFi dropped — restart BLE advertising so device can be re-provisioned
+    if (wifi_was_connected && !wifi_connected) {
+        Serial.println("[WiFi] disconnected — restarting BLE advertising");
+        start_ble_advertising();
+    }
+    wifi_was_connected = wifi_connected;
 
     if (skip_network) return;
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
