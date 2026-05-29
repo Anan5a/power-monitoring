@@ -105,6 +105,23 @@ static void connect_mqtt() {
 const char* get_local_ip_str() { return ip_str; }
 time_t get_epoch_time() { return epoch_time; }
 
+static void print_http_error(HTTPClient& http, int rc) {
+    Serial.printf("HTTP error %d (heap=%u)\n", rc, ESP.getFreeHeap());
+    WiFiClient* stream = http.getStreamPtr();
+    if (!stream) return;
+    char body[1024];
+    int n = 0;
+    unsigned long t0 = millis();
+    while (stream->available() && n < (int)sizeof(body) - 1 && millis() - t0 < 300) {
+        body[n++] = stream->read();
+    }
+    body[n] = '\0';
+    if (n > 0) {
+        Serial.print("Response body: ");
+        Serial.println(body);
+    }
+}
+
 void publish_data_http(const SensorData& data, const char* json_buffer, size_t json_len) {
     if (ESP.getFreeHeap() < 4096) return;
     if (!settings_load_http_enabled()) return;
@@ -115,10 +132,10 @@ void publish_data_http(const SensorData& data, const char* json_buffer, size_t j
     http.addHeader("Content-Type", "application/json");
     if (strlen(token) > 0) http.addHeader("Authorization", token);
     int rc = http.POST((uint8_t*)json_buffer, json_len);
-    http.end();
     if (rc != 200 && rc != 202) {
-        Serial.print("HTTP publish failed: "); Serial.println(rc);
+        print_http_error(http, rc);
     }
+    http.end();
 }
 
 void init_connectivity() {
@@ -255,10 +272,10 @@ static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v,
     http.addHeader("Authorization", auth_hdr);
 
     int rc = http.POST((uint8_t*)buffer, len);
-    http.end();
     if (rc != 200 && rc != 201 && rc != 204) {
-        Serial.printf("[Supabase] log entry POST failed: %d\n", rc);
+        print_http_error(http, rc);
     }
+    http.end();
 }
 
 static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
@@ -591,14 +608,14 @@ void publish_data_supabase(const SensorData& data) {
     size_t len = serializeJson(g_supa_doc, buffer);
 
     int rc = http.POST((uint8_t*)buffer, len);
-    http.end();
     if (rc != 200 && rc != 201 && rc != 204) {
-        Serial.printf("Supabase publish failed: %d (heap=%u)\n", rc, ESP.getFreeHeap());
+        print_http_error(http, rc);
         if (rc == 400) {
             Serial.print("Payload preview: ");
-            Serial.println(buffer); // print first ~1024 chars
+            Serial.println(buffer);
         }
     }
+    http.end();
 
     // Update calibration status table while baseline is collecting
     publish_calibration_status();
@@ -646,12 +663,12 @@ void sync_calibration_to_supabase() {
     char buffer[512];
     size_t len = serializeJson(g_cal_doc, buffer);
     int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
-    http.end();
     if (rc >= 200 && rc < 300) {
         Serial.println("Calibration synced to Supabase");
     } else {
-        Serial.print("Calibration sync failed: "); Serial.println(rc);
+        print_http_error(http, rc);
     }
+    http.end();
 }
 
 void sync_ble_pin_to_supabase() {
@@ -683,12 +700,12 @@ void sync_ble_pin_to_supabase() {
     char buffer[256];
     size_t len = serializeJson(g_cal_doc, buffer);
     int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
-    http.end();
     if (rc >= 200 && rc < 300) {
         Serial.println("BLE PIN synced to Supabase");
     } else {
-        Serial.print("BLE PIN sync failed: "); Serial.println(rc);
+        print_http_error(http, rc);
     }
+    http.end();
 }
 
 void publish_calibration_status() {
@@ -738,10 +755,12 @@ void publish_calibration_status() {
     http.addHeader("Prefer", "resolution=merge-duplicates");
 
     int rc = http.sendRequest("PATCH", (uint8_t*)buffer, len);
-    http.end();
     if (rc >= 200 && rc < 300) {
         Serial.printf("[CALIB] status published: tick=%d\n", tick_count);
+    } else {
+        print_http_error(http, rc);
     }
+    http.end();
 }
 
 bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
@@ -819,7 +838,6 @@ void check_settings_commands() {
     size_t len = serializeJson(g_cal_doc, buffer);
 
     int rc = http.POST((uint8_t*)buffer, len);
-    http.end();
 
     if (rc == 200) {
         // Read into stack buffer — no String heap allocation
@@ -830,6 +848,7 @@ void check_settings_commands() {
             resp_buf[resp_len++] = stream->read();
         }
         resp_buf[resp_len] = '\0';
+        http.end();
 
         if (resp_len == 0 || strncmp(resp_buf, "null", 4) == 0) return;
 
@@ -843,5 +862,8 @@ void check_settings_commands() {
         if (strlen(cmd_type) > 0) {
             apply_settings_command(cmd_type, payload);
         }
+    } else {
+        print_http_error(http, rc);
+        http.end();
     }
 }
