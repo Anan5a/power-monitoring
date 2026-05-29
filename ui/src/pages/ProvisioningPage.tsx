@@ -46,9 +46,8 @@ export default function ProvisioningPage() {
     setStep(1)
     try {
       const d = await navigator.bluetooth.requestDevice({
-        // Show all BLE devices — the 128-bit service UUID is in scan response
-        // which not all browsers match during passive scan. User picks by name.
-        acceptAllDevices: true,
+        // Name is now in primary advertisement (fits within 31 bytes)
+        filters: [{ name: 'PowerMonitor' }],
         optionalServices: [SERVICE_UUID],
       })
       if (!d.gatt) throw new Error('GATT not available')
@@ -258,9 +257,8 @@ export default function ProvisioningPage() {
               Connect to your PowerMonitor device via Bluetooth to configure WiFi and Supabase.
             </p>
             <button onClick={connectBLE} className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 font-medium">
-              Scan for Bluetooth Devices
+              Scan for PowerMonitor
             </button>
-            <p className="text-xs text-gray-500 mt-2">Look for <b>PowerMonitor</b> in the list</p>
           </div>
         )}
 

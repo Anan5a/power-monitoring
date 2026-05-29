@@ -33,6 +33,8 @@ class ProvServerCallbacks : public NimBLEServerCallbacks {
         rate_window_start = millis();
         rate_cmd_count = 0;
         Serial.printf("[BLE] client connected (addr=%s)\n", connInfo.getAddress().toString().c_str());
+        // Windows-friendly connection parameters: short interval, no latency, 5s timeout
+        pServer->updateConnParams(connInfo.getConnHandle(), 6, 12, 0, 500);
     }
     void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
         bleClientConnected = false;
