@@ -50,6 +50,7 @@ static void supabase_http_reset() {
 }
 
 static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
+    if (WiFi.status() != WL_CONNECTED) return false;
     if (!g_supa_http_ready) {
         g_supa_client.setInsecure(); // skip cert verification
         g_supa_http.setReuse(true);
@@ -178,6 +179,7 @@ time_t get_epoch_time() { return epoch_time; }
 
 static void print_http_error(HTTPClient& http, int rc) {
     Serial.printf("HTTP error %d (heap=%u)\n", rc, ESP.getFreeHeap());
+    if (rc < 0) return; // no body on connection-level failure
     WiFiClient* stream = http.getStreamPtr();
     if (!stream) return;
     char body[512];
@@ -392,6 +394,7 @@ static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
 }
 
 void publish_log_batch_supabase() {
+    if (skip_network) return;
     static unsigned long last_log_pub_ms = 0;
     if (millis() - last_log_pub_ms < 1000) return; // rate limit: 1 log POST per second
     last_log_pub_ms = millis();
@@ -566,6 +569,7 @@ void publish_data(const SensorData& data) {
 }
 
 void publish_data_supabase(const SensorData& data) {
+    if (skip_network) return;
     static unsigned long last_pub_ms = 0;
     if (millis() - last_pub_ms < 1000) return; // rate limit: 1 POST per second
     last_pub_ms = millis();
@@ -835,6 +839,7 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
 }
 
 void check_settings_commands() {
+    if (skip_network) return;
     if (ESP.getFreeHeap() < 4096) return;
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
