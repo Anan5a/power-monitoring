@@ -695,6 +695,7 @@ void publish_data_supabase(const SensorData& data) {
 static JsonDocument g_cal_doc;
 
 void sync_calibration_to_supabase() {
+    if (skip_network) return;
     if (ESP.getFreeHeap() < 4096) return;
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
@@ -733,6 +734,7 @@ void sync_calibration_to_supabase() {
 }
 
 void sync_ble_pin_to_supabase() {
+    if (skip_network) return;
     if (ESP.getFreeHeap() < 4096) return;
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
@@ -760,6 +762,7 @@ void sync_ble_pin_to_supabase() {
 }
 
 void publish_calibration_status() {
+    if (skip_network) return;
     if (!sensor_is_calibrating()) return;  // nothing to report
     static unsigned long last_cal_pub_ms = 0;
     if (millis() - last_cal_pub_ms < 5000) return; // rate limit: 1 cal publish per 5s
@@ -794,8 +797,12 @@ void publish_calibration_status() {
 
     static char buffer[512];
     size_t len = serializeJson(g_cal_doc, buffer);
+    // Reset persistent client so the Prefer header is added to a fresh connection only
+    supabase_http_reset();
     g_supa_http.addHeader("Prefer", "resolution=merge-duplicates");
     int rc = supabase_patch("/rest/v1/sensor_calibration_status", buffer, len, supabase_url, anon_key);
+    // Force reset after PATCH so the custom header doesn't leak into subsequent POSTs
+    supabase_http_reset();
     if (rc >= 200 && rc < 300) {
         Serial.printf("[CALIB] status published: tick=%d\n", tick_count);
     } else {
@@ -870,7 +877,7 @@ void check_settings_commands() {
 
         if (resp_len == 0 || strncmp(resp_buf, "null", 4) == 0) return;
 
-        // Expected: {"cmd_type":"set_wifi","payload":{...}}
+        // Expected: {"cmd_type":"set_wifi","payload":{...}}  or  null
         g_cal_doc.clear();
         DeserializationError err = deserializeJson(g_cal_doc, resp_buf);
         if (err) {
@@ -879,10 +886,17 @@ void check_settings_commands() {
         }
 
         const char* cmd_type = g_cal_doc["cmd_type"] | "";
-        const char* payload = g_cal_doc["payload"] | "{}";
-        if (strlen(cmd_type) > 0) {
-            apply_settings_command(cmd_type, payload);
+        if (strlen(cmd_type) == 0) return;
+
+        // payload may be a JSON object (jsonb) or a string; handle both
+        char payload_buf[512];
+        JsonVariant payload_var = g_cal_doc["payload"];
+        if (payload_var.is<const char*>()) {
+            strlcpy(payload_buf, payload_var.as<const char*>(), sizeof(payload_buf));
+        } else {
+            serializeJson(payload_var, payload_buf, sizeof(payload_buf));
         }
+        apply_settings_command(cmd_type, payload_buf);
     } else {
         print_http_error(g_supa_http, rc);
     }
