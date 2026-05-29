@@ -28,7 +28,8 @@ static void print_sensor_data(const SensorData& data) {
 }
 
 static void print_status() {
-    Serial.printf("IP: %s | Entries: %lu | Overflow: %d\n", get_local_ip_str(), log_entries_count(), log_has_overflow_file());
+    Serial.printf("IP: %s | Entries: %lu/%uKB | Overflow: %d\n",
+                  get_local_ip_str(), log_entries_count(), log_buffer_capacity()/1024, log_has_overflow_file());
     for (int ch = 0; ch < 4; ch++) {
         float mAh = get_coulomb_mAh(ch);
         float wh = get_energy_Wh(ch);

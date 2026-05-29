@@ -6,7 +6,8 @@
 #include <FS.h>
 #include <LittleFS.h>
 
-static uint8_t buffer[LOG_BUFFER_BYTES];
+static uint8_t* buffer = nullptr;
+static size_t buffer_size = 0;
 static size_t head = 0, tail = 0;
 static uint32_t entry_count = 0;
 static int16_t last_v[4] = {}, last_i[4] = {}, last_p[4] = {};
@@ -25,34 +26,51 @@ time_t log_to_epoch(uint32_t timestamp_ms) {
 
 static inline size_t next_pos(size_t pos, size_t n) {
     size_t np = pos + n;
-    if (np >= LOG_BUFFER_BYTES) np -= LOG_BUFFER_BYTES;
+    if (np >= buffer_size) np -= buffer_size;
     return np;
 }
 
 static inline size_t free_space() {
-    if (head >= tail) return LOG_BUFFER_BYTES - (head - tail) - 1;
+    if (!buffer_size) return 0;
+    if (head >= tail) return buffer_size - (head - tail) - 1;
     return tail - head - 1;
 }
 
 static void write_bytes(const uint8_t* src, size_t n) {
-    size_t avail = (head >= tail) ? LOG_BUFFER_BYTES - (head - tail) - 1 : tail - head - 1;
+    size_t avail = (head >= tail) ? buffer_size - (head - tail) - 1 : tail - head - 1;
     if (n > avail) n = avail;
-    size_t first = (head + n >= LOG_BUFFER_BYTES) ? LOG_BUFFER_BYTES - head : n;
+    size_t first = (head + n >= buffer_size) ? buffer_size - head : n;
     memcpy(buffer + head, src, first);
-    head = (head + first) % LOG_BUFFER_BYTES;
+    head = (head + first) % buffer_size;
     if (n > first) {
         memcpy(buffer + head, src + first, n - first);
-        head = (head + n - first) % LOG_BUFFER_BYTES;
+        head = (head + n - first) % buffer_size;
     }
 }
 
 static bool can_fit(size_t n) {
-    if (n >= LOG_BUFFER_BYTES) return false;
+    if (n >= buffer_size) return false;
     return free_space() > n;
 }
 
 void init_data_logger() {
-    memset(buffer, 0, sizeof(buffer));
+    if (!buffer) {
+        const size_t try_sizes[] = {64*1024, 48*1024, 32*1024, 16*1024};
+        for (size_t sz : try_sizes) {
+            buffer = (uint8_t*)malloc(sz);
+            if (buffer) {
+                buffer_size = sz;
+                Serial.printf("[LOG] allocated %u bytes\n", buffer_size);
+                break;
+            }
+        }
+        if (!buffer) {
+            Serial.println("[LOG] buffer allocation failed");
+            buffer_size = 0;
+            return;
+        }
+    }
+    memset(buffer, 0, buffer_size);
     head = tail = 0;
     entry_count = 0;
     have_base = false;
@@ -74,6 +92,7 @@ void init_data_logger() {
 }
 
 void log_sample(const SensorData& data, uint32_t timestamp_ms) {
+    if (!buffer || !buffer_size) return;
     int16_t v[4] = {
         (int16_t)(data.ina3221_busV[0] * 1000),
         (int16_t)(data.ina3221_busV[1] * 1000),
@@ -143,7 +162,7 @@ void log_sample(const SensorData& data, uint32_t timestamp_ms) {
                             written += w;
                         }
                     } else {
-                        size_t n1 = LOG_BUFFER_BYTES - tail;
+                        size_t n1 = buffer_size - tail;
                         if (n1 > 0) {
                             size_t w1 = f.write(buffer + tail, n1);
                             if (w1 != n1) ok = false;
@@ -171,6 +190,7 @@ void log_sample(const SensorData& data, uint32_t timestamp_ms) {
 }
 
 size_t log_pop_batch(uint8_t* out_buf, size_t out_len) {
+    if (!buffer || !buffer_size) return 0;
     size_t written = 0;
     while (written + sizeof(DeltaEntry) <= out_len && tail != head) {
         uint8_t type = buffer[tail];
@@ -198,6 +218,7 @@ bool log_peek_latest(LogSnapshot* out) {
 
 uint32_t log_entries_count() { return entry_count; }
 bool log_is_full() { return free_space() < sizeof(DeltaEntry); }
+size_t log_buffer_capacity() { return buffer_size; }
 
 bool log_has_overflow_file() { return LittleFS.exists(LOG_OVERFLOW_FILE); }
 size_t log_overflow_file_size() {

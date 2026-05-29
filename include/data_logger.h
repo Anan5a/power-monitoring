@@ -40,6 +40,7 @@ size_t log_pop_batch(uint8_t* out_buf, size_t out_len);
 bool log_peek_latest(LogSnapshot* out);
 uint32_t log_entries_count();
 bool log_is_full();
+size_t log_buffer_capacity();
 
 // LittleFS overflow management
 bool log_has_overflow_file();
