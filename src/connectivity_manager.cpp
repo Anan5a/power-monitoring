@@ -239,8 +239,23 @@ void loop_connectivity() {
     static uint32_t last_wifi_retry = 0;
     if (!wifi_connected && millis() - last_wifi_retry > 30000) {
         last_wifi_retry = millis();
-        WiFi.reconnect();
+        if (skip_network) {
+            // Initial boot failed: try full re-init instead of simple reconnect
+            WiFi.disconnect(true);
+            delay(100);
+            char ssid[64] = "", pass[64] = "";
+            settings_load_wifi(ssid, pass, sizeof(ssid));
+            WiFi.begin(ssid, pass);
+        } else {
+            WiFi.reconnect();
+        }
         Serial.println("[WiFi] reconnecting...");
+    }
+
+    // WiFi came back up after boot failure — re-enable network
+    if (skip_network && wifi_connected) {
+        skip_network = false;
+        Serial.println("[WiFi] connection restored — network re-enabled");
     }
 
     // WiFi dropped — restart BLE advertising so device can be re-provisioned
