@@ -613,8 +613,18 @@ void init_ble_provisioner() {
 void start_ble_advertising() {
     if (!ble_initialized || ble_advertising_active) return;
     NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-    pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
-    pAdvertising->setName(BT_DEVICE_NAME);
+
+    // Primary advertisement: name only (14 bytes / 31). UUID goes in scan response
+    // because 14 + 18 = 32 bytes exceeds the BLE advertisement limit.
+    NimBLEAdvertisementData advData;
+    advData.setName(BT_DEVICE_NAME);
+    pAdvertising->setAdvertisementData(advData);
+
+    // Scan response: service UUID (for discovery) + name redundancy
+    NimBLEAdvertisementData scanData;
+    scanData.addServiceUUID(BLE_SERVICE_UUID);
+    pAdvertising->setScanResponseData(scanData);
+
     pAdvertising->enableScanResponse(true);
     NimBLEDevice::startAdvertising();
     ble_advertising_active = true;
