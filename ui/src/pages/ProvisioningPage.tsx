@@ -18,7 +18,8 @@ export default function ProvisioningPage() {
   const [ssid, setSsid] = useState('')
   const [pass, setPass] = useState('')
   const [supabaseUrl, setSupabaseUrl] = useState('')
-  const [serviceRoleKey, setServiceRoleKey] = useState('')
+  const [anonKey, setAnonKey] = useState('')
+  const [deviceApiKey, setDeviceApiKey] = useState('')
   const [deviceKey, setDeviceKey] = useState('')
   const [progress, setProgress] = useState('')
   const [calChannel, setCalChannel] = useState(0)
@@ -32,7 +33,10 @@ export default function ProvisioningPage() {
     setStep(1)
     try {
       const d = await navigator.bluetooth.requestDevice({
-        filters: [{ name: 'PowerMonitor' }],
+        filters: [
+          { name: 'PowerMonitor' },
+          { services: [SERVICE_UUID] },
+        ],
         optionalServices: [SERVICE_UUID],
       })
       if (!d.gatt) throw new Error('GATT not available')
@@ -94,7 +98,8 @@ export default function ProvisioningPage() {
       const resp = await sendCommand({
         cmd: 'set_supabase',
         url: supabaseUrl,
-        service_role_key: serviceRoleKey,
+        anon_key: anonKey,
+        api_key: deviceApiKey,
         device_key: deviceKey,
         pin: storedPin,
       }) as { ok?: boolean; error?: string }
@@ -262,17 +267,23 @@ export default function ProvisioningPage() {
                 className="w-full rounded-md border border-gray-300 px-3 py-2" placeholder="https://xxxx.supabase.co" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Service Role Key</label>
-              <input value={serviceRoleKey} onChange={e => setServiceRoleKey(e.target.value)}
+              <label className="block text-sm font-medium text-gray-700 mb-1">Anon / Publishable Key</label>
+              <input value={anonKey} onChange={e => setAnonKey(e.target.value)}
                 className="w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-xs" placeholder="eyJhbG..." />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Device API Key (UUID)</label>
+              <input value={deviceApiKey} onChange={e => setDeviceApiKey(e.target.value)}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-xs" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+              <p className="text-xs text-gray-500 mt-1">From Supabase devices table, not sb_secret_...</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Device Key</label>
               <input value={deviceKey} onChange={e => setDeviceKey(e.target.value)}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-xs" placeholder="xxxxxxxx-xxxx-..." />
+                className="w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-xs" placeholder="mydevice1" />
             </div>
             <button onClick={setSupabase}
-              disabled={!supabaseUrl.trim() || !serviceRoleKey.trim() || !deviceKey.trim()}
+              disabled={!supabaseUrl.trim() || !anonKey.trim() || !deviceApiKey.trim() || !deviceKey.trim()}
               className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50">
               Save Supabase
             </button>
