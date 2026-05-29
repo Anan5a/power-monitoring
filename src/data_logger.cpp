@@ -124,9 +124,9 @@ void log_sample(const SensorData& data, uint32_t timestamp_ms) {
     // Fallback: if buffer full and network likely down, write to LittleFS
     if (!can_fit(sizeof(DeltaEntry))) {
         if (WiFi.status() != WL_CONNECTED) {
-            size_t spiffs_total = LittleFS.totalBytes();
-            size_t spiffs_used  = LittleFS.usedBytes();
-            if (spiffs_used >= spiffs_total || (spiffs_total - spiffs_used) < 4096) {
+            size_t fs_total = LittleFS.totalBytes();
+            size_t fs_used  = LittleFS.usedBytes();
+            if (fs_used >= fs_total || (fs_total - fs_used) < 4096) {
                 Serial.println("[LittleFS] full, dropping oldest batch");
                 tail = head;
                 entry_count = 0;
