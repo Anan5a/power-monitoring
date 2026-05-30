@@ -887,6 +887,20 @@ static void sync_device_channels_to_supabase() {
         }
     }
 
+    // Virtual channels
+    JsonArray vcs = g_cal_doc["virtual_channels"].to<JsonArray>();
+    for (uint8_t ch = 0; ch < 4; ch++) {
+        VirtualChannelConfig vc;
+        if (settings_load_virtual_channel(ch, &vc)) {
+            JsonObject v = vcs.add<JsonObject>();
+            v["channel"] = ch;
+            v["voltage_src"] = vc.voltage_src;
+            v["voltage_idx"] = vc.voltage_idx;
+            v["current_src"] = vc.current_src;
+            v["current_idx"] = vc.current_idx;
+        }
+    }
+
     // Calibration
     ChannelCalibration cal;
     if (settings_load_channel_calibration(&cal)) {

@@ -81,6 +81,7 @@ create table public.device_channels (
     channel_names jsonb default '[]',
     battery_profiles jsonb default '[]',
     channel_calibration jsonb default '{"volt_offset_mv":[0,0,0],"volt_gain":[1,1,1],"curr_offset_ma":[0,0,0],"curr_gain":[1,1,1]}'::jsonb,
+    virtual_channels jsonb default '[]'::jsonb,
     ble_pin text,
     updated_at timestamptz default now()
 );

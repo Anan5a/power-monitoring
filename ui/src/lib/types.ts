@@ -118,4 +118,5 @@ export interface DeviceChannels {
   channel_names: ChannelName[]
   battery_profiles: BatteryProfile[]
   channel_calibration?: ChannelCalibration
+  virtual_channels?: VirtualChannelConfig[]
 }
