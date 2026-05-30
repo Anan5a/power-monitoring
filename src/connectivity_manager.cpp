@@ -85,28 +85,42 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
 
 static int supabase_post(const char* url_path, const char* payload, size_t len,
     const char* supabase_url, const char* anon_key) {
+    static int fail_count = 0;
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!supabase_http_prepare(full_url, anon_key)) return -1;
     int rc = g_supa_http.POST((uint8_t*)payload, len);
     if (rc < 0) {
-        supabase_http_reset();
+        drain_response();
+        // Only reset on persistent failure — avoid destroying persistent TLS connection
+        // which forces new TLS handshake (~4-8KB heap) on transient errors
+        if (++fail_count >= 3) {
+            supabase_http_reset();
+            fail_count = 0;
+        }
     } else {
-        drain_response(); // flush body so next request on reused connection is clean
+        drain_response();
+        fail_count = 0;
     }
     return rc;
 }
 
 static int supabase_patch(const char* url_path, const char* payload, size_t len,
     const char* supabase_url, const char* anon_key) {
+    static int patch_fail_count = 0;
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!supabase_http_prepare(full_url, anon_key)) return -1;
     int rc = g_supa_http.sendRequest("PATCH", (uint8_t*)payload, len);
     if (rc < 0) {
-        supabase_http_reset();
+        drain_response();
+        if (++patch_fail_count >= 3) {
+            supabase_http_reset();
+            patch_fail_count = 0;
+        }
     } else {
         drain_response();
+        patch_fail_count = 0;
     }
     return rc;
 }
@@ -663,9 +677,14 @@ void publish_data(const SensorData& data) {
 
 void publish_data_supabase(const SensorData& data) {
     if (skip_network) return;
-    // Heap check BEFORE last_pub_ms reset — peak usage is ~12KB during serializeJson()
-    if (ESP.getFreeHeap() < 14000) {
-        Serial.printf("[WARN] Low heap (%d), skipping Supabase publish\n", ESP.getFreeHeap());
+    // Heap check BEFORE last_pub_ms reset — peak ~8KB during serializeJson()
+    // Keep buffer tight to allow sensor task + network task to coexist on ~320KB heap
+    if (ESP.getFreeHeap() < 8000) {
+        static unsigned long last_warn = 0;
+        if (millis() - last_warn > 10000) {
+            Serial.printf("[WARN] Low heap (%d), skipping Supabase publish\n", ESP.getFreeHeap());
+            last_warn = millis();
+        }
         return;
     }
     static unsigned long last_pub_ms = 0;
@@ -1014,7 +1033,7 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
 
 void check_settings_commands() {
     if (skip_network) return;
-    if (ESP.getFreeHeap() < 4096) return;
+    if (ESP.getFreeHeap() < 3072) return;
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
@@ -1071,7 +1090,11 @@ void check_settings_commands() {
         apply_settings_command(cmd_type, payload_buf);
         apply_settings_posthook(cmd_type);
     } else {
-        print_http_error(g_supa_http, rc);
-        supabase_http_reset();
+        drain_response();
+        static int settings_fail_count = 0;
+        if (++settings_fail_count >= 3) {
+            supabase_http_reset();
+            settings_fail_count = 0;
+        }
     }
 }
