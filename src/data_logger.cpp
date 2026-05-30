@@ -171,29 +171,26 @@ void log_sample(const SensorData& data, uint32_t timestamp_ms) {
         }
         entry_count++;
     } else {
-        // Buffer full — flush oldest entries to LittleFS
-        if (WiFi.status() == WL_CONNECTED) {
-            size_t fs_total = LittleFS.totalBytes();
-            size_t fs_used  = LittleFS.usedBytes();
-            if (fs_used >= fs_total || (fs_total - fs_used) < 4096) {
-                Serial.println("[LittleFS] full, dropping oldest entries");
-            }
-            flush_to_littlefs();
-            // After flush, write should fit
-            if (can_fit(entry_size)) {
-                size_t first = (head + entry_size >= LOG_BUFFER_BYTES) ? LOG_BUFFER_BYTES - head : entry_size;
-                memcpy(buffer + head, entry_ptr, first);
-                head = (head + first) % LOG_BUFFER_BYTES;
-                if (entry_size > first) {
-                    memcpy(buffer + head, entry_ptr + first, entry_size - first);
-                    head = (head + entry_size - first) % LOG_BUFFER_BYTES;
-                }
-                entry_count++;
-            }
-        } else {
-            // No WiFi, don't overflow — just drop oldest entries silently
+        // Buffer full — flush to LittleFS, only drop if flash itself is full
+        size_t fs_total = LittleFS.totalBytes();
+        size_t fs_used  = LittleFS.usedBytes();
+        if (fs_used >= fs_total || (fs_total - fs_used) < 4096) {
+            Serial.println("[LOG] flash full, dropping oldest entries");
             tail = head;
             entry_count = 0;
+        } else {
+            flush_to_littlefs();
+        }
+        // After flush (or drop), retry write
+        if (can_fit(entry_size)) {
+            size_t first = (head + entry_size >= LOG_BUFFER_BYTES) ? LOG_BUFFER_BYTES - head : entry_size;
+            memcpy(buffer + head, entry_ptr, first);
+            head = (head + first) % LOG_BUFFER_BYTES;
+            if (entry_size > first) {
+                memcpy(buffer + head, entry_ptr + first, entry_size - first);
+                head = (head + entry_size - first) % LOG_BUFFER_BYTES;
+            }
+            entry_count++;
         }
     }
 }
