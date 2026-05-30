@@ -34,7 +34,4 @@ void apply_settings_posthook(const char* cmd_type);  // reconnect WiFi/MQTT, res
 // Relay state publishing
 void publish_relay_state(uint8_t idx, bool is_energized);
 
-// Supabase WebSocket
-bool isSupabaseWsConnected();
-
 #endif

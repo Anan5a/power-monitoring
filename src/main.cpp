@@ -78,7 +78,12 @@ static void networkTask(void* param) {
         // Flush log entries one by one via Supabase
         publish_log_batch_supabase();
 
-        // Supabase settings commands now delivered via WebSocket in loop_connectivity()
+        // Poll Supabase for pending settings commands
+        static unsigned long last_settings_check = 0;
+        if (millis() - last_settings_check >= 5000) {
+            last_settings_check = millis();
+            check_settings_commands();
+        }
 
         // Retry NTP sync every 60s if not yet synced (SNTP runs in background)
         static unsigned long last_ntp_retry = 0;

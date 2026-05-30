@@ -921,10 +921,6 @@ static void handle_settings_command(const char* cmd_type, const char* payload_js
     apply_settings_posthook(cmd_type);
 }
 
-bool isSupabaseWsConnected() {
-    return g_supa_ws.isConnected();
-}
-
 void apply_settings_posthook(const char* cmd_type) {
     if (strcmp(cmd_type, "set_wifi") == 0) {
         char ssid[64] = "", pass[64] = "";
