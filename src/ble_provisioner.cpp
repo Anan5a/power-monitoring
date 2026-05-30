@@ -579,7 +579,6 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         uint8_t type = doc["type"] | 0;
         float value = doc["value"] | 0.0f;
         sensor_set_calibration(ch, type, value);
-        sync_calibration_to_supabase();
         Serial.println("[CMD] calibration saved");
     } else if (strcmp(cmd_type, "set_virtual_channel") == 0) {
         uint8_t ch = doc["channel"] | 0;
@@ -609,6 +608,7 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         Serial.println("[CMD] ble_pin updated");
     } else if (strcmp(cmd_type, "calibrate_baseline") == 0) {
         sensor_calibrate_baseline();
+        sync_calibration_to_supabase();
         Serial.println("[CMD] baseline calibration started");
     } else if (strcmp(cmd_type, "factory_reset") == 0) {
         settings_factory_reset();

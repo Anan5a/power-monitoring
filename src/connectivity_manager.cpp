@@ -838,7 +838,7 @@ static void sync_device_channels_to_supabase() {
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
     if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
-    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    settings_load_supabase_api_key(api_key, sizeof(api_key));
 
     g_cal_doc.clear();
     g_cal_doc["device_key"] = device_key;
@@ -1040,6 +1040,9 @@ void apply_settings_posthook(const char* cmd_type) {
         reinit_sensors();
         Serial.println("[CMD] Sensor params reloaded from NVS");
     }
+    // sync_device_channels_to_supabase() is called by check_settings_commands after apply_settings_command returns
+    // so no need to call it here for most commands
+    // (calibrate_baseline calls sync_calibration_to_supabase directly in apply_settings_command)
 }
 
 void publish_calibration_status() {
