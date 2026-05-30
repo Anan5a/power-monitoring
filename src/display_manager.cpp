@@ -174,7 +174,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
 void update_display(const SensorData& data, const char* ip_str, float total_power) {
     unsigned long now = millis();
     if (now - last_page_switch >= 3000) {
-        current_page = (current_page + 1) % 5;
+        current_page = (current_page + 1) % 4;
         last_page_switch = now;
     }
     display.clearDisplay();
