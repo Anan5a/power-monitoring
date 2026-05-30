@@ -136,20 +136,20 @@ static int supabase_get(const char* url_path, const char* supabase_url, const ch
 
 // src: 0=none, 1=ina3221_volt(0x42), 2=ina3221_curr(0x40), 3=ina226, 4=ads1115
 float get_sensor_voltage(uint8_t src, uint8_t idx, const SensorData& data) {
-    if (src == 1) return data.ads1115_volts[idx < 4 ? idx : 0];        // INA3221 voltage module
-    if (src == 2) return data.ina3221_busV[idx < 3 ? idx : 0];        // INA3221 current module (busV)
+    if (src == 1) return data.ina3221_busV[idx < 3 ? idx : 0];       // INA3221 voltage module 0x42
+    if (src == 2) return data.ads1115_volts[idx < 4 ? idx : 0];       // ADS1115 standalone ADC
     if (src == 3) return data.ina226_busV;                            // INA226
-    if (src == 4) return data.ads1115_volts[idx < 4 ? idx : 0];      // ADS1115
+    if (src == 4) return 0.0f;                                        // reserved
     return 0.0f;
 }
 float get_sensor_current(uint8_t src, uint8_t idx, const SensorData& data) {
-    if (src == 1) return 0.0f;                                       // voltage-only source
-    if (src == 2) return data.ina3221_current[idx < 3 ? idx : 0];    // INA3221 current module
+    if (src == 1) return data.ina3221_current[idx < 3 ? idx : 0];     // INA3221 current module 0x40
+    if (src == 2) return 0.0f;                                        // ADS1115 current N/A
     if (src == 3) return data.ina226_current;                         // INA226
     return 0.0f;
 }
 float get_sensor_power(uint8_t src, uint8_t idx, const SensorData& data) {
-    if (src == 3) return data.ina226_power;                          // INA226 has built-in power
+    if (src == 3) return data.ina226_power;                           // INA226 has built-in power
     return 0.0f;
 }
 

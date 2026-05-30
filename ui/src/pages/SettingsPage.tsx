@@ -537,13 +537,12 @@ function VirtualChannelsTab({ deviceChannels, onSave }: { deviceChannels: Device
   const srcOptions = [
     { value: 0, label: 'None' },
     { value: 1, label: 'INA3221 Voltage (0x42)' },
-    { value: 2, label: 'INA3221 Current (0x40)' },
+    { value: 2, label: 'ADS1115' },
     { value: 3, label: 'INA226' },
-    { value: 4, label: 'ADS1115' },
   ]
   const currOptions = [
     { value: 0, label: 'None' },
-    { value: 2, label: 'INA3221 Current (0x40)' },
+    { value: 1, label: 'INA3221 Current (0x40)' },
     { value: 3, label: 'INA226' },
   ]
   const [vcs, setVcs] = useState<Array<{ voltage_src: number; voltage_idx: number; current_src: number; current_idx: number }>>(
