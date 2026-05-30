@@ -807,15 +807,7 @@ void publish_data_supabase(const SensorData& data) {
     static char buffer[2048];
     size_t len = serializeJson(g_supa_doc, buffer);
 
-    // WebSocket primary, HTTP fallback
-    if (g_supa_ws.isConnected() && ESP.getFreeHeap() >= 14000) {
-        int sent = g_supa_ws.publishTelemetry(buffer, len);
-        if (sent > 0) {
-            publish_calibration_status();
-            return;
-        }
-    }
-    // HTTP fallback
+    // HTTP primary — WebSocket broadcasts have no guaranteed delivery to DB
     int rc = supabase_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
     if (rc != 200 && rc != 201 && rc != 204) {
         print_http_error(g_supa_http, rc);
