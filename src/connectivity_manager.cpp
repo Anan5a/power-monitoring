@@ -840,10 +840,8 @@ void sync_calibration_to_supabase() {
 
     static char buffer[512];
     size_t len = serializeJson(g_cal_doc, buffer);
-    supabase_http_reset();
     g_supa_http.addHeader("Prefer", "precision=exact");
     int rc = supabase_patch(path, buffer, len, supabase_url, anon_key);
-    supabase_http_reset();
     if (rc >= 200 && rc < 300) {
         Serial.println("Calibration synced to Supabase");
     } else {
@@ -1027,9 +1025,6 @@ void check_settings_commands() {
     if (millis() - last_check < 5000) return;  // poll every 5s
     last_check = millis();
 
-    // Reset persistent client so we start with a clean TCP stream for reading the response body
-    supabase_http_reset();
-
     g_cal_doc.clear();
     g_cal_doc["p_device_key"] = device_key;
     char buffer[256];
@@ -1044,7 +1039,7 @@ void check_settings_commands() {
         // Use getString() — it handles Transfer-Encoding: chunked correctly;
         // raw getStream().read() leaks chunk-size prefixes like "f2\r\n".
         String body = g_supa_http.getString();
-        supabase_http_reset();
+        drain_response();
 
         if (body.length() == 0 || body.startsWith("null")) return;
 
