@@ -554,7 +554,14 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         BatteryProfile bp = {};
         bp.channel = doc["channel"] | 0;
         strlcpy(bp.name, doc["name"] | "", sizeof(bp.name));
-        bp.chemistry = doc["chemistry"] | 0;
+        {
+            const char* chem = doc["chemistry"] | "";
+            if (strcmp(chem, "lead_acid") == 0) bp.chemistry = 0;
+            else if (strcmp(chem, "lipol") == 0) bp.chemistry = 1;
+            else if (strcmp(chem, "liion") == 0) bp.chemistry = 2;
+            else if (strcmp(chem, "nimh") == 0) bp.chemistry = 3;
+            else bp.chemistry = 0;
+        }
         bp.capacity_mAh = doc["capacity_mAh"] | 0.0f;
         bp.initial_soc_pct = doc["initial_soc_pct"] | 100.0f;
         bp.cell_count = doc["cell_count"] | 1.0f;
