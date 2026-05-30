@@ -784,6 +784,9 @@ void publish_data_supabase(const SensorData& data) {
     metadata["rssi"] = WiFi.RSSI();
     metadata["vcc"] = analogRead(0) / 4095.0f * 3.3f;
     metadata["uptime_s"] = millis() / 1000;
+    metadata["ip"] = get_local_ip_str();
+    metadata["heap_free"] = ESP.getFreeHeap();
+    metadata["temp_c"] = temperatureRead();  // ESP32 internal sensor, Celsius
 
     g_supa_doc["p_recorded_at"] = (uint32_t)epoch_s;
 

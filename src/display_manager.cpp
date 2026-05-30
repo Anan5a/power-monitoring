@@ -31,7 +31,7 @@ static void draw_soc_bar(int cx, int cy, int width, float soc) {
 
 // ─── Status page ───────────────────────────────────────────────
 
-static void draw_status_page(const char* ip_str, float total_power) {
+static void draw_status_page(const char* ip_str, float total_power, float temp_c) {
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 2);
@@ -53,8 +53,14 @@ static void draw_status_page(const char* ip_str, float total_power) {
     display.print(" ent");
     if (log_has_overflow_file()) display.print(" [OVF]");
 
+    // Temp + uptime on last line
     display.setCursor(0, 52);
-    display.print("PWR MON");
+    char tbuf[16];
+    dtostrf(temp_c, 4, 1, tbuf);
+    display.print(tbuf);
+    display.print("C ");
+    display.print((millis() / 1000) / 60);
+    display.print("m");
 }
 
 // ─── Channel page ───────────────────────────────────────────────
@@ -174,7 +180,7 @@ void update_display(const SensorData& data, const char* ip_str, float total_powe
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    if (current_page == 0) draw_status_page(ip_str, total_power);
+    if (current_page == 0) draw_status_page(ip_str, total_power, temperatureRead());
     else draw_channel_page(current_page - 1, data);
     display.display();
 }
