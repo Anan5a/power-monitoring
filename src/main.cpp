@@ -85,6 +85,13 @@ static void networkTask(void* param) {
             check_settings_commands();
         }
 
+        // Retry NTP sync every 60s if not yet synced (SNTP runs in background)
+        static unsigned long last_ntp_retry = 0;
+        if (millis() - last_ntp_retry >= 60000) {
+            last_ntp_retry = millis();
+            try_sync_epoch_time();
+        }
+
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

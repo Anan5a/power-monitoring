@@ -44,7 +44,9 @@ static bool             g_supa_http_ready = false;
 
 static void supabase_http_reset() {
     if (g_supa_http_ready) {
+        g_supa_http.setReuse(false); // force _client->stop() inside end()
         g_supa_http.end();
+        g_supa_client.stop();        // belt-and-suspenders: close TLS socket
         g_supa_http_ready = false;
     }
 }
@@ -136,17 +138,32 @@ float get_sensor_power(uint8_t src, uint8_t idx, const SensorData& data) {
     return 0.0f;
 }
 
-static void sync_time() {
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+static bool sntp_started = false;
+
+static void start_sntp() {
+    if (sntp_started) return;
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
+    sntp_started = true;
+}
+
+static bool sync_time() {
+    start_sntp();
     struct tm ti = {};
-    if (getLocalTime(&ti, 5000)) {
+    if (getLocalTime(&ti, 10000)) {
         epoch_time = mktime(&ti);
         char buf[32];
         strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &ti);
         Serial.print("NTP time: "); Serial.println(buf);
+        return true;
     } else {
-        Serial.println("NTP sync failed");
+        Serial.println("NTP sync failed, will retry");
+        return false;
     }
+}
+
+bool try_sync_epoch_time() {
+    if (epoch_time > 0) return true;
+    return sync_time();
 }
 
 static void connect_wifi() {
