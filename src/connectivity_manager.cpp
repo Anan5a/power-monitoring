@@ -1020,7 +1020,7 @@ void check_settings_commands() {
     if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
 
     static unsigned long last_check = 0;
-    if (millis() - last_check < 30000) return;  // poll every 30s
+    if (millis() - last_check < 5000) return;  // poll every 5s
     last_check = millis();
 
     // Reset persistent client so we start with a clean TCP stream for reading the response body
