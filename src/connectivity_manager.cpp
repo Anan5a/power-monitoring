@@ -999,12 +999,12 @@ void sync_ble_pin_to_supabase() {
 }
 
 void publish_relay_state(uint8_t idx, bool is_energized) {
-    if (skip_network) return;
-    if (ESP.getFreeHeap() < 3072) return;
+    if (skip_network) { Serial.println("[RELAY] skip: offline mode"); return; }
+    if (ESP.getFreeHeap() < 3072) { Serial.printf("[RELAY] skip: heap %d < 3072\n", ESP.getFreeHeap()); return; }
     char supabase_url[128], anon_key[128], device_key[64];
-    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
-    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
-    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) { Serial.println("[RELAY] skip: no supabase url"); return; }
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) { Serial.println("[RELAY] skip: no anon key"); return; }
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) { Serial.println("[RELAY] skip: no device key"); return; }
 
     // UPSERT: insert if row doesn't exist, update if it does.
     // Primary key (id) must be null to trigger insert; conflict on device_key+relay_index
@@ -1026,7 +1026,9 @@ void publish_relay_state(uint8_t idx, bool is_energized) {
     int rc = g_supa_http.POST((uint8_t*)buffer, len);
     g_supa_http.addHeader("Prefer", "return=minimal"); // restore minimal for other calls
     if (rc >= 200 && rc < 300) {
-        Serial.printf("[RELAY] state upserted: idx=%d energized=%d\n", idx, is_energized);
+        Serial.printf("[RELAY] upserted: idx=%d energized=%d\n", idx, is_energized);
+    } else {
+        Serial.printf("[RELAY] upsert FAILED: HTTP %d\n", rc);
     }
 }
 
