@@ -663,14 +663,14 @@ void publish_data(const SensorData& data) {
 
 void publish_data_supabase(const SensorData& data) {
     if (skip_network) return;
+    // Heap check BEFORE last_pub_ms reset — peak usage is ~12KB during serializeJson()
+    if (ESP.getFreeHeap() < 14000) {
+        Serial.printf("[WARN] Low heap (%d), skipping Supabase publish\n", ESP.getFreeHeap());
+        return;
+    }
     static unsigned long last_pub_ms = 0;
     if (millis() - last_pub_ms < 1000) return; // rate limit: 1 POST per second
     last_pub_ms = millis();
-
-    if (ESP.getFreeHeap() < 8192) {
-        Serial.println("[WARN] Low heap, skipping Supabase publish");
-        return;
-    }
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
