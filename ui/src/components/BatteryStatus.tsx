@@ -9,9 +9,9 @@ interface Props {
 const CHEM_LABELS: Record<string, string> = {
   lead_acid: 'Pb',
   lipol: 'LiPo',
-  liion: 'Li',
+  liion: 'LiIon',
   nimh: 'NiMH',
-  lifepo4: 'LiFe',
+  lifepo4: 'LiFePO4',
   agm: 'AGM',
   fla: 'FLA',
 }
