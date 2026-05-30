@@ -14,12 +14,13 @@ struct BatteryConfig {
 
 struct BatteryProfile {
     uint8_t  channel;          // 0-3
-    char     name[24];          // e.g. "12V Lead Acid"
-    uint8_t  chemistry;        // BatteryChemistry enum
+    char     name[24];         // e.g. "12V Lead Acid"
+    uint8_t  chemistry;         // BatteryChemistry enum
+    float    system_voltage;    // nominal system voltage (e.g. 12, 24, 48 V)
     float    capacity_mAh;
     float    initial_soc_pct;
     float    cell_count;
-    float    full_voltage;     // V per cell * cell_count; 0 = use chemistry default
+    float    full_voltage;      // V per cell * cell_count; 0 = use chemistry default
     float    cutoff_voltage;
     float    float_voltage;
 };

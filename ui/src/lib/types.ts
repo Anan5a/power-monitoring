@@ -63,6 +63,7 @@ export interface BatteryProfile {
   channel: number
   name: string
   chemistry: BatteryChemistry
+  system_voltage: number
   capacity_mAh: number
   initial_soc_pct: number
   cell_count: number

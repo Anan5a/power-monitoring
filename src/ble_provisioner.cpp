@@ -565,6 +565,7 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
             else if (strcmp(chem, "fla") == 0) bp.chemistry = 6;
             else bp.chemistry = 0;
         }
+        bp.system_voltage = doc["system_voltage"] | 0.0f;
         bp.capacity_mAh = doc["capacity_mAh"] | 0.0f;
         bp.initial_soc_pct = doc["initial_soc_pct"] | 100.0f;
         bp.cell_count = doc["cell_count"] | 1.0f;
