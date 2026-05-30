@@ -1098,6 +1098,16 @@ void check_settings_commands() {
         }
         apply_settings_command(cmd_type, payload_buf);
         apply_settings_posthook(cmd_type);
+        // set_relay: after applying, sync the resulting GPIO state to Supabase relay_states
+        if (strcmp(cmd_type, "set_relay") == 0) {
+            uint8_t idx = 0;
+            char tmp[16];
+            // Peek idx from payload_buf to find which relay was changed
+            if (JsonObject obj = g_cal_doc["payload"]) {
+                idx = obj["idx"] | 0;
+            }
+            publish_relay_state(idx, get_relay_state(idx));
+        }
     } else {
         drain_response();
         static int settings_fail_count = 0;
