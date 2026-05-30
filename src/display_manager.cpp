@@ -107,9 +107,9 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 2);
     display.print(name);
-    display.setCursor(SCREEN_WIDTH - 16, 2);
-    display.print("P");
-    display.print(ch + 2);
+    display.setCursor(SCREEN_WIDTH - 24, 2);
+    display.print("CH");
+    display.print(ch);
 
     // V | I | P in blue area — below yellow band (y >= 16)
     char ibuf[16], pbuf[16];
