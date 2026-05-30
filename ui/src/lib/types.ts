@@ -59,6 +59,12 @@ export interface ChannelName {
   name: string
 }
 
+export interface BatteryConfig {
+  channel?: number
+  capacity_mAh: number
+  initial_soc_pct: number
+}
+
 export interface BatteryProfile {
   channel: number
   name: string
@@ -70,6 +76,33 @@ export interface BatteryProfile {
   full_voltage: number
   cutoff_voltage: number
   float_voltage: number
+}
+
+export interface RelayRule {
+  channel: number
+  overcurrent_A: number
+  undervoltage_V: number
+  soc_low_pct: number
+  soc_high_pct: number
+  trip_delay_ms: number
+  reset_delay_ms: number
+  gpio_pin: number
+  active_high: boolean
+  enabled: boolean
+}
+
+export interface VirtualChannelConfig {
+  voltage_src: number
+  voltage_idx: number
+  current_src: number
+  current_idx: number
+}
+
+export interface ChannelGroup {
+  group_id: number
+  name: string
+  icon: number
+  channel_mask: number
 }
 
 export interface ChannelCalibration {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import type { Device, DeviceChannels } from '../lib/types'
+import type { Device, DeviceChannels, RelayRule, VirtualChannelConfig, BatteryConfig } from '../lib/types'
 
 const EMPTY_CHANNELS: DeviceChannels = {
   device_key: '',
@@ -513,7 +513,7 @@ function CalibrationTab({ deviceChannels, onSave }: { deviceChannels: DeviceChan
   )
 }
 
-function VirtualChannelsTab({ deviceChannels: _dc, onSave }: { deviceChannels: DeviceChannels; onSave: (ch: number, vc: object) => void }) {
+function VirtualChannelsTab({ deviceChannels: _dc, onSave }: { deviceChannels: DeviceChannels; onSave: (ch: number, vc: VirtualChannelConfig) => void }) {
   const srcOptions = [
     { value: 0, label: 'None' },
     { value: 1, label: 'INA3221 Voltage (0x42)' },
@@ -657,7 +657,7 @@ function ChannelGroupsTab({ deviceChannels, onSave }: { deviceChannels: DeviceCh
   )
 }
 
-function BatteriesTab({ onSave }: { onSave: (ch: number, bat: object) => void }) {
+function BatteriesTab({ onSave }: { onSave: (ch: number, bat: BatteryConfig) => void }) {
   const [vals, setVals] = useState([{ capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }])
   return (
     <div className="bg-white rounded-lg shadow p-6">
@@ -690,7 +690,7 @@ function BatteriesTab({ onSave }: { onSave: (ch: number, bat: object) => void })
   )
 }
 
-function RelaysTab({ onSave }: { onSave: (idx: number, rt: object) => void }) {
+function RelaysTab({ onSave }: { onSave: (idx: number, rt: RelayRule) => void }) {
   const [relays, setRelays] = useState(Array.from({ length: 4 }, () => ({
     channel: 0, overcurrent_A: '0', undervoltage_V: '0',
     soc_low_pct: '0', soc_high_pct: '0', trip_delay_ms: '1000',
