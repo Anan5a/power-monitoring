@@ -255,7 +255,7 @@ export default function SettingsPage() {
             {activeTab === 'calibration' && (
               <CalibrationTab deviceChannels={deviceChannels} onSave={(ch, type, value) =>
                 sendCommand('set_calibration', { channel: ch, type, value })
-              } />
+              } sendCommand={sendCommand} />
             )}
 
             {/* Sensors tab — shunt, volt_ratio, resistor parameters */}
@@ -408,7 +408,7 @@ export default function SettingsPage() {
             {activeTab === 'batteries' && (
               <BatteriesTab onSave={(ch, bat) =>
                 sendCommand('set_battery', { channel: ch, ...bat })
-              } />
+              } sendCommand={sendCommand} />
             )}
 
             {/* System tab */}
@@ -445,7 +445,7 @@ export default function SettingsPage() {
   )
 }
 
-function CalibrationTab({ deviceChannels, onSave }: { deviceChannels: DeviceChannels; onSave: (ch: number, type: number, value: number) => void }) {
+function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannels: DeviceChannels; onSave: (ch: number, type: number, value: number) => void; sendCommand?: (cmd_type: string, payload: Record<string, unknown>) => void }) {
   const cal = deviceChannels.channel_calibration
   const [vals, setVals] = useState({
     volt_offset_mv: ['0','0','0'],
@@ -453,6 +453,7 @@ function CalibrationTab({ deviceChannels, onSave }: { deviceChannels: DeviceChan
     curr_offset_ma: ['0','0','0'],
     curr_gain: ['1','1','1'],
   })
+  const [baselineMsg, setBaselineMsg] = useState('')
   useEffect(() => {
     if (cal) {
       setVals({
@@ -509,11 +510,30 @@ function CalibrationTab({ deviceChannels, onSave }: { deviceChannels: DeviceChan
           ))}
         </tbody>
       </table>
+
+      <div className="mt-6 pt-4 border-t">
+        <h4 className="text-sm font-medium text-gray-700 mb-2">Baseline Calibration</h4>
+        <p className="text-xs text-gray-500 mb-3">
+          Collect 16 samples per channel to establish a noise baseline for spike detection.
+          Takes ~16 seconds. Device continues normal operation.
+        </p>
+        {baselineMsg && <p className="text-xs text-blue-600 mb-2">{baselineMsg}</p>}
+        <button
+          onClick={() => {
+            sendCommand?.('calibrate_baseline', {})
+            setBaselineMsg('Baseline calibration started — check device serial for progress.')
+            setTimeout(() => setBaselineMsg(''), 6000)
+          }}
+          className="bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700"
+        >
+          Start Baseline Calibration
+        </button>
+      </div>
     </div>
   )
 }
 
-function VirtualChannelsTab({ deviceChannels: _dc, onSave }: { deviceChannels: DeviceChannels; onSave: (ch: number, vc: VirtualChannelConfig) => void }) {
+function VirtualChannelsTab({ deviceChannels, onSave }: { deviceChannels: DeviceChannels; onSave: (ch: number, vc: VirtualChannelConfig) => void }) {
   const srcOptions = [
     { value: 0, label: 'None' },
     { value: 1, label: 'INA3221 Voltage (0x42)' },
@@ -526,10 +546,21 @@ function VirtualChannelsTab({ deviceChannels: _dc, onSave }: { deviceChannels: D
     { value: 2, label: 'INA3221 Current (0x40)' },
     { value: 3, label: 'INA226' },
   ]
-  // Load from deviceChannels if available
   const [vcs, setVcs] = useState<Array<{ voltage_src: number; voltage_idx: number; current_src: number; current_idx: number }>>(
     Array.from({ length: 4 }, () => ({ voltage_src: 0, voltage_idx: 0, current_src: 0, current_idx: 0 }))
   )
+  useEffect(() => {
+    // Pre-populate from deviceChannels virtual_channels if present
+    const vcData = (deviceChannels as unknown as { virtual_channels?: typeof vcs }).virtual_channels
+    if (vcData && Array.isArray(vcData)) {
+      setVcs(vcData.map((v: typeof vcs[0]) => ({
+        voltage_src: v.voltage_src ?? 0,
+        voltage_idx: v.voltage_idx ?? 0,
+        current_src: v.current_src ?? 0,
+        current_idx: v.current_idx ?? 0,
+      })))
+    }
+  }, [deviceChannels])
 
   return (
     <div className="bg-white rounded-lg shadow p-6">
@@ -657,17 +688,27 @@ function ChannelGroupsTab({ deviceChannels, onSave }: { deviceChannels: DeviceCh
   )
 }
 
-function BatteriesTab({ onSave }: { onSave: (ch: number, bat: BatteryConfig) => void }) {
+function BatteriesTab({ onSave, sendCommand }: { onSave: (ch: number, bat: BatteryConfig) => void; sendCommand?: (cmd_type: string, payload: Record<string, unknown>) => void }) {
   const [vals, setVals] = useState([{ capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }])
+  const [profiles, setProfiles] = useState([{ name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }, { name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }, { name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }, { name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }])
+  const [expanded, setExpanded] = useState<number | null>(null)
+  const chemistries = ['lead_acid', 'liion', 'lifepo4', 'lipol', 'nimh', 'agm', 'fla']
+
   return (
     <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="font-semibold mb-4">Battery Configuration (per VC)</h3>
-      <p className="text-sm text-gray-500 mb-4">Set capacity for VCs with a battery. Leave at 0 (or empty) for non-battery VCs like solar or grid.</p>
+      <h3 className="font-semibold mb-1">Battery Configuration (per VC)</h3>
+      <p className="text-sm text-gray-500 mb-4">Set capacity for VCs with a battery. Expanded view adds chemistry and voltage profile.</p>
       <div className="space-y-3">
         {[0,1,2,3].map(ch => (
           <div key={ch} className="border rounded p-3">
-            <div className="font-medium mb-2">VC{ch}</div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="flex items-center justify-between">
+              <span className="font-medium">VC{ch}</span>
+              <button onClick={() => setExpanded(expanded === ch ? null : ch)}
+                className="text-xs text-blue-600 hover:underline">
+                {expanded === ch ? '▲ less' : '▼ profile'}
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mt-2">
               <div>
                 <label className="text-sm text-gray-600">Capacity (mAh, 0=disabled)</label>
                 <input value={vals[ch].capacity_mAh} onChange={e => setVals(v => v.map((x, i) => i === ch ? { ...x, capacity_mAh: e.target.value } : x))}
@@ -682,7 +723,69 @@ function BatteriesTab({ onSave }: { onSave: (ch: number, bat: BatteryConfig) => 
             <button onClick={() => onSave(ch, {
               capacity_mAh: parseFloat(vals[ch].capacity_mAh) || 0,
               initial_soc_pct: parseFloat(vals[ch].initial_soc_pct) || 100,
-            })} className="mt-2 text-xs bg-blue-600 text-white px-3 py-1 rounded">Save</button>
+            })} className="mt-2 text-xs bg-blue-600 text-white px-3 py-1 rounded">Save Basic</button>
+
+            {expanded === ch && (
+              <div className="mt-3 pt-3 border-t space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-gray-600">Profile Name</label>
+                    <input value={profiles[ch].name} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, name: e.target.value } : x))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="My 12V LiFePO4" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-600">Chemistry</label>
+                    <select value={profiles[ch].chemistry} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, chemistry: e.target.value } : x))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm">
+                      {chemistries.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-600">System Voltage (V)</label>
+                    <input value={profiles[ch].system_voltage} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, system_voltage: e.target.value } : x))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="12.0" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-600">Cell Count</label>
+                    <input value={profiles[ch].cell_count} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, cell_count: e.target.value } : x))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="4" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-600">Full Voltage (V)</label>
+                    <input value={profiles[ch].full_voltage} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, full_voltage: e.target.value } : x))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="14.4" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-600">Cutoff Voltage (V)</label>
+                    <input value={profiles[ch].cutoff_voltage} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, cutoff_voltage: e.target.value } : x))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="10.0" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-600">Float Voltage (V)</label>
+                    <input value={profiles[ch].float_voltage} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, float_voltage: e.target.value } : x))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="13.8" />
+                  </div>
+                </div>
+                <button
+                  onClick={() => sendCommand?.('set_battery_profile', {
+                    channel: ch,
+                    name: profiles[ch].name,
+                    chemistry: profiles[ch].chemistry,
+                    system_voltage: parseFloat(profiles[ch].system_voltage) || 0,
+                    cell_count: parseFloat(profiles[ch].cell_count) || 1,
+                    full_voltage: parseFloat(profiles[ch].full_voltage) || 0,
+                    cutoff_voltage: parseFloat(profiles[ch].cutoff_voltage) || 0,
+                    float_voltage: parseFloat(profiles[ch].float_voltage) || 0,
+                    capacity_mAh: parseFloat(vals[ch].capacity_mAh) || 0,
+                    initial_soc_pct: parseFloat(vals[ch].initial_soc_pct) || 100,
+                  })}
+                  className="text-xs bg-indigo-600 text-white px-3 py-1 rounded"
+                >
+                  Save Profile
+                </button>
+                <p className="text-xs text-gray-400">Profile includes chemistry, voltage thresholds, and cell count. Basic save only stores capacity + initial SoC.</p>
+              </div>
+            )}
           </div>
         ))}
       </div>
