@@ -49,6 +49,15 @@ static void supabase_http_reset() {
     }
 }
 
+static void drain_response() {
+    if (!g_supa_http_ready) return;
+    Stream& stream = g_supa_http.getStream();
+    unsigned long t0 = millis();
+    while (stream.available() && millis() - t0 < 500) {
+        stream.read();
+    }
+}
+
 static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     if (WiFi.status() != WL_CONNECTED) return false;
     if (!g_supa_http_ready) {
@@ -77,7 +86,11 @@ static int supabase_post(const char* url_path, const char* payload, size_t len,
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!supabase_http_prepare(full_url, anon_key)) return -1;
     int rc = g_supa_http.POST((uint8_t*)payload, len);
-    if (rc < 0) supabase_http_reset();
+    if (rc < 0) {
+        supabase_http_reset();
+    } else {
+        drain_response(); // flush body so next request on reused connection is clean
+    }
     return rc;
 }
 
@@ -87,7 +100,11 @@ static int supabase_patch(const char* url_path, const char* payload, size_t len,
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!supabase_http_prepare(full_url, anon_key)) return -1;
     int rc = g_supa_http.sendRequest("PATCH", (uint8_t*)payload, len);
-    if (rc < 0) supabase_http_reset();
+    if (rc < 0) {
+        supabase_http_reset();
+    } else {
+        drain_response();
+    }
     return rc;
 }
 
@@ -193,6 +210,11 @@ static void print_http_error(HTTPClient& http, int rc) {
     if (n > 0) {
         Serial.print("Response body: ");
         Serial.println(body);
+    }
+    // drain any remaining bytes so they don't leak into the next request on a reused connection
+    t0 = millis();
+    while (stream.available() && millis() - t0 < 500) {
+        stream.read();
     }
 }
 
@@ -807,6 +829,7 @@ void sync_ble_pin_to_supabase() {
     static char buffer[256];
     size_t len = serializeJson(g_cal_doc, buffer);
     int rc = supabase_patch(path, buffer, len, supabase_url, anon_key);
+    supabase_http_reset();
     if (rc >= 200 && rc < 300) {
         Serial.println("BLE PIN synced to Supabase");
     } else {
@@ -898,7 +921,13 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
 
     char path[256];
     snprintf(path, sizeof(path), "/rest/v1/device_channels?device_key=eq.%s&select=ble_pin", device_key);
-    int rc = supabase_get(path, supabase_url, anon_key);
+
+    // Start with a fresh connection so stale response bytes don't corrupt the read
+    supabase_http_reset();
+    char full_url[256];
+    snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, path);
+    if (!supabase_http_prepare(full_url, anon_key)) return false;
+    int rc = g_supa_http.GET();
     bool ok = false;
     if (rc == 200) {
         // Parse: [{"ble_pin":"123456"}] — read into stack buffer, no String heap allocation
@@ -922,6 +951,7 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
             }
         }
     }
+    supabase_http_reset();
     return ok;
 }
 
@@ -938,17 +968,23 @@ void check_settings_commands() {
     if (millis() - last_check < 30000) return;  // poll every 30s
     last_check = millis();
 
+    // Reset persistent client so we start with a clean TCP stream for reading the response body
+    supabase_http_reset();
+
     g_cal_doc.clear();
     g_cal_doc["p_device_key"] = device_key;
     char buffer[256];
     size_t len = serializeJson(g_cal_doc, buffer);
 
-    int rc = supabase_post("/rest/v1/rpc/claim_settings_command", buffer, len, supabase_url, anon_key);
+    char full_url[256];
+    snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, "/rest/v1/rpc/claim_settings_command");
+    if (!supabase_http_prepare(full_url, anon_key)) return;
+    int rc = g_supa_http.POST((uint8_t*)buffer, len);
 
     if (rc == 200) {
         // Read full response — spool until stream returns 0 (EOF or timeout)
-        // 512 bytes was too small for richly-equipped commands (e.g. set_relay with many fields)
-        static char resp_buf[1024];
+        // 1536 bytes to accommodate richly-equipped commands (e.g. set_relay with many fields)
+        static char resp_buf[1536];
         size_t resp_len = 0;
         unsigned long t0 = millis();
         Stream& stream = g_supa_http.getStream();
@@ -965,6 +1001,9 @@ void check_settings_commands() {
         }
         resp_buf[resp_len] = '\0';
 
+        // Always reset after reading so the persistent client is clean for telemetry posts
+        supabase_http_reset();
+
         if (resp_len == 0 || strncmp(resp_buf, "null", 4) == 0) return;
 
         // Expected: {"cmd_type":"set_wifi","payload":{...}}  or  null
@@ -979,7 +1018,7 @@ void check_settings_commands() {
         if (strlen(cmd_type) == 0) return;
 
         // payload may be a JSON object (jsonb) or a string; handle both
-        char payload_buf[512];
+        char payload_buf[1024];
         JsonVariant payload_var = g_cal_doc["payload"];
         if (payload_var.is<const char*>()) {
             strlcpy(payload_buf, payload_var.as<const char*>(), sizeof(payload_buf));
@@ -990,5 +1029,6 @@ void check_settings_commands() {
         apply_settings_posthook(cmd_type);
     } else {
         print_http_error(g_supa_http, rc);
+        supabase_http_reset();
     }
 }
