@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-enum BatteryChemistry { BAT_LEAD_ACID = 0, BAT_LIPO, BAT_LIION, BAT_NIMH };
+enum BatteryChemistry { BAT_LEAD_ACID = 0, BAT_LIPO, BAT_LIION, BAT_NIMH, BAT_LIFEPO4, BAT_AGM, BAT_FLA };
 
 struct BatteryConfig {
     uint8_t channel;          // 0-3

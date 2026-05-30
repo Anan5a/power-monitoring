@@ -45,7 +45,7 @@ export interface RelayState {
   last_tripped_at: string | null
 }
 
-export type BatteryChemistry = 'lead_acid' | 'lipol' | 'liion' | 'nimh'
+export type BatteryChemistry = 'lead_acid' | 'lipol' | 'liion' | 'nimh' | 'lifepo4' | 'agm' | 'fla'
 
 export interface ChannelGroup {
   group_id: number

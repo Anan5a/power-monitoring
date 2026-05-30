@@ -560,6 +560,9 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
             else if (strcmp(chem, "lipol") == 0) bp.chemistry = 1;
             else if (strcmp(chem, "liion") == 0) bp.chemistry = 2;
             else if (strcmp(chem, "nimh") == 0) bp.chemistry = 3;
+            else if (strcmp(chem, "lifepo4") == 0) bp.chemistry = 4;
+            else if (strcmp(chem, "agm") == 0) bp.chemistry = 5;
+            else if (strcmp(chem, "fla") == 0) bp.chemistry = 6;
             else bp.chemistry = 0;
         }
         bp.capacity_mAh = doc["capacity_mAh"] | 0.0f;

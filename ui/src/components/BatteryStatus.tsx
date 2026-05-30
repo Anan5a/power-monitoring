@@ -11,6 +11,9 @@ const CHEM_LABELS: Record<string, string> = {
   lipol: 'LiPo',
   liion: 'Li',
   nimh: 'NiMH',
+  lifepo4: 'LiFe',
+  agm: 'AGM',
+  fla: 'FLA',
 }
 
 export default function BatteryStatus({ data, deviceProfile, batteryProfiles }: Props) {
