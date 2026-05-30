@@ -899,24 +899,33 @@ void sync_ble_pin_to_supabase() {
 
 void publish_relay_state(uint8_t idx, bool is_energized) {
     if (skip_network) return;
-    if (ESP.getFreeHeap() < 4096) return;
+    if (ESP.getFreeHeap() < 3072) return;
     char supabase_url[128], anon_key[128], device_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
     if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
 
-    char path[256];
-    snprintf(path, sizeof(path), "/rest/v1/relay_states?device_key=eq.%s&relay_index=eq.%d", device_key, idx);
-
+    // UPSERT: insert if row doesn't exist, update if it does.
+    // Primary key (id) must be null to trigger insert; conflict on device_key+relay_index
     static JsonDocument doc;
     doc.clear();
+    doc["device_key"] = device_key;
+    doc["relay_index"] = idx;
+    doc["gpio_pin"] = 25;
     doc["is_energized"] = is_energized;
     doc["last_tripped_at"] = "now";
     static char buffer[256];
     size_t len = serializeJson(doc, buffer);
-    int rc = supabase_patch(path, buffer, len, supabase_url, anon_key);
+
+    char full_url[256];
+    snprintf(full_url, sizeof(full_url), "%s/rest/v1/relay_states", supabase_url);
+    if (!supabase_http_prepare(full_url, anon_key)) return;
+    // Merge-duplicates = upsert on conflict
+    g_supa_http.addHeader("Prefer", "resolution=merge-duplicates");
+    int rc = g_supa_http.POST((uint8_t*)buffer, len);
+    g_supa_http.addHeader("Prefer", "return=minimal"); // restore minimal for other calls
     if (rc >= 200 && rc < 300) {
-        Serial.printf("[RELAY] state published: idx=%d energized=%d\n", idx, is_energized);
+        Serial.printf("[RELAY] state upserted: idx=%d energized=%d\n", idx, is_energized);
     }
 }
 

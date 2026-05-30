@@ -193,6 +193,17 @@ static void handle_serial_cli() {
                 } else {
                     Serial.println("Usage: test relay 0-3");
                 }
+            } else if (strcmp(line, "shunt show") == 0) {
+                for (int ch = 0; ch < 3; ch++) {
+                    float s; bool ok = settings_load_shunt(ch, &s);
+                    if (ok) {
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), "%.6f", s);
+                        Serial.printf("CH%d shunt: %s\n", ch, buf);
+                    } else {
+                        Serial.printf("CH%d shunt: (default)\n", ch);
+                    }
+                }
             } else if (strncmp(line, "shunt ", 6) == 0) {
                 int ch; float ohms;
                 if (sscanf(line, "shunt %d %f", &ch, &ohms) == 2 && ch >= 0 && ch <= 3) {
@@ -205,6 +216,16 @@ static void handle_serial_cli() {
                     apply_settings_posthook("set_shunt");
                 } else {
                     Serial.println("Usage: shunt N ohms (e.g. shunt 0 0.0003) or shunt N 0 to clear");
+                }
+            } else if (strcmp(line, "vratio show") == 0) {
+                for (int ch = 0; ch < 3; ch++) {
+                    float r; bool ok = settings_load_volt_ratio(ch, &r);
+                    float def = (ch == 0) ? VOLT_RATIO_CH0 : (ch == 1) ? VOLT_RATIO_CH1 : VOLT_RATIO_CH2;
+                    if (ok) {
+                        Serial.printf("CH%d vratio: %.4f\n", ch, r);
+                    } else {
+                        Serial.printf("CH%d vratio: default:%.4f\n", ch, def);
+                    }
                 }
             } else if (strncmp(line, "vratio ", 7) == 0) {
                 int ch; float ratio;
@@ -219,6 +240,15 @@ static void handle_serial_cli() {
                 } else {
                     Serial.println("Usage: vratio N ratio (e.g. vratio 2 3.521) or vratio N 0 to clear");
                 }
+            } else if (strcmp(line, "resistor show") == 0) {
+                for (int ch = 0; ch < 3; ch++) {
+                    float rh, rl; bool ok = settings_load_resistors(ch, &rh, &rl);
+                    if (ok) {
+                        Serial.printf("CH%d resistors: %.0f+%.0f = %.4f\n", ch, rh, rl, (rh+rl)/rl);
+                    } else {
+                        Serial.printf("CH%d resistors: (not set)\n", ch);
+                    }
+                }
             } else if (strncmp(line, "resistor ", 9) == 0) {
                 int ch; float rh, rl;
                 if (sscanf(line, "resistor %d %f %f", &ch, &rh, &rl) == 3 && ch >= 0 && ch <= 2) {
@@ -232,6 +262,12 @@ static void handle_serial_cli() {
                     apply_settings_posthook("set_resistors");
                 } else {
                     Serial.println("Usage: resistor N r_high r_low (e.g. resistor 2 900000 68000)");
+                }
+            } else if (strcmp(line, "cal show") == 0) {
+                for (int ch = 0; ch < 3; ch++) {
+                    float vo, vg, co, cg;
+                    sensor_get_calibration(ch, &vo, &vg, &co, &cg);
+                    Serial.printf("CH%d: vo=%.2fmV vg=%.4f co=%.2fmA cg=%.4f\n", ch, vo, vg, co, cg);
                 }
             } else if (strncmp(line, "cal ", 4) == 0) {
                 int ch, type; float value;
@@ -470,42 +506,6 @@ static void handle_serial_cli() {
                 delay(500);
                 settings_factory_reset();
                 ESP.restart();
-            } else if (strcmp(line, "shunt show") == 0) {
-                for (int ch = 0; ch < 3; ch++) {
-                    float s; bool ok = settings_load_shunt(ch, &s);
-                    if (ok) {
-                        char buf[32];
-                        snprintf(buf, sizeof(buf), "%.6f", s);
-                        Serial.printf("CH%d shunt: %s\n", ch, buf);
-                    } else {
-                        Serial.printf("CH%d shunt: (default)\n", ch);
-                    }
-                }
-            } else if (strcmp(line, "vratio show") == 0) {
-                for (int ch = 0; ch < 3; ch++) {
-                    float r; bool ok = settings_load_volt_ratio(ch, &r);
-                    float def = (ch == 0) ? VOLT_RATIO_CH0 : (ch == 1) ? VOLT_RATIO_CH1 : VOLT_RATIO_CH2;
-                    if (ok) {
-                        Serial.printf("CH%d vratio: %.4f\n", ch, r);
-                    } else {
-                        Serial.printf("CH%d vratio: default:%.4f\n", ch, def);
-                    }
-                }
-            } else if (strcmp(line, "resistor show") == 0) {
-                for (int ch = 0; ch < 3; ch++) {
-                    float rh, rl; bool ok = settings_load_resistors(ch, &rh, &rl);
-                    if (ok) {
-                        Serial.printf("CH%d resistors: %.0f+%.0f = %.4f\n", ch, rh, rl, (rh+rl)/rl);
-                    } else {
-                        Serial.printf("CH%d resistors: (not set)\n", ch);
-                    }
-                }
-            } else if (strcmp(line, "cal show") == 0) {
-                for (int ch = 0; ch < 3; ch++) {
-                    float vo, vg, co, cg;
-                    sensor_get_calibration(ch, &vo, &vg, &co, &cg);
-                    Serial.printf("CH%d: vo=%.2fmV vg=%.4f co=%.2fmA cg=%.4f\n", ch, vo, vg, co, cg);
-                }
             } else if (strcmp(line, "calibrate_baseline") == 0) {
                 sensor_calibrate_baseline();
                 Serial.println("Baseline recalibration started — collecting new baseline over next 10 ticks");
