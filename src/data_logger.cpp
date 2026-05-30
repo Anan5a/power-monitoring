@@ -57,9 +57,16 @@ static size_t pop_ring(uint8_t* out, size_t out_len) {
     return written;
 }
 
+static File g_overflow_file;
+
 // ── Flush ring buffer to LittleFS overflow file ─────────────────────
 static void flush_to_littlefs() {
     if (tail == head) return;
+    // Close read handle first — LittleFS can't have same file open twice
+    if (g_overflow_file) {
+        g_overflow_file.close();
+        g_overflow_file = File();
+    }
     File f = LittleFS.open(LOG_OVERFLOW_FILE, FILE_APPEND);
     if (!f) {
         Serial.println("[LittleFS] open failed for log append");
@@ -196,9 +203,7 @@ void log_sample(const SensorData& data, uint32_t timestamp_ms) {
 }
 
 size_t log_pop_batch(uint8_t* out_buf, size_t out_len) {
-    size_t n = pop_ring(out_buf, out_len);
-    // If ring buffer empty and overflow file exists, drain from LittleFS next
-    return n;
+    return pop_ring(out_buf, out_len);
 }
 
 bool log_peek_latest(LogSnapshot* out) {
@@ -218,13 +223,15 @@ size_t log_buffer_capacity() { return LOG_BUFFER_BYTES; }
 
 bool log_has_overflow_file() { return LittleFS.exists(LOG_OVERFLOW_FILE); }
 size_t log_overflow_file_size() {
+    if (g_overflow_file) {
+        size_t s = g_overflow_file.size();
+        return s;
+    }
     File f = LittleFS.open(LOG_OVERFLOW_FILE, FILE_READ);
     size_t s = f ? f.size() : 0;
     if (f) f.close();
     return s;
 }
-
-static File g_overflow_file;
 
 bool log_open_overflow_for_read() {
     if (!LittleFS.exists(LOG_OVERFLOW_FILE)) return false;
