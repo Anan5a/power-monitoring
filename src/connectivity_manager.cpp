@@ -947,15 +947,8 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
     int rc = g_supa_http.GET();
     bool ok = false;
     if (rc == 200) {
-        // Parse: [{"ble_pin":"123456"}] — read into stack buffer, no String heap allocation
-        char resp[64];
-        size_t resp_len = 0;
-        Stream& stream = g_supa_http.getStream();
-        while (stream.available() && resp_len < sizeof(resp) - 1) {
-            int c = stream.read();
-            if (c >= 0) resp[resp_len++] = (char)c;
-        }
-        resp[resp_len] = '\0';
+        String body = g_supa_http.getString();
+        const char* resp = body.c_str();
         const char* needle = "\"ble_pin\":\"";
         const char* p = strstr(resp, needle);
         if (p) {
@@ -999,29 +992,18 @@ void check_settings_commands() {
     int rc = g_supa_http.POST((uint8_t*)buffer, len);
 
     if (rc == 200) {
-        // Read full response — spool until stream returns 0 (EOF or timeout)
-        // 1536 bytes to accommodate richly-equipped commands (e.g. set_relay with many fields)
-        static char resp_buf[1536];
-        size_t resp_len = 0;
-        unsigned long t0 = millis();
-        Stream& stream = g_supa_http.getStream();
-        while (resp_len < sizeof(resp_buf) - 1) {
-            int c = stream.read();
-            if (c < 0) {
-                // No data available — wait up to 500ms for chunk to arrive
-                if (millis() - t0 > 500) break;
-                delay(10);
-                continue;
-            }
-            resp_buf[resp_len++] = (char)c;
-            t0 = millis(); // reset timer on each byte
-        }
-        resp_buf[resp_len] = '\0';
-
-        // Always reset after reading so the persistent client is clean for telemetry posts
+        // Use getString() — it handles Transfer-Encoding: chunked correctly;
+        // raw getStream().read() leaks chunk-size prefixes like "f2\r\n".
+        String body = g_supa_http.getString();
         supabase_http_reset();
 
-        if (resp_len == 0 || strncmp(resp_buf, "null", 4) == 0) return;
+        if (body.length() == 0 || body.startsWith("null")) return;
+
+        static char resp_buf[1536];
+        size_t resp_len = body.length();
+        if (resp_len > sizeof(resp_buf) - 1) resp_len = sizeof(resp_buf) - 1;
+        memcpy(resp_buf, body.c_str(), resp_len);
+        resp_buf[resp_len] = '\0';
 
         // Expected: {"cmd_type":"set_wifi","payload":{...}}  or  null
         g_cal_doc.clear();
