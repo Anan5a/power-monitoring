@@ -829,6 +829,93 @@ void publish_data_supabase(const SensorData& data) {
 
 static JsonDocument g_cal_doc;
 
+// Sync full device_channels config to Supabase after any settings change.
+// This keeps Supabase device_channels row in sync with ESP32 NVS so the
+// dashboard UI sees up-to-date values after any config command.
+static void sync_device_channels_to_supabase() {
+    if (ESP.getFreeHeap() < 8192) return;
+    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+
+    g_cal_doc.clear();
+    g_cal_doc["device_key"] = device_key;
+
+    // Channel names
+    JsonArray names = g_cal_doc["channel_names"].to<JsonArray>();
+    for (uint8_t ch = 0; ch < 4; ch++) {
+        JsonObject n = names.add<JsonObject>();
+        n["channel"] = ch;
+        char name[24] = "";
+        settings_load_channel_name(ch, name, sizeof(name));
+        n["name"] = name;
+    }
+
+    // Battery profiles
+    JsonArray bats = g_cal_doc["battery_profiles"].to<JsonArray>();
+    const char* CHEM[] = { "lead_acid", "lipol", "liion", "nimh", "lifepo4", "agm", "fla" };
+    for (uint8_t ch = 0; ch < 4; ch++) {
+        BatteryProfile bp;
+        if (settings_load_battery_profile(ch, &bp)) {
+            JsonObject b = bats.add<JsonObject>();
+            b["channel"] = ch;
+            b["name"] = bp.name;
+            b["chemistry"] = bp.chemistry < 7 ? CHEM[bp.chemistry] : "lead_acid";
+            b["system_voltage"] = bp.system_voltage;
+            b["capacity_mAh"] = bp.capacity_mAh;
+            b["initial_soc_pct"] = bp.initial_soc_pct;
+            b["cell_count"] = bp.cell_count;
+            b["full_voltage"] = bp.full_voltage;
+            b["cutoff_voltage"] = bp.cutoff_voltage;
+            b["float_voltage"] = bp.float_voltage;
+        }
+    }
+
+    // Channel groups
+    JsonArray groups = g_cal_doc["channel_groups"].to<JsonArray>();
+    uint8_t gc = settings_load_channel_group_count();
+    for (uint8_t i = 0; i < gc; i++) {
+        ChannelGroup cg;
+        if (settings_load_channel_group(i, &cg)) {
+            JsonObject g = groups.add<JsonObject>();
+            g["group_id"] = cg.group_id;
+            g["name"] = cg.name;
+            g["icon"] = cg.icon;
+            g["channel_mask"] = cg.channel_mask;
+        }
+    }
+
+    // Calibration
+    ChannelCalibration cal;
+    if (settings_load_channel_calibration(&cal)) {
+        JsonObject cal_obj = g_cal_doc["channel_calibration"].to<JsonObject>();
+        JsonArray volt_offset = cal_obj["volt_offset_mv"].to<JsonArray>();
+        JsonArray volt_gain = cal_obj["volt_gain"].to<JsonArray>();
+        JsonArray curr_offset = cal_obj["curr_offset_ma"].to<JsonArray>();
+        JsonArray curr_gain = cal_obj["curr_gain"].to<JsonArray>();
+        for (uint8_t i = 0; i < 3; i++) {
+            volt_offset.add(cal.volt_offset_mv[i]);
+            volt_gain.add(cal.volt_gain[i]);
+            curr_offset.add(cal.curr_offset_ma[i]);
+            curr_gain.add(cal.curr_gain[i]);
+        }
+    }
+
+    static char buffer[1024];
+    size_t len = serializeJson(g_cal_doc, buffer);
+
+    char path[256];
+    snprintf(path, sizeof(path), "/rest/v1/device_channels?device_key=eq.%s", device_key);
+    int rc = supabase_patch(path, buffer, len, supabase_url, anon_key);
+    if (rc >= 200 && rc < 300) {
+        Serial.println("[DB] device_channels synced to Supabase");
+    } else {
+        Serial.printf("[DB] device_channels sync failed: %d\n", rc);
+    }
+}
+
 void sync_calibration_to_supabase() {
     if (skip_network) return;
     if (ESP.getFreeHeap() < 4096) return;
@@ -1098,11 +1185,11 @@ void check_settings_commands() {
         }
         apply_settings_command(cmd_type, payload_buf);
         apply_settings_posthook(cmd_type);
+        // Sync device_channels to Supabase so dashboard UI reflects latest config
+        sync_device_channels_to_supabase();
         // set_relay: after applying, sync the resulting GPIO state to Supabase relay_states
         if (strcmp(cmd_type, "set_relay") == 0) {
             uint8_t idx = 0;
-            char tmp[16];
-            // Peek idx from payload_buf to find which relay was changed
             if (JsonObject obj = g_cal_doc["payload"]) {
                 idx = obj["idx"] | 0;
             }
