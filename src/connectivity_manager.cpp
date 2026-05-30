@@ -462,7 +462,8 @@ void publish_log_batch_supabase() {
     if (millis() - last_log_pub_ms < 1000) return; // rate limit: 1 call per second
     last_log_pub_ms = millis();
 
-    if (ESP.getFreeHeap() < 12288) {
+    // 8KB minimum — safe for g_supa_doc (~2KB) + stack buffers in this function
+    if (ESP.getFreeHeap() < 8192) {
         Serial.println("[WARN] Low heap, skipping Supabase log publish");
         return;
     }
