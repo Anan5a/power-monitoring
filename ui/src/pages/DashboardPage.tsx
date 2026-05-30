@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase, fetchDeviceChannels } from '../lib/supabase'
 import { useRealtime } from '../hooks/useRealtime'
 import type { Device, DeviceChannels } from '../lib/types'
@@ -32,6 +32,7 @@ export default function DashboardPage() {
   const [deviceChannels, setDeviceChannels] = useState<DeviceChannels | null>(null)
   const [relayOn, setRelayOn] = useState<boolean[]>([false, false, false, false])
   const [loadingDevices, setLoadingDevices] = useState(true)
+  const relayChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -48,19 +49,36 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!selectedDevice) { setDeviceChannels(null); return }
     fetchDeviceChannels(selectedDevice.device_key).then(setDeviceChannels)
-    supabase
-      .from('relay_states')
-      .select('*')
-      .eq('device_key', selectedDevice.device_key)
-      .then(({ data }) => {
-        if (data) {
-          const states = [false, false, false, false]
-          data.forEach((r: { relay_index: number; is_energized: boolean }) => {
-            if (r.relay_index >= 0 && r.relay_index < 4) states[r.relay_index] = r.is_energized
+
+    if (relayChannelRef.current) {
+      supabase.removeChannel(relayChannelRef.current)
+      relayChannelRef.current = null
+    }
+    const relayChannel = supabase
+      .channel(`relay-state-${selectedDevice.device_key}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'relay_states',
+        filter: `device_key=eq.${selectedDevice.device_key}`,
+      }, (payload) => {
+        const r = payload.new as { relay_index: number; is_energized: boolean }
+        if (r.relay_index >= 0 && r.relay_index < 4) {
+          setRelayOn(prev => {
+            const next = [...prev]
+            next[r.relay_index] = r.is_energized
+            return next
           })
-          setRelayOn(states)
         }
       })
+      .subscribe()
+    relayChannelRef.current = relayChannel
+    return () => {
+      if (relayChannelRef.current) {
+        supabase.removeChannel(relayChannelRef.current)
+        relayChannelRef.current = null
+      }
+    }
   }, [selectedDevice])
 
   const { latestReading } = useRealtime(selectedDevice?.device_key ?? null)

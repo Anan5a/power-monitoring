@@ -5,9 +5,9 @@ import type { TelemetryPoint } from '../lib/types'
 // EMA alpha — higher = more responsive, lower = smoother
 const EMA = 0.7
 // Reasonable physical limits per channel — values outside these are dropped as noise
-const MAX_V_PER_CHANNEL = 200   // V  (covers 48V battery + margin)
-const MAX_I_PER_CHANNEL = 100   // A
-const MAX_P_PER_CHANNEL = 5000  // W
+const MAX_V_PER_CHANNEL = 500   // V  (covers 48V battery + margin)
+const MAX_I_PER_CHANNEL = 300   // A
+const MAX_P_PER_CHANNEL = 20000  // W
 
 function isAbsurd(key: string, val: number): boolean {
   const k = key.toLowerCase()

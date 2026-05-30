@@ -5,7 +5,7 @@
 #include "settings_manager.h"
 #include "connectivity_manager.h"
 
-#if 1 // HAS_DISPLAY
+#if HAS_DISPLAY
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>

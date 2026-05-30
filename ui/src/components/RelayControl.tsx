@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import type { RelayState } from '../lib/types'
 
@@ -8,6 +8,7 @@ interface Props {
 
 export default function RelayControl({ deviceKey }: Props) {
   const [relays, setRelays] = useState<RelayState[]>([])
+  const relayChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -19,6 +20,34 @@ export default function RelayControl({ deviceKey }: Props) {
       if (data) setRelays(data)
     }
     load()
+
+    const relayChannel = supabase
+      .channel(`relay-state-control-${deviceKey}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'relay_states',
+        filter: `device_key=eq.${deviceKey}`,
+      }, (payload) => {
+        const r = payload.new as RelayState
+        setRelays(prev => {
+          const idx = prev.findIndex(rel => rel.id === r.id)
+          if (idx >= 0) {
+            const next = [...prev]
+            next[idx] = r
+            return next
+          }
+          return prev
+        })
+      })
+      .subscribe()
+    relayChannelRef.current = relayChannel
+    return () => {
+      if (relayChannelRef.current) {
+        supabase.removeChannel(relayChannelRef.current)
+        relayChannelRef.current = null
+      }
+    }
   }, [deviceKey])
 
   async function toggle(relay: RelayState) {

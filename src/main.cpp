@@ -61,7 +61,6 @@ static void networkTask(void* param) {
     start_ble_advertising();
     init_connectivity();
 
-    unsigned long last_settings_check = 0;
     SensorData data;
 
     for (;;) {
@@ -79,11 +78,7 @@ static void networkTask(void* param) {
         // Flush log entries one by one via Supabase
         publish_log_batch_supabase();
 
-        // Supabase settings poll every 30s
-        if (millis() - last_settings_check >= 30000) {
-            last_settings_check = millis();
-            check_settings_commands();
-        }
+        // Supabase settings commands now delivered via WebSocket in loop_connectivity()
 
         // Retry NTP sync every 60s if not yet synced (SNTP runs in background)
         static unsigned long last_ntp_retry = 0;

@@ -2,12 +2,14 @@
 #include "settings_manager.h"
 #include "coulomb_counter.h"
 #include "config.h"
+#include "connectivity_manager.h"
 #include <Arduino.h>
 
 static const uint8_t default_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
 
 struct RelayState {
     bool energized;
+    bool was_energized;  // track prior state for change detection
     unsigned long condition_start_ms;
     bool condition_active;
 };
@@ -25,7 +27,7 @@ void init_relays() {
             settings_save_relay(ch, &rt);
             pinMode(default_pins[ch], OUTPUT);
             digitalWrite(default_pins[ch], LOW); // active_high → LOW = relay OFF at boot
-            relay_states[ch] = { false, 0, false };
+            relay_states[ch] = { false, false, 0, false };
         }
     } else {
         for (uint8_t i = 0; i < count; i++) {
@@ -33,9 +35,13 @@ void init_relays() {
             if (settings_load_relay(i, &rt)) {
                 pinMode(rt.gpio_pin, OUTPUT);
                 digitalWrite(rt.gpio_pin, LOW); // active_high=true: LOW=OFF, HIGH=ON
-                relay_states[i] = { false, 0, false };
+                relay_states[i] = { false, false, 0, false };
             }
         }
+    }
+    // Publish initial relay states to relay_states table
+    for (uint8_t i = 0; i < 4; i++) {
+        publish_relay_state(i, relay_states[i].energized);
     }
 }
 
@@ -83,6 +89,7 @@ void evaluate_relays(const SensorData& data) {
                 st.condition_start_ms = now;
             } else if (!st.energized && (now - st.condition_start_ms >= rt.trip_delay_ms)) {
                 st.energized = true;
+                if (!st.was_energized) { st.was_energized = true; publish_relay_state(i, true); }
                 digitalWrite(rt.gpio_pin, rt.active_high ? HIGH : LOW);
                 Serial.printf("Relay %d TRIPPED (ch=%d, pin=%d)\n", i, ch, rt.gpio_pin);
             }
@@ -92,6 +99,7 @@ void evaluate_relays(const SensorData& data) {
                 st.condition_start_ms = now;
             } else if (st.energized && (now - st.condition_start_ms >= rt.reset_delay_ms)) {
                 st.energized = false;
+                if (st.was_energized) { st.was_energized = false; publish_relay_state(i, false); }
                 digitalWrite(rt.gpio_pin, rt.active_high ? LOW : HIGH);
                 Serial.printf("Relay %d RESET (ch=%d, pin=%d)\n", i, ch, rt.gpio_pin);
             }

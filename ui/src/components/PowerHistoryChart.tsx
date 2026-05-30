@@ -10,7 +10,7 @@ interface Props {
 type Range = '1h' | '6h' | '24h' | '7d' | '30d'
 
 const RANGE_HOURS: Record<Range, number> = { '1h': 1, '6h': 6, '24h': 24, '7d': 168, '30d': 720 }
-const RANGE_LIMITS: Record<Range, number> = { '1h': 200, '6h': 200, '24h': 200, '7d': 500, '30d': 500 }
+const RANGE_LIMITS: Record<Range, number> = { '1h': 500, '6h': 500, '24h': 200, '7d': 500, '30d': 500 }
 
 // Find power keys: virtual channels ch0_P/ch1_P/ch2_P + ina226_p
 function extractVCPowerKeys(data: TelemetryPoint[]): string[] {

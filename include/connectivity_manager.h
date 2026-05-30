@@ -31,4 +31,10 @@ void check_settings_commands();
 void publish_calibration_status();  // writes sensor_calibration_status table during active calibration
 void apply_settings_posthook(const char* cmd_type);  // reconnect WiFi/MQTT, reset Supabase client after settings change
 
+// Relay state publishing
+void publish_relay_state(uint8_t idx, bool is_energized);
+
+// Supabase WebSocket
+bool isSupabaseWsConnected();
+
 #endif

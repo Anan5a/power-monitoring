@@ -7,6 +7,7 @@
 #include "energy_counter.h"
 #include "sensor_manager.h"
 #include "relay_controller.h"
+#include "supabase_realtime.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #define MQTT_MAX_PACKET_SIZE 1024
@@ -19,6 +20,10 @@
 
 static WiFiClient wifiClient;
 static PubSubClient mqtt(wifiClient);
+static SupabaseRealtime g_supa_ws;
+
+// Forward declare settings command callback
+static void handle_settings_command(const char* cmd_type, const char* payload_json);
 
 static char ip_str[16] = "0.0.0.0";
 
@@ -50,6 +55,7 @@ static void supabase_http_reset() {
         g_supa_client.stop();        // belt-and-suspenders: close TLS socket
         g_supa_http_ready = false;
     }
+    if (g_supa_ws.isConnected()) g_supa_ws.end();
 }
 
 static void drain_response() {
@@ -270,6 +276,16 @@ void init_connectivity() {
 
     // Blynk disabled — uncomment lib_deps in platformio.ini and set BLYNK_AUTH_TOKEN to enable
     // if (strcmp(BLYNK_AUTH_TOKEN, "YOUR_BLYNK_TOKEN") != 0) { ... }
+
+    // Initialize Supabase WebSocket
+    char supabase_url[128], anon_key[128], device_key[64];
+    if (settings_load_supabase_url(supabase_url, sizeof(supabase_url)) &&
+        settings_load_supabase_anon_key(anon_key, sizeof(anon_key)) &&
+        settings_load_supabase_device_key(device_key, sizeof(device_key))) {
+        g_supa_ws.onSettingsCommand(handle_settings_command);
+        g_supa_ws.begin(supabase_url, anon_key, device_key);
+        Serial.println("Supabase WebSocket initialized");
+    }
 }
 
 void loop_connectivity() {
@@ -307,6 +323,7 @@ void loop_connectivity() {
     wifi_was_connected = wifi_connected;
 
     if (skip_network) return;
+    g_supa_ws.loop();
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
         if (!mqtt.connected()) connect_mqtt();
@@ -790,6 +807,15 @@ void publish_data_supabase(const SensorData& data) {
     static char buffer[2048];
     size_t len = serializeJson(g_supa_doc, buffer);
 
+    // WebSocket primary, HTTP fallback
+    if (g_supa_ws.isConnected() && ESP.getFreeHeap() >= 14000) {
+        int sent = g_supa_ws.publishTelemetry(buffer, len);
+        if (sent > 0) {
+            publish_calibration_status();
+            return;
+        }
+    }
+    // HTTP fallback
     int rc = supabase_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
     if (rc != 200 && rc != 201 && rc != 204) {
         print_http_error(g_supa_http, rc);
@@ -875,6 +901,38 @@ void sync_ble_pin_to_supabase() {
     }
 }
 
+void publish_relay_state(uint8_t idx, bool is_energized) {
+    if (skip_network) return;
+    if (ESP.getFreeHeap() < 4096) return;
+    char supabase_url[128], anon_key[128], device_key[64];
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+
+    char path[256];
+    snprintf(path, sizeof(path), "/rest/v1/relay_states?device_key=eq.%s&relay_index=eq.%d", device_key, idx);
+
+    static JsonDocument doc;
+    doc.clear();
+    doc["is_energized"] = is_energized;
+    doc["last_tripped_at"] = "now";
+    static char buffer[256];
+    size_t len = serializeJson(doc, buffer);
+    int rc = supabase_patch(path, buffer, len, supabase_url, anon_key);
+    if (rc >= 200 && rc < 300) {
+        Serial.printf("[RELAY] state published: idx=%d energized=%d\n", idx, is_energized);
+    }
+}
+
+static void handle_settings_command(const char* cmd_type, const char* payload_json) {
+    apply_settings_command(cmd_type, payload_json);
+    apply_settings_posthook(cmd_type);
+}
+
+bool isSupabaseWsConnected() {
+    return g_supa_ws.isConnected();
+}
+
 void apply_settings_posthook(const char* cmd_type) {
     if (strcmp(cmd_type, "set_wifi") == 0) {
         char ssid[64] = "", pass[64] = "";
@@ -894,6 +952,13 @@ void apply_settings_posthook(const char* cmd_type) {
         }
     } else if (strcmp(cmd_type, "set_supabase") == 0) {
         supabase_http_reset();
+        char supabase_url[128], anon_key[128], device_key[64];
+        if (settings_load_supabase_url(supabase_url, sizeof(supabase_url)) &&
+            settings_load_supabase_anon_key(anon_key, sizeof(anon_key)) &&
+            settings_load_supabase_device_key(device_key, sizeof(device_key))) {
+            g_supa_ws.end();
+            g_supa_ws.begin(supabase_url, anon_key, device_key);
+        }
         Serial.println("[CMD] Supabase client reset with new URL/key");
     } else if (strcmp(cmd_type, "set_shunt") == 0 || strcmp(cmd_type, "set_volt_ratio") == 0 || strcmp(cmd_type, "set_resistors") == 0) {
         reinit_sensors();
