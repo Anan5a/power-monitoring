@@ -6,6 +6,7 @@
 #include "coulomb_counter.h"
 #include "energy_counter.h"
 #include "sensor_manager.h"
+#include "relay_controller.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #define MQTT_MAX_PACKET_SIZE 1024
@@ -396,6 +397,12 @@ static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v,
     payload["log_overflow"] = log_has_overflow_file();
     payload["log_overflow_bytes"] = log_overflow_file_size();
 
+    for (uint8_t i = 0; i < 4; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "relay%d", i);
+        payload[key] = get_relay_state(i);
+    }
+
     g_supa_doc["p_recorded_at"] = (uint32_t)log_to_epoch(timestamp_ms);
 
     static char buffer[512];
@@ -586,6 +593,13 @@ void publish_data(const SensorData& data) {
     g_pub_doc["log_overflow"] = log_has_overflow_file();
     g_pub_doc["log_overflow_bytes"] = log_overflow_file_size();
 
+    // Relay states
+    for (uint8_t i = 0; i < 4; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "relay%d", i);
+        g_pub_doc[key] = get_relay_state(i);
+    }
+
     // Virtual channels: compute V, I, P per channel from configured sources
     for (uint8_t ch = 0; ch < 4; ch++) {
         VirtualChannelConfig vc;
@@ -707,6 +721,13 @@ void publish_data_supabase(const SensorData& data) {
     payload["log_buffer_kb"] = log_buffer_capacity() / 1024;
     payload["log_overflow"] = log_has_overflow_file();
     payload["log_overflow_bytes"] = log_overflow_file_size();
+
+    // Relay states
+    for (uint8_t i = 0; i < 4; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "relay%d", i);
+        payload[key] = get_relay_state(i);
+    }
 
     // Virtual channels: compute V, I, P per channel from configured sources
     for (uint8_t ch = 0; ch < 4; ch++) {

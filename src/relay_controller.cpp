@@ -102,3 +102,10 @@ void evaluate_relays(const SensorData& data) {
 void relay_set_auto(bool enabled) {
     relay_auto_enabled = enabled;
 }
+
+bool get_relay_state(uint8_t idx) {
+    RelayRule rt;
+    if (!settings_load_relay(idx, &rt) || !rt.enabled) return false;
+    bool pin_high = digitalRead(rt.gpio_pin) == HIGH;
+    return rt.active_high ? pin_high : !pin_high;
+}
