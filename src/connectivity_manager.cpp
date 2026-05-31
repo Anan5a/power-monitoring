@@ -8,6 +8,7 @@
 #include "sensor_manager.h"
 #include "relay_controller.h"
 #include <WiFi.h>
+#include <esp_system.h>
 #include <WiFiClientSecure.h>
 #define MQTT_MAX_PACKET_SIZE 1024
 #include <PubSubClient.h>
@@ -306,7 +307,8 @@ const char* get_local_ip_str() { return ip_str; }
 time_t get_epoch_time() { return epoch_time; }
 
 static void print_http_error(HTTPClient& http, int rc) {
-    Serial.printf("HTTP error %d (heap=%u)\n", rc, ESP.getFreeHeap());
+    Serial.printf("HTTP error %d (heap=%u / largest=%u)\n",
+        rc, ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     if (rc < 0) return; // no body on connection-level failure
     Stream& stream = http.getStream();
     char body[512];
@@ -796,7 +798,8 @@ void publish_data_supabase(const SensorData& data) {
     if (ESP.getFreeHeap() < 13000) {
         static unsigned long last_warn = 0;
         if (millis() - last_warn > 10000) {
-            Serial.printf("[WARN] Low heap (%d), skipping Supabase publish\n", ESP.getFreeHeap());
+            Serial.printf("[WARN] Low heap (%d / largest=%d), skipping Supabase publish\n",
+                ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
             last_warn = millis();
         }
         return;
