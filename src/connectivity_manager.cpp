@@ -1318,6 +1318,7 @@ void check_settings_commands() {
     g_cal_doc["p_device_key"] = device_key;
     char buffer[256];
     size_t len = serializeJson(g_cal_doc, buffer);
+    Serial.printf("[SETTINGS] claim JSON: %s\n", buffer);
 
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, "/rest/v1/rpc/claim_settings_command");
