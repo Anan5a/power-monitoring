@@ -72,6 +72,7 @@ static void supabase_http_reset() {
     }
     if (g_supa_client) {
         g_supa_client->stop();
+        vTaskDelay(pdMS_TO_TICKS(10));  // let mbedTLS flush before free
         delete g_supa_client;
         g_supa_client = nullptr;
     }
@@ -1101,6 +1102,8 @@ static void sync_device_channels_to_supabase() {
 void sync_calibration_to_supabase() {
     if (skip_network) return;
     if (ESP.getFreeHeap() < 4096) return;
+    telemetry_http_reset();
+    vTaskDelay(pdMS_TO_TICKS(50));
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
@@ -1139,6 +1142,8 @@ void sync_calibration_to_supabase() {
 void sync_ble_pin_to_supabase() {
     if (skip_network) return;
     if (ESP.getFreeHeap() < 4096) return;
+    telemetry_http_reset();
+    vTaskDelay(pdMS_TO_TICKS(50));
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
@@ -1168,6 +1173,8 @@ void sync_ble_pin_to_supabase() {
 void publish_relay_state(uint8_t idx, bool is_energized) {
     if (skip_network) { Serial.println("[RELAY] skip: offline mode"); return; }
     if (ESP.getFreeHeap() < 3072) { Serial.printf("[RELAY] skip: heap %d < 3072\n", ESP.getFreeHeap()); return; }
+    telemetry_http_reset();
+    vTaskDelay(pdMS_TO_TICKS(50));
     char supabase_url[128], anon_key[128], device_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) { Serial.println("[RELAY] skip: no supabase url"); return; }
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) { Serial.println("[RELAY] skip: no anon key"); return; }
@@ -1232,6 +1239,8 @@ void publish_calibration_status() {
     if (millis() - last_cal_pub_ms < 5000) return; // rate limit: 1 cal publish per 5s
     last_cal_pub_ms = millis();
     if (ESP.getFreeHeap() < 4096) return;
+    telemetry_http_reset();
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
