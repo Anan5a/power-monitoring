@@ -143,9 +143,11 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     g_supa_client.setHandshakeTimeout(30);
     g_supa_http.setReuse(false);
     if (!g_supa_http.begin(g_supa_client, full_url)) {
+        Serial.printf("[SUPA_HTTP] begin failed: %s\n", full_url);
         g_supa_http_ready = false;
         return false;
     }
+    Serial.printf("[SUPA_HTTP] connected to %s\n", full_url);
     g_supa_http.addHeader("Content-Type", "application/json");
     g_supa_http.addHeader("apikey", anon_key);
     char auth_hdr[384];
