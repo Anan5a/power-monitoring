@@ -368,6 +368,10 @@ void init_connectivity() {
     vTaskDelay(pdMS_TO_TICKS(3000));
     Serial.println("[HTTP] ready");
 
+    // WiFi is up — disable BLE to free ~50KB heap for TLS operations
+    Serial.println("[BLE] disabling BLE stack to free heap for TLS");
+    deinit_ble_provisioner();
+
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
         mqtt.setServer(mqtt_broker, mqtt_port);
