@@ -134,11 +134,11 @@ static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
 }
 
 static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
-    if (WiFi.status() != WL_CONNECTED) return false;
+    if (WiFi.status() != WL_CONNECTED) { Serial.printf("[SUPA_HTTP] WiFi not connected\n"); return false; }
     // C3: at least 12KB free heap needed for TLS handshake + request buffers.
     // Without this check, error -1 dominates because SSL context allocation (~8KB)
     // fails on a tight heap, and the failed request chain keeps the heap low.
-    if (ESP.getFreeHeap() < 12288) return false;
+    if (ESP.getFreeHeap() < 12288) { Serial.printf("[SUPA_HTTP] heap too low: %d\n", ESP.getFreeHeap()); return false; }
     if (g_supa_http_ready) {
         supabase_http_reset();
     }
@@ -183,32 +183,19 @@ static int supabase_post(const char* url_path, const char* payload, size_t len,
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!supabase_http_prepare(full_url, anon_key)) return -1;
     int rc = g_supa_http.POST((uint8_t*)payload, len);
-    if (rc < 0) {
-        drain_response();
-        supabase_http_reset();
-    } else {
-        drain_response();
-    }
+    drain_response();
+    supabase_http_reset();
     return rc;
 }
 
 static int supabase_patch(const char* url_path, const char* payload, size_t len,
     const char* supabase_url, const char* anon_key) {
-    static int patch_fail_count = 0;
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!supabase_http_prepare(full_url, anon_key)) return -1;
     int rc = g_supa_http.sendRequest("PATCH", (uint8_t*)payload, len);
-    if (rc < 0) {
-        drain_response();
-        if (++patch_fail_count >= 3) {
-            supabase_http_reset();
-            patch_fail_count = 0;
-        }
-    } else {
-        drain_response();
-        patch_fail_count = 0;
-    }
+    drain_response();
+    supabase_http_reset();
     return rc;
 }
 
