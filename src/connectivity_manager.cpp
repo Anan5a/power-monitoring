@@ -164,7 +164,7 @@ static int telemetry_post(const char* url_path, const char* payload, size_t len,
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!telemetry_http_prepare(full_url, anon_key)) return -1;
     Serial.printf("[HTTP] POST %d bytes (heap=%u)\n", len, ESP.getFreeHeap());
-    Serial.println(payload);
+    // Serial.println(payload);  // verbose — disabled
     int rc = g_telemetry_http.POST((uint8_t*)payload, len);
     if (rc < 0) {
         drain_telemetry_response();
@@ -345,7 +345,7 @@ void publish_data_http(const SensorData& data, const char* json_buffer, size_t j
     if (!settings_load_http_enabled()) return;
     char url[128], token[64];
     if (!settings_load_http_endpoint(url, token, sizeof(url))) return;
-    Serial.printf("[HTTP] posting %d bytes to %s\n", json_len, url);
+    // Serial.printf("[HTTP] posting %d bytes to %s\n", json_len, url);
     // Serial.printf("[JSON] %.*s\n", json_len < 256 ? json_len : 256, json_buffer);
     HTTPClient http;
     http.begin(url);
