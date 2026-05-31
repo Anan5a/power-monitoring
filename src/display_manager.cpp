@@ -174,6 +174,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
 // ─── Main display loop ───────────────────────────────────────────
 
 void update_display(const SensorData& data, const char* ip_str, float total_power) {
+    if (!display) return;
     unsigned long now = millis();
     if (now - last_page_switch >= 3000) {
         current_page = (current_page + 1) % 4;
@@ -200,19 +201,22 @@ void init_display() {
         return;
     }
 
-    display->clearDisplay();
-    display->setTextSize(1);
-    display->setTextColor(SSD1306_WHITE);
-    display->setCursor(0, 0);
-    display->println("Init...");
-    display->display();
-
+    // begin() MUST be called before any drawing — it allocates the internal buffer
     if (!display->begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
         Serial.println("OLED init failed");
         delete display;
         display = nullptr;
         return;
     }
+
+    // Now safe to draw
+    display->clearDisplay();
+    display->setTextSize(1);
+    display->setTextColor(SSD1306_WHITE);
+    display->setCursor(0, 0);
+    display->println("Init...");
+    display->display();
+    vTaskDelay(pdMS_TO_TICKS(500));
 
     display->clearDisplay();
     display->setTextSize(2);
