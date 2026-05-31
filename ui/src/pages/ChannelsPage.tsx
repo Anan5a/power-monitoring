@@ -309,7 +309,7 @@ function RelaysTab({ deviceKey }: { deviceKey: string }) {
     await supabase.from('settings_commands').insert({
       device_key: deviceKey,
       cmd_type: 'set_relay',
-      payload: { idx, enabled: true, overcurrent_A: 0, undervoltage_V: 0, soc_low_pct: 0, soc_high_pct: 100, trip_delay_ms: 500, reset_delay_ms: 5000, active_high: true, channel: 0 },
+      payload: { idx, enabled: true, overcurrent_A: 0, undervoltage_V: 0, soc_low_pct: 0, soc_high_pct: 100, trip_delay_ms: 500, reset_delay_ms: 5000, active_high: true },
       status: 'pending',
     })
   }
