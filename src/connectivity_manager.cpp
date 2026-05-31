@@ -1147,13 +1147,14 @@ void publish_relay_state(uint8_t idx, bool is_energized) {
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) { Serial.println("[RELAY] skip: no anon key"); return; }
     if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) { Serial.println("[RELAY] skip: no device key"); return; }
 
-    // UPSERT: insert if row doesn't exist, update if it does.
-    // Primary key (id) must be null to trigger insert; conflict on device_key+relay_index
+    RelayRule rt;
+    if (!settings_load_relay(idx, &rt)) { Serial.printf("[RELAY] skip: no relay config idx=%d\n", idx); return; }
+
     static JsonDocument doc;
     doc.clear();
     doc["device_key"] = device_key;
     doc["relay_index"] = idx;
-    doc["gpio_pin"] = 25;
+    doc["gpio_pin"] = rt.gpio_pin;
     doc["is_energized"] = is_energized;
     doc["last_tripped_at"] = "now";
     static char buffer[256];
