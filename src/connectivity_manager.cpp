@@ -1240,8 +1240,16 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
     int rc = g_supa_http.GET();
     bool ok = false;
     if (rc == 200) {
-        String body = g_supa_http.getString();
-        const char* resp = body.c_str();
+        char body[256];
+        size_t body_len = 0;
+        Stream& stream = g_supa_http.getStream();
+        unsigned long t0 = millis();
+        while (stream.available() && body_len < sizeof(body)-1 && millis()-t0 < 2000) {
+            int c = stream.read();
+            if (c >= 0) body[body_len++] = (char)c;
+        }
+        body[body_len] = '\0';
+        const char* resp = body;
         const char* needle = "\"ble_pin\":\"";
         const char* p = strstr(resp, needle);
         if (p) {
@@ -1281,19 +1289,28 @@ void check_settings_commands() {
     if (!supabase_http_prepare(full_url, anon_key)) return;
     int rc = g_supa_http.POST((uint8_t*)buffer, len);
 
-    if (rc == 200) {
-        // Use getString() — it handles Transfer-Encoding: chunked correctly;
-        // raw getStream().read() leaks chunk-size prefixes like "f2\r\n".
-        String body = g_supa_http.getString();
+        char body[1536];
+        size_t body_len = 0;
+        Stream& stream = g_supa_http.getStream();
+        unsigned long t0 = millis();
+        while (stream.available() && body_len < sizeof(body)-1 && millis()-t0 < 2000) {
+            int c = stream.read();
+            if (c >= 0) body[body_len++] = (char)c;
+        }
+        body[body_len] = '\0';
         drain_response();
 
-        if (body.length() == 0 || body.startsWith("null")) return;
+        if (body_len == 0 || strncmp(body, "null", 4) == 0) return;
 
         static char resp_buf[1536];
-        size_t resp_len = body.length();
+        size_t resp_len = body_len;
         if (resp_len > sizeof(resp_buf) - 1) resp_len = sizeof(resp_buf) - 1;
-        memcpy(resp_buf, body.c_str(), resp_len);
+        memcpy(resp_buf, body, resp_len);
         resp_buf[resp_len] = '\0';
+
+        // Expected: {"cmd_type":"set_wifi","payload":{...}}  or  null
+        g_cal_doc.clear();
+
 
         // Expected: {"cmd_type":"set_wifi","payload":{...}}  or  null
         g_cal_doc.clear();
@@ -1327,7 +1344,6 @@ void check_settings_commands() {
             g_deferred_relay_idx = idx;
             g_deferred_relay_state = get_relay_state(idx);
             g_deferred_requests |= 4;  // sync relay state
-        }
     } else {
         drain_response();
         static int settings_fail_count = 0;
