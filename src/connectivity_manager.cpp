@@ -139,6 +139,11 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     if (g_supa_http_ready) {
         supabase_http_reset();
     }
+
+    // Create a fresh WiFiClientSecure each time and move it into the member.
+    // This destroys any stale SSL session state from previous connections,
+    // which was causing the server to close the connection before POST completed.
+    g_supa_client = WiFiClientSecure();
     g_supa_client.setInsecure();
     g_supa_client.setHandshakeTimeout(30);
     g_supa_http.setReuse(false);
@@ -147,7 +152,7 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
         g_supa_http_ready = false;
         return false;
     }
-    Serial.printf("[SUPA_HTTP] connected to %s\n", full_url);
+
     g_supa_http.addHeader("Content-Type", "application/json");
     g_supa_http.addHeader("apikey", anon_key);
     char auth_hdr[384];
