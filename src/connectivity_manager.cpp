@@ -1460,6 +1460,8 @@ void check_settings_commands() {
             bool energize = false;
             if (JsonObject obj = g_cal_doc["payload"]) {
                 idx = obj["idx"] | 0;
+                Serial.printf("[SETTINGS] set_relay idx=%d has_is_energized=%d val=%d\n",
+                    idx, obj.containsKey("is_energized"), obj["is_energized"].as<int>());
                 if (obj.containsKey("is_energized")) {
                     energize = obj["is_energized"].as<bool>();
                     relay_set(idx, energize);  // toggles GPIO + publishes to Supabase
