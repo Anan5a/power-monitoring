@@ -1,4 +1,6 @@
 #include "display_manager.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "config.h"
 #include "coulomb_counter.h"
 #include "data_logger.h"
@@ -199,7 +201,7 @@ void init_display() {
     display.setCursor(20, 40);
     display.println("Monitor");
     display.display();
-    delay(2000);
+    vTaskDelay(pdMS_TO_TICKS(2000));
     wire_started = true;
 }
 

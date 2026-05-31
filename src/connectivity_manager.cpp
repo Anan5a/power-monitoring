@@ -1,4 +1,6 @@
 #include "connectivity_manager.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "config.h"
 #include "settings_manager.h"
 #include "data_logger.h"
@@ -278,7 +280,7 @@ static void connect_wifi() {
     WiFi.setTxPower(WIFI_POWER_8_5dBm);  // reduce TX power to avoid RF issues on C3
     int attempts = 20; // ~10 seconds timeout
     while (WiFi.status() != WL_CONNECTED && attempts-- > 0) {
-        delay(500);
+        vTaskDelay(pdMS_TO_TICKS(500));
         Serial.print(".");
     }
     if (WiFi.status() != WL_CONNECTED) {
@@ -358,7 +360,7 @@ void init_connectivity() {
 
     // Let WiFi connection stabilize before any HTTP traffic
     Serial.println("[HTTP] waiting 3s for WiFi to stabilize...");
-    delay(3000);
+    vTaskDelay(pdMS_TO_TICKS(3000));
     Serial.println("[HTTP] ready");
 
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
@@ -384,7 +386,7 @@ void loop_connectivity() {
         if (skip_network) {
             // Initial boot failed: try full re-init instead of simple reconnect
             WiFi.disconnect(true);
-            delay(100);
+            vTaskDelay(pdMS_TO_TICKS(100));
             char ssid[64] = "", pass[64] = "";
             settings_load_wifi(ssid, pass, sizeof(ssid));
             WiFi.begin(ssid, pass);
@@ -798,7 +800,7 @@ void publish_data(const SensorData& data) {
     // Blynk virtual writes disabled — enable via platformio.ini lib_deps
 
     ble_notify_sensor_data(buffer, len);
-    delay(25);  // space out notifies — avoids BLE stack crowding / UX jitter
+    vTaskDelay(pdMS_TO_TICKS(25));  // space out notifies — avoids BLE stack crowding / UX jitter
 }
 
 void publish_data_supabase(const SensorData& data) {
@@ -1157,7 +1159,7 @@ void apply_settings_posthook(const char* cmd_type) {
         char ssid[64] = "", pass[64] = "";
         if (settings_load_wifi(ssid, pass, sizeof(ssid))) {
             WiFi.disconnect(true);
-            delay(100);
+            vTaskDelay(pdMS_TO_TICKS(100));
             WiFi.begin(ssid, pass);
             Serial.println("[CMD] WiFi reconnecting with new credentials");
         }

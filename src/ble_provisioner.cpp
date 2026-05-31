@@ -1,4 +1,6 @@
 #include "ble_provisioner.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "config.h"
 #include "settings_manager.h"
 #include "sensor_manager.h"
@@ -476,7 +478,7 @@ static void handle_command(const char* json) {
     } else if (strcmp(cmd, "reboot") == 0) {
         if (!check_pin(doc)) return;
         send_response("{\"ok\":true,\"msg\":\"rebooting\"}");
-        delay(100);
+        vTaskDelay(pdMS_TO_TICKS(100));
         ESP.restart();
     } else {
         send_response("{\"ok\":false,\"error\":\"unknown_cmd\"}");
@@ -613,11 +615,11 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
     } else if (strcmp(cmd_type, "factory_reset") == 0) {
         settings_factory_reset();
         Serial.println("[CMD] factory_reset done — rebooting");
-        delay(100);
+        vTaskDelay(pdMS_TO_TICKS(100));
         ESP.restart();
     } else if (strcmp(cmd_type, "reboot") == 0) {
         Serial.println("[CMD] rebooting");
-        delay(100);
+        vTaskDelay(pdMS_TO_TICKS(100));
         ESP.restart();
     } else {
         Serial.printf("[CMD] unknown: %s\n", cmd_type);

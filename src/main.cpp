@@ -184,7 +184,7 @@ static void handle_serial_cli() {
                         Serial.printf("Testing relay %d on GPIO %d...\n", idx, rt.gpio_pin);
                         Serial.println("Activating 3s...");
                         digitalWrite(rt.gpio_pin, HIGH);
-                        delay(3000);
+                        vTaskDelay(pdMS_TO_TICKS(3000));
                         digitalWrite(rt.gpio_pin, LOW);
                         Serial.println("Relay deactivated.");
                     } else {
@@ -473,9 +473,9 @@ static void handle_serial_cli() {
                     if (settings_load_relay(i, &rt)) {
                         Serial.printf("Relay %d (GPIO %d)...\n", i, rt.gpio_pin);
                         digitalWrite(rt.gpio_pin, HIGH);
-                        delay(1000);
+                        vTaskDelay(pdMS_TO_TICKS(1000));
                         digitalWrite(rt.gpio_pin, LOW);
-                        delay(500);
+                        vTaskDelay(pdMS_TO_TICKS(500));
                     }
                 }
                 Serial.println("All relays tested.");
@@ -492,7 +492,7 @@ static void handle_serial_cli() {
                 SensorData d = read_sensors();
                 for (int i = 0; i < 5; i++) {
                     update_display(d, "192.168.1.1", 123.4f);
-                    delay(1000);
+                    vTaskDelay(pdMS_TO_TICKS(1000));
                 }
                 Serial.println("Display test done.");
             } else if (strcmp(line, "relay auto on") == 0) {
@@ -503,7 +503,7 @@ static void handle_serial_cli() {
                 Serial.println("Relay auto-trip DISABLED");
             } else if (strcmp(line, "factory_reset") == 0) {
                 Serial.println("Wiping NVS and rebooting...");
-                delay(500);
+                vTaskDelay(pdMS_TO_TICKS(500));
                 settings_factory_reset();
                 ESP.restart();
             } else if (strcmp(line, "calibrate_baseline") == 0) {
@@ -544,7 +544,7 @@ static void handle_serial_cli() {
                 }
             } else if (strcmp(line, "reboot") == 0) {
                 Serial.println("Rebooting...");
-                delay(100);
+                vTaskDelay(pdMS_TO_TICKS(100));
                 ESP.restart();
             } else if (strcmp(line, "serial1peek") == 0) {
 #if ENABLE_SERIAL1
@@ -616,7 +616,7 @@ static void handle_serial_cli() {
 void setup() {
     Serial.begin(115200);
     while (!Serial) { ; }
-    delay(1000);
+    vTaskDelay(pdMS_TO_TICKS(1000));
     Serial.println("Power Monitor v2 starting...");
 
     init_settings();
@@ -648,5 +648,5 @@ void loop() {
         Serial.printf("[MEM] free=%u min=%u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
     }
     handle_serial_cli();
-    delay(10);
+    vTaskDelay(pdMS_TO_TICKS(10));
 }
