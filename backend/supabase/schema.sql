@@ -103,6 +103,33 @@ create policy "own_device_channels" on public.device_channels
         )
     );
 
+-- ESP32 upserts device_channels row (security definer — bypasses RLS like claim_settings_command)
+create or replace function public.sync_device_channels(p_device_key text, p_payload jsonb)
+returns void language plpgsql security definer as $$
+begin
+    insert into public.device_channels (device_key, channel_names, battery_profiles, channel_calibration, virtual_channels)
+    values (p_device_key, p_payload->'channel_names', p_payload->'battery_profiles',
+            p_payload->'channel_calibration', p_payload->'virtual_channels')
+    on conflict (device_key) do update
+        set channel_names = EXCLUDED.channel_names,
+            battery_profiles = EXCLUDED.battery_profiles,
+            channel_calibration = EXCLUDED.channel_calibration,
+            virtual_channels = EXCLUDED.virtual_channels,
+            updated_at = now();
+end;
+$$;
+
+-- ESP32 syncs just the calibration fields (partial update via security definer RPC)
+create or replace function public.sync_device_calibration(p_device_key text, p_calibration jsonb)
+returns void language plpgsql security definer as $$
+begin
+    update public.device_channels
+    set channel_calibration = p_calibration,
+        updated_at = now()
+    where device_key = p_device_key;
+end;
+$$;
+
 -- ble_pin readable to device owner (for UI dynamic PIN)
 create policy "own_device_ble_pin" on public.devices
     for select to authenticated using (user_id = auth.uid());

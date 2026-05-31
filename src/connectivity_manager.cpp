@@ -1055,9 +1055,23 @@ static void sync_device_channels_to_supabase() {
     static char buffer[1024];
     size_t len = serializeJson(g_cal_doc, buffer);
 
+    // Use RPC for device sync (same security definer pattern as claim_settings_command)
     char path[256];
-    snprintf(path, sizeof(path), "/rest/v1/device_channels?device_key=eq.%s", device_key);
-    int rc = supabase_patch(path, buffer, len, supabase_url, anon_key);
+    snprintf(path, sizeof(path), "/rest/v1/rpc/sync_device_channels");
+
+    // Build RPC body: {p_device_key: "...", p_payload: {...cal_doc...}}
+    g_cal_doc.clear();
+    g_cal_doc["p_device_key"] = buffer;  // placeholder — build manually below
+    JsonDocument rpc_doc;
+    rpc_doc["p_device_key"] = device_key;
+    // Embed the full device_channels payload
+    rpc_doc["p_payload"]["channel_names"] = g_cal_doc["channel_names"];
+    rpc_doc["p_payload"]["battery_profiles"] = g_cal_doc["battery_profiles"];
+    rpc_doc["p_payload"]["channel_calibration"] = g_cal_doc["channel_calibration"];
+    rpc_doc["p_payload"]["virtual_channels"] = g_cal_doc["virtual_channels"];
+
+    len = serializeJson(rpc_doc, buffer);
+    int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
         Serial.println("[DB] device_channels synced to Supabase");
     } else {
@@ -1077,11 +1091,9 @@ void sync_calibration_to_supabase() {
     ChannelCalibration cal;
     if (!settings_load_channel_calibration(&cal)) return;
 
-    char path[256];
-    snprintf(path, sizeof(path), "/rest/v1/device_channels?device_key=eq.%s", device_key);
-
-    g_cal_doc.clear();
-    JsonObject cal_obj = g_cal_doc["channel_calibration"].to<JsonObject>();
+    JsonDocument rpc_doc;
+    rpc_doc["p_device_key"] = device_key;
+    JsonObject cal_obj = rpc_doc["p_calibration"].to<JsonObject>();
     JsonArray volt_offset = cal_obj["volt_offset_mv"].to<JsonArray>();
     JsonArray volt_gain = cal_obj["volt_gain"].to<JsonArray>();
     JsonArray curr_offset = cal_obj["curr_offset_ma"].to<JsonArray>();
@@ -1094,13 +1106,14 @@ void sync_calibration_to_supabase() {
     }
 
     static char buffer[512];
-    size_t len = serializeJson(g_cal_doc, buffer);
-    g_supa_http.addHeader("Prefer", "precision=exact");
-    int rc = supabase_patch(path, buffer, len, supabase_url, anon_key);
+    size_t len = serializeJson(rpc_doc, buffer);
+    char path[256];
+    snprintf(path, sizeof(path), "/rest/v1/rpc/sync_device_calibration");
+    int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
         Serial.println("Calibration synced to Supabase");
     } else {
-        print_http_error(g_supa_http, rc);
+        Serial.printf("Calibration sync failed: %d\n", rc);
     }
 }
 
