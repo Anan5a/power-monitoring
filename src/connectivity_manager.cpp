@@ -1317,6 +1317,7 @@ void check_settings_commands() {
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, "/rest/v1/rpc/claim_settings_command");
     if (!supabase_http_prepare(full_url, anon_key)) return;
     int rc = g_supa_http.POST((uint8_t*)buffer, len);
+    Serial.printf("[SETTINGS] claim HTTP rc=%d\n", rc);
     if (rc == 200 || rc == 201 || rc == 204) {
         char body[1536];
         size_t body_len = 0;
@@ -1329,6 +1330,7 @@ void check_settings_commands() {
         body[body_len] = '\0';
         drain_response();
 
+        Serial.printf("[SETTINGS] claim body_len=%d body=%.64s\n", body_len, body);
         if (body_len == 0 || strncmp(body, "null", 4) == 0) return;
 
         static char resp_buf[1536];
@@ -1369,6 +1371,7 @@ void check_settings_commands() {
     } else {
         drain_response();
         static int settings_fail_count = 0;
+        Serial.printf("[SETTINGS] claim failed rc=%d fail_count=%d\n", rc, settings_fail_count);
         if (++settings_fail_count >= 3) {
             supabase_http_reset();
             settings_fail_count = 0;
