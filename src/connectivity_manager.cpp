@@ -47,6 +47,13 @@ static bool              g_telemetry_http_ready = false;
 static WiFiClientSecure g_supa_client;
 static HTTPClient       g_supa_http;
 static bool             g_supa_http_ready = false;
+static unsigned long g_defer_cooldown = 0;
+static uint16_t g_deferred_requests = 0;
+static uint8_t  g_deferred_relay_idx = 0;
+static bool     g_deferred_relay_state = false;
+
+// sync_device_channels_to_supabase is static and not in header — forward declare
+static void sync_device_channels_to_supabase();
 
 static void supabase_http_reset() {
     if (g_supa_http_ready) {
@@ -387,6 +394,33 @@ void loop_connectivity() {
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
         if (!mqtt.connected()) connect_mqtt();
         mqtt.loop();
+    }
+
+    // Process deferred Supabase writes one per loop tick (rate-limited)
+    if (g_deferred_requests == 0) return;
+    if (millis() - g_defer_cooldown < 2000) return;  // space deferred calls 2s apart
+    g_defer_cooldown = millis();
+
+    if (g_deferred_requests & 1) {
+        g_deferred_requests &= ~1u;
+        sync_device_channels_to_supabase();
+        g_defer_cooldown = millis();  // give extra time after full row sync
+        return;
+    }
+    if (g_deferred_requests & 2) {
+        g_deferred_requests &= ~2u;
+        sync_ble_pin_to_supabase();
+        return;
+    }
+    if (g_deferred_requests & 4) {
+        g_deferred_requests &= ~4u;
+        publish_relay_state(g_deferred_relay_idx, g_deferred_relay_state);
+        return;
+    }
+    if (g_deferred_requests & 8) {
+        g_deferred_requests &= ~8u;
+        sync_calibration_to_supabase();
+        return;
     }
 }
 
@@ -1266,15 +1300,17 @@ void check_settings_commands() {
         }
         apply_settings_command(cmd_type, payload_buf);
         apply_settings_posthook(cmd_type);
-        // Sync device_channels to Supabase so dashboard UI reflects latest config
-        sync_device_channels_to_supabase();
-        // set_relay: after applying, sync the resulting GPIO state to Supabase relay_states
+        // Defer Supabase syncs to loop_connectivity to avoid concurrent HTTP calls
+        g_deferred_requests |= 1;  // sync_device_channels
+        // set_relay: defer relay state sync too
         if (strcmp(cmd_type, "set_relay") == 0) {
             uint8_t idx = 0;
             if (JsonObject obj = g_cal_doc["payload"]) {
                 idx = obj["idx"] | 0;
             }
-            publish_relay_state(idx, get_relay_state(idx));
+            g_deferred_relay_idx = idx;
+            g_deferred_relay_state = get_relay_state(idx);
+            g_deferred_requests |= 4;  // sync relay state
         }
     } else {
         drain_response();

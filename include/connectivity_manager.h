@@ -18,6 +18,7 @@ void publish_log_batch();
 void publish_log_batch_supabase();
 void sync_calibration_to_supabase();
 void sync_ble_pin_to_supabase();
+void publish_relay_state(uint8_t idx, bool is_energized);
 bool get_ble_pin_from_supabase(char* pin_str, size_t len);
 
 // Virtual channel helpers: get sensor values by source type
