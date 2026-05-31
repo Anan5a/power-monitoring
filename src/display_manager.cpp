@@ -16,7 +16,7 @@
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
 
-static Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+static Adafruit_SSD1306* display = nullptr;
 static uint8_t current_page = 0;
 static unsigned long last_page_switch = 0;
 static bool wire_started = false;
@@ -24,45 +24,45 @@ static bool wire_started = false;
 // ─── SoC bar ─────────────────────────────────────────────────────
 
 static void draw_soc_bar(int cx, int cy, int width, float soc) {
-    display.drawRect(cx - width / 2, cy - 1, width, 3, SSD1306_WHITE);
+    display->drawRect(cx - width / 2, cy - 1, width, 3, SSD1306_WHITE);
     int fill = (int)((width - 2) * soc / 100.0f);
     if (fill > 0) {
-        display.fillRect(cx - width / 2 + 1, cy, fill, 1, SSD1306_WHITE);
+        display->fillRect(cx - width / 2 + 1, cy, fill, 1, SSD1306_WHITE);
     }
 }
 
 // ─── Status page ───────────────────────────────────────────────
 
 static void draw_status_page(const char* ip_str, float total_power, float temp_c) {
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 2);
-    display.print(ip_str);
+    display->setTextSize(1);
+    display->setTextColor(SSD1306_WHITE);
+    display->setCursor(0, 2);
+    display->print(ip_str);
 
     char pbuf[8];
     dtostrf(total_power, 5, 1, pbuf);
-    display.setTextSize(2);
-    display.setCursor(0, 12);
-    display.print(pbuf);
-    display.setTextSize(1);
-    display.setCursor(54, 14);
-    display.print("W");
+    display->setTextSize(2);
+    display->setCursor(0, 12);
+    display->print(pbuf);
+    display->setTextSize(1);
+    display->setCursor(54, 14);
+    display->print("W");
 
-    display.setTextSize(1);
-    display.setCursor(0, 30);
-    display.print("LOG:");
-    display.print(log_entries_count());
-    display.print(" ent");
-    if (log_has_overflow_file()) display.print(" [OVF]");
+    display->setTextSize(1);
+    display->setCursor(0, 30);
+    display->print("LOG:");
+    display->print(log_entries_count());
+    display->print(" ent");
+    if (log_has_overflow_file()) display->print(" [OVF]");
 
     // Temp + uptime on last line
-    display.setCursor(0, 52);
+    display->setCursor(0, 52);
     char tbuf[16];
     dtostrf(temp_c, 4, 1, tbuf);
-    display.print(tbuf);
-    display.print("C ");
-    display.print((millis() / 1000) / 60);
-    display.print("m");
+    display->print(tbuf);
+    display->print("C ");
+    display->print((millis() / 1000) / 60);
+    display->print("m");
 }
 
 // ─── Channel page ───────────────────────────────────────────────
@@ -105,13 +105,13 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
     }
 
     // Channel name in yellow band (y=2) + page number
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 2);
-    display.print(name);
-    display.setCursor(SCREEN_WIDTH - 24, 2);
-    display.print("CH");
-    display.print(ch);
+    display->setTextSize(1);
+    display->setTextColor(SSD1306_WHITE);
+    display->setCursor(0, 2);
+    display->print(name);
+    display->setCursor(SCREEN_WIDTH - 24, 2);
+    display->print("CH");
+    display->print(ch);
 
     // V | I | P in blue area — below yellow band (y >= 16)
     char ibuf[16], pbuf[16];
@@ -129,21 +129,21 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
     }
 
     // V row at y=16, I row at y=26, P row at y=36
-    display.setTextSize(1);
-    display.setCursor(0, 16);
-    display.print("V:");
-    display.print(v, 2);
-    display.print("V");
+    display->setTextSize(1);
+    display->setCursor(0, 16);
+    display->print("V:");
+    display->print(v, 2);
+    display->print("V");
 
-    display.setCursor(0, 26);
-    display.print("I:");
-    display.print(ibuf);
+    display->setCursor(0, 26);
+    display->print("I:");
+    display->print(ibuf);
 
-    display.setCursor(0, 36);
-    display.print("P:");
-    display.setTextSize(2);
-    display.print(pbuf);
-    display.setTextSize(1);
+    display->setCursor(0, 36);
+    display->print("P:");
+    display->setTextSize(2);
+    display->print(pbuf);
+    display->setTextSize(1);
 
     // Bottom: SoC or mAh/Ah at y=50
     float mAh = get_coulomb_mAh(ch);
@@ -153,20 +153,20 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
         soc = bat.initial_soc_pct + (mAh / bat.capacity_mAh) * 100.0f;
         if (soc < 0) soc = 0;
         if (soc > 100) soc = 100;
-        display.setTextSize(1);
-        display.setCursor(0, 50);
-        display.print("SoC ");
-        display.print(soc, 0);
-        display.print("%");
+        display->setTextSize(1);
+        display->setCursor(0, 50);
+        display->print("SoC ");
+        display->print(soc, 0);
+        display->print("%");
         draw_soc_bar(85, 57, 18, soc);
     } else {
-        display.setTextSize(1);
-        display.setCursor(0, 56);
-        display.print("mAh:");
+        display->setTextSize(1);
+        display->setCursor(0, 56);
+        display->print("mAh:");
         if (fabsf(mAh) < 1000.0f) {
-            display.print(mAh, 0);
+            display->print(mAh, 0);
         } else {
-            display.print(mAh / 1000.0f, 2);
+            display->print(mAh / 1000.0f, 2);
         }
     }
 }
@@ -179,12 +179,12 @@ void update_display(const SensorData& data, const char* ip_str, float total_powe
         current_page = (current_page + 1) % 4;
         last_page_switch = now;
     }
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
+    display->clearDisplay();
+    display->setTextSize(1);
+    display->setTextColor(SSD1306_WHITE);
     if (current_page == 0) draw_status_page(ip_str, total_power, temperatureRead());
     else draw_channel_page(current_page - 1, data);
-    display.display();
+    display->display();
 }
 
 void init_display() {
@@ -193,26 +193,35 @@ void init_display() {
         Wire.setClock(I2C_FREQ);  // 100KHz — bus must run at this speed
     }
 
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("Init...");  // immediate feedback while I2C settles
-    display.display();
-
-    if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
-        Serial.println("OLED init failed");
+    // Heap-allocate display — avoids static init order issues on ESP32-C3
+    display = new Adafruit_SSD1306(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+    if (!display) {
+        Serial.println("OLED alloc failed");
         return;
     }
 
-    display.clearDisplay();
-    display.setTextSize(2);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(20, 20);
-    display.println("Power");
-    display.setCursor(20, 40);
-    display.println("Monitor");
-    display.display();
+    display->clearDisplay();
+    display->setTextSize(1);
+    display->setTextColor(SSD1306_WHITE);
+    display->setCursor(0, 0);
+    display->println("Init...");
+    display->display();
+
+    if (!display->begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+        Serial.println("OLED init failed");
+        delete display;
+        display = nullptr;
+        return;
+    }
+
+    display->clearDisplay();
+    display->setTextSize(2);
+    display->setTextColor(SSD1306_WHITE);
+    display->setCursor(20, 20);
+    display->println("Power");
+    display->setCursor(20, 40);
+    display->println("Monitor");
+    display->display();
     vTaskDelay(pdMS_TO_TICKS(2000));
     wire_started = true;
 }

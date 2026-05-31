@@ -1317,7 +1317,7 @@ void check_settings_commands() {
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, "/rest/v1/rpc/claim_settings_command");
     if (!supabase_http_prepare(full_url, anon_key)) return;
     int rc = g_supa_http.POST((uint8_t*)buffer, len);
-
+    if (rc == 200 || rc == 201 || rc == 204) {
         char body[1536];
         size_t body_len = 0;
         Stream& stream = g_supa_http.getStream();
@@ -1337,11 +1337,6 @@ void check_settings_commands() {
         memcpy(resp_buf, body, resp_len);
         resp_buf[resp_len] = '\0';
 
-        // Expected: {"cmd_type":"set_wifi","payload":{...}}  or  null
-        g_cal_doc.clear();
-
-
-        // Expected: {"cmd_type":"set_wifi","payload":{...}}  or  null
         g_cal_doc.clear();
         DeserializationError err = deserializeJson(g_cal_doc, resp_buf);
         if (err) {
@@ -1352,7 +1347,6 @@ void check_settings_commands() {
         const char* cmd_type = g_cal_doc["cmd_type"] | "";
         if (strlen(cmd_type) == 0) return;
 
-        // payload may be a JSON object (jsonb) or a string; handle both
         char payload_buf[1024];
         JsonVariant payload_var = g_cal_doc["payload"];
         if (payload_var.is<const char*>()) {
@@ -1362,9 +1356,7 @@ void check_settings_commands() {
         }
         apply_settings_command(cmd_type, payload_buf);
         apply_settings_posthook(cmd_type);
-        // Defer Supabase syncs to loop_connectivity to avoid concurrent HTTP calls
         g_deferred_requests |= 1;  // sync_device_channels
-        // set_relay: defer relay state sync too
         if (strcmp(cmd_type, "set_relay") == 0) {
             uint8_t idx = 0;
             if (JsonObject obj = g_cal_doc["payload"]) {
@@ -1373,6 +1365,7 @@ void check_settings_commands() {
             g_deferred_relay_idx = idx;
             g_deferred_relay_state = get_relay_state(idx);
             g_deferred_requests |= 4;  // sync relay state
+        }
     } else {
         drain_response();
         static int settings_fail_count = 0;
