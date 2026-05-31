@@ -278,13 +278,38 @@ function RelaysTab({ deviceKey }: { deviceKey: string }) {
     supabase.from('relay_states').select('*').eq('device_key', deviceKey).then(({ data }) => {
       if (data) setRelayStates(data as typeof relayStates)
     })
+
+    const relayChannel = supabase
+      .channel(`relays-${deviceKey}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'relay_states',
+        filter: `device_key=eq.${deviceKey}`,
+      }, (payload) => {
+        const r = payload.new as typeof relayStates[0]
+        setRelayStates(prev => {
+          const idx = prev.findIndex(rel => rel.relay_index === r.relay_index)
+          if (idx >= 0) {
+            const next = [...prev]
+            next[idx] = r
+            return next
+          }
+          return prev
+        })
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(relayChannel)
+    }
   }, [deviceKey])
 
   const toggleRelay = async (idx: number) => {
     await supabase.from('settings_commands').insert({
       device_key: deviceKey,
       cmd_type: 'set_relay',
-      payload: { idx, enabled: true, overcurrent_A: 0, undervoltage_V: 0, soc_low_pct: 0, soc_high_pct: 100, trip_delay_ms: 500, reset_delay_ms: 5000, gpio_pin: 25, active_high: true, channel: 0 },
+      payload: { idx, enabled: true, overcurrent_A: 0, undervoltage_V: 0, soc_low_pct: 0, soc_high_pct: 100, trip_delay_ms: 500, reset_delay_ms: 5000, active_high: true, channel: 0 },
       status: 'pending',
     })
   }
