@@ -1335,6 +1335,10 @@ void check_settings_commands() {
 
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s/rest/v1/rpc/claim_settings_command", supabase_url);
+    Serial.printf("[SETTINGS] claim URL: %s\n", full_url);
+    Serial.printf("[SETTINGS] claim body: %.*s\n", (int)len, buffer);
+    Serial.printf("[SETTINGS] claim header apikey: %s\n", anon_key);
+    Serial.printf("[SETTINGS] claim header Authorization: Bearer %s\n", anon_key);
     if (!supabase_http_prepare(full_url, anon_key)) return;
     int rc = g_supa_http.POST((uint8_t*)buffer, len);
     // Retry once on rc=-1 (TLS handshake failure after WiFi reconnect)
@@ -1358,7 +1362,7 @@ void check_settings_commands() {
         body[body_len] = '\0';
         drain_response();
 
-        Serial.printf("[SETTINGS] claim body_len=%d\n", body_len);
+        Serial.printf("[SETTINGS] claim body_len=%d body: %.*s\n", body_len, (int)body_len, body);
         if (body_len == 0) { supabase_http_reset(); return; }
         // Skip HTTP chunked encoding size prefix if present (e.g. "f2\r\n...")
         const char* json_start = body;
@@ -1369,6 +1373,7 @@ void check_settings_commands() {
                 Serial.printf("[SETTINGS] chunked prefix skipped, json_start at offset %d\n", json_start - body);
             }
         }
+        Serial.printf("[SETTINGS] raw response: %.256s\n", body);
         if (json_start[0] == '\0' || strncmp(json_start, "null", 4) == 0) { supabase_http_reset(); return; }
 
         static char resp_buf[1536];
