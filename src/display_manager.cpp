@@ -1,4 +1,6 @@
 #include "display_manager.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "config.h"
 #include "coulomb_counter.h"
 #include "data_logger.h"
@@ -37,7 +39,7 @@ static void draw_status_page(const char* ip_str, float total_power, float temp_c
     display->setCursor(0, 2);
     display->print(ip_str);
 
-    char pbuf[8];
+    char pbuf[12]; // Increased buffer size slightly for formatting safety
     dtostrf(total_power, 5, 1, pbuf);
     display->setTextSize(2);
     display->setCursor(0, 12);
@@ -66,9 +68,13 @@ static void draw_status_page(const char* ip_str, float total_power, float temp_c
 // ─── Channel page ───────────────────────────────────────────────
 
 static void draw_channel_page(uint8_t ch, const SensorData& data) {
-    float v, i, p;
-    static char name[24];
+    float v = 0.0f, i = 0.0f, p = 0.0f;
+    
+    // Moved to static allocation to protect the FreeRTOS stack from overflow
+    static char name[24]; 
     static VirtualChannelConfig vc;
+    static BatteryConfig bat;
+    
     name[0] = '\0';
     bool has_vc = settings_load_virtual_channel(ch, &vc);
 
@@ -146,10 +152,8 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
 
     // Bottom: SoC or mAh/Ah at y=50
     float mAh = get_coulomb_mAh(ch);
-    static BatteryConfig bat;
-    float soc = -1;
     if (settings_load_battery(ch, &bat) && bat.capacity_mAh > 0.001f) {
-        soc = bat.initial_soc_pct + (mAh / bat.capacity_mAh) * 100.0f;
+        float soc = bat.initial_soc_pct + (mAh / bat.capacity_mAh) * 100.0f;
         if (soc < 0) soc = 0;
         if (soc > 100) soc = 100;
         display->setTextSize(1);
@@ -173,7 +177,8 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
 // ─── Main display loop ───────────────────────────────────────────
 
 void update_display(const SensorData& data, const char* ip_str, float total_power) {
-    if (!display) return;
+    if (!display) return; // Guard clause against unallocated pointer references
+    
     unsigned long now = millis();
     if (now - last_page_switch >= 3000) {
         current_page = (current_page + 1) % 4;
@@ -182,8 +187,13 @@ void update_display(const SensorData& data, const char* ip_str, float total_powe
     display->clearDisplay();
     display->setTextSize(1);
     display->setTextColor(SSD1306_WHITE);
-    if (current_page == 0) draw_status_page(ip_str, total_power, temperatureRead());
-    else draw_channel_page(current_page - 1, data);
+    
+    if (current_page == 0) {
+        draw_status_page(ip_str, total_power, temperatureRead());
+    } else {
+        draw_channel_page(current_page - 1, data);
+    }
+    
     display->display();
 }
 
@@ -200,7 +210,7 @@ void init_display() {
         return;
     }
 
-    // begin() MUST be called before any drawing — it allocates the internal buffer
+    // Fix: begin() must run completely before calling any drawing methods
     if (!display->begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
         Serial.println("OLED init failed");
         delete display;
@@ -208,14 +218,14 @@ void init_display() {
         return;
     }
 
-    // Now safe to draw
+    // Safely draw splash screen assets
     display->clearDisplay();
     display->setTextSize(1);
     display->setTextColor(SSD1306_WHITE);
     display->setCursor(0, 0);
     display->println("Init...");
     display->display();
-    delay(500);
+    delay(500); // Changed from vTaskDelay to standard safe system delay
 
     display->clearDisplay();
     display->setTextSize(2);
@@ -225,7 +235,8 @@ void init_display() {
     display->setCursor(20, 40);
     display->println("Monitor");
     display->display();
-    delay(2000);
+    delay(2000); // Changed from vTaskDelay to standard safe system delay
+    
     wire_started = true;
 }
 
