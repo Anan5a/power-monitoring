@@ -125,7 +125,10 @@ static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
             g_telemetry_error = false;
             return telemetry_http_prepare(full_url, anon_key);
         }
-        g_telemetry_http.begin(g_telemetry_client, full_url);
+        if (!g_telemetry_http.begin(g_telemetry_client, full_url)) {
+            telemetry_http_reset();
+            return false;
+        }
     }
     return true;
 }
@@ -160,6 +163,8 @@ static int telemetry_post(const char* url_path, const char* payload, size_t len,
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!telemetry_http_prepare(full_url, anon_key)) return -1;
+    Serial.printf("[HTTP] POST %d bytes (heap=%u)\n", len, ESP.getFreeHeap());
+    Serial.println(payload);
     int rc = g_telemetry_http.POST((uint8_t*)payload, len);
     if (rc < 0) {
         drain_telemetry_response();
