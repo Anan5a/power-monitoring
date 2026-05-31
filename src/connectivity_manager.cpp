@@ -175,7 +175,7 @@ static int telemetry_post(const char* url_path, const char* payload, size_t len,
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!telemetry_http_prepare(full_url, anon_key)) return -1;
-    Serial.printf("[HTTP] POST %d bytes (heap=%u)\n", len, ESP.getFreeHeap());
+    // Serial.printf("[HTTP] POST %d bytes (heap=%u)\n", len, ESP.getFreeHeap());
     // Serial.println(payload);  // verbose — disabled
     int rc = g_telemetry_http.POST((uint8_t*)payload, len);
     if (rc < 0) {
@@ -1361,21 +1361,21 @@ void check_settings_commands() {
 
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s/rest/v1/rpc/claim_settings_command", supabase_url);
-    Serial.printf("[SETTINGS] claim URL: %s\n", full_url);
-    Serial.printf("[SETTINGS] claim body: %.*s\n", (int)len, buffer);
-    Serial.printf("[SETTINGS] claim header apikey: %s\n", anon_key);
-    Serial.printf("[SETTINGS] claim header Authorization: Bearer %s\n", anon_key);
+    // Serial.printf("[SETTINGS] claim URL: %s\n", full_url);
+    // Serial.printf("[SETTINGS] claim body: %.*s\n", (int)len, buffer);
+    // Serial.printf("[SETTINGS] claim header apikey: %s\n", anon_key);
+    // Serial.printf("[SETTINGS] claim header Authorization: Bearer %s\n", anon_key);
     if (!supabase_http_prepare(full_url, anon_key)) return;
     int rc = g_supa_http.POST((uint8_t*)buffer, len);
     // Retry once on rc=-1 (TLS handshake failure after WiFi reconnect)
     if (rc < 0) {
-        Serial.println("[SETTINGS] claim rc=-1, retrying...");
+        // Serial.println("[SETTINGS] claim rc=-1, retrying...");
         supabase_http_reset();
         delay(100);
         if (!supabase_http_prepare(full_url, anon_key)) return;
         rc = g_supa_http.POST((uint8_t*)buffer, len);
     }
-    Serial.printf("[SETTINGS] claim HTTP rc=%d\n", rc);
+    // Serial.printf("[SETTINGS] claim HTTP rc=%d\n", rc);
     if (rc == 200 || rc == 201 || rc == 204) {
         char body[1536];
         size_t body_len = 0;
@@ -1388,7 +1388,7 @@ void check_settings_commands() {
         body[body_len] = '\0';
         drain_response();
 
-        Serial.printf("[SETTINGS] claim body_len=%d body: %.*s\n", body_len, (int)body_len, body);
+        // Serial.printf("[SETTINGS] claim body_len=%d body: %.*s\n", body_len, (int)body_len, body);
         if (body_len == 0) { supabase_http_reset(); return; }
         // Skip HTTP chunked encoding size prefix if present (e.g. "f2\r\n...")
         const char* json_start = body;
@@ -1396,7 +1396,7 @@ void check_settings_commands() {
             const char* newline = strstr(body, "\r\n");
             if (newline) {
                 json_start = newline + 2;
-                Serial.printf("[SETTINGS] chunked prefix skipped, json_start at offset %d\n", json_start - body);
+                // Serial.printf("[SETTINGS] chunked prefix skipped, json_start at offset %d\n", json_start - body);
             }
         }
         Serial.printf("[SETTINGS] raw response: %.256s\n", body);
@@ -1408,12 +1408,12 @@ void check_settings_commands() {
         if (json_len > sizeof(resp_buf) - 1) json_len = sizeof(resp_buf) - 1;
         memcpy(resp_buf, json_start, json_len);
         resp_buf[json_len] = '\0';
-        Serial.printf("[SETTINGS] parse attempt: %.128s\n", resp_buf);
+        // Serial.printf("[SETTINGS] parse attempt: %.128s\n", resp_buf);
 
         g_cal_doc.clear();
         DeserializationError err = deserializeJson(g_cal_doc, resp_buf);
         if (err) {
-            Serial.printf("[SETTINGS] parse error: %s | body: %.200s\n", err.c_str(), resp_buf);
+            // Serial.printf("[SETTINGS] parse error: %s | body: %.200s\n", err.c_str(), resp_buf);
             supabase_http_reset();
             return;
         }
@@ -1454,13 +1454,8 @@ void check_settings_commands() {
         drain_response();
         supabase_http_reset();
         static int settings_fail_count = 0;
-        if (err_len > 0) {
-            Serial.printf("[SETTINGS] claim failed rc=%d fail_count=%d err_body(%d): %.*s\n",
-                rc, settings_fail_count, (int)err_len, (int)err_len, err_body);
-        } else {
-            Serial.printf("[SETTINGS] claim failed rc=%d fail_count=%d err_body: (empty)\n",
-                rc, settings_fail_count);
-        }
+        // Serial.printf("[SETTINGS] claim failed rc=%d fail_count=%d err_body(%d): %.*s\n", ...);
+        // Serial.printf("[SETTINGS] claim failed rc=%d fail_count=%d err_body: (empty)\n", ...);
         if (++settings_fail_count >= 3) {
             settings_fail_count = 0;
         }
