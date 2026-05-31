@@ -1330,14 +1330,27 @@ void check_settings_commands() {
         body[body_len] = '\0';
         drain_response();
 
-        Serial.printf("[SETTINGS] claim body_len=%d body=%.64s\n", body_len, body);
-        if (body_len == 0 || strncmp(body, "null", 4) == 0) return;
+        Serial.printf("[SETTINGS] claim body_len=%d\n", body_len);
+
+        if (body_len == 0) return;
+        // Skip HTTP chunked encoding size prefix if present (e.g. "f2\r\n...")
+        const char* json_start = body;
+        if (body_len > 2 && body[0] != '{') {
+            const char* newline = strstr(body, "\r\n");
+            if (newline) {
+                json_start = newline + 2;
+                Serial.printf("[SETTINGS] chunked prefix skipped, json_start at offset %d\n", json_start - body);
+            }
+        }
+        if (json_start[0] == '\0' || strncmp(json_start, "null", 4) == 0) return;
 
         static char resp_buf[1536];
-        size_t resp_len = body_len;
-        if (resp_len > sizeof(resp_buf) - 1) resp_len = sizeof(resp_buf) - 1;
-        memcpy(resp_buf, body, resp_len);
-        resp_buf[resp_len] = '\0';
+        size_t json_offset = json_start - body;
+        size_t json_len = body_len - json_offset;
+        if (json_len > sizeof(resp_buf) - 1) json_len = sizeof(resp_buf) - 1;
+        memcpy(resp_buf, json_start, json_len);
+        resp_buf[json_len] = '\0';
+        Serial.printf("[SETTINGS] parse attempt: %.128s\n", resp_buf);
 
         g_cal_doc.clear();
         DeserializationError err = deserializeJson(g_cal_doc, resp_buf);
