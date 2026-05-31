@@ -521,65 +521,82 @@ void publish_log_batch() {
 
 static JsonDocument g_supa_doc;
 
-static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v, const int16_t* i, const int16_t* p,
+#define LOG_BATCH_SIZE 10
+static JsonDocument g_log_doc;
+static uint8_t g_log_count = 0;
+static uint32_t g_log_last_ts = 0;
+
+static void flush_log_batch(const char* supabase_url, const char* anon_key,
+    const char* device_key, const char* api_key) {
+    if (g_log_count == 0) return;
+
+    g_log_doc.clear();
+    JsonArray arr = g_log_doc.to<JsonArray>();
+
+    for (uint8_t e = 0; e < g_log_count; e++) {
+        JsonObject elem = arr.add<JsonObject>();
+        elem["p_device_key"] = device_key;
+        elem["p_device_api_key"] = api_key;
+        elem["p_recorded_at"] = g_log_last_ts + e;  // approximate per-entry timestamps
+        elem["p_metadata"] = JsonObject();
+    }
+
+    static char buffer[4096];
+    size_t len = serializeJson(g_log_doc, buffer);
+    telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
+    g_log_count = 0;
+}
+
+static void send_log_entry(uint32_t timestamp_ms, const int16_t* v, const int16_t* i, const int16_t* p,
     const char* entry_type, const char* supabase_url, const char* anon_key,
     const char* device_key, const char* api_key) {
     if (!is_valid_uuid(api_key)) return;
-    g_supa_doc.clear();
-    g_supa_doc["p_device_key"] = device_key;
-    g_supa_doc["p_device_api_key"] = api_key;
 
-    JsonObject payload = g_supa_doc["p_payload"].to<JsonObject>();
+    JsonArray arr = g_log_doc.is<JsonArray>() ? g_log_doc.as<JsonArray>() : g_log_doc.to<JsonArray>();
+    if (!g_log_doc.is<JsonArray>()) {
+        g_log_doc.clear();
+        arr = g_log_doc.to<JsonArray>();
+    }
+
+    JsonObject elem = arr.add<JsonObject>();
+    elem["p_device_key"] = device_key;
+    elem["p_device_api_key"] = api_key;
+
+    JsonObject payload = elem["p_payload"].to<JsonObject>();
     payload["source"] = "log";
     payload["entry_type"] = entry_type;
-
-    // Same keys as live telemetry
     payload["ina3221_v0"] = v[0] / 1000.0f;
     payload["ina3221_v1"] = v[1] / 1000.0f;
     payload["ina3221_v2"] = v[2] / 1000.0f;
     payload["ina3221_i0"] = i[0] / 1000.0f;
     payload["ina3221_i1"] = i[1] / 1000.0f;
     payload["ina3221_i2"] = i[2] / 1000.0f;
-
     payload["ch0_P"] = (v[0] * i[0]) / 1000000.0f;
     payload["ch1_P"] = (v[1] * i[1]) / 1000000.0f;
     payload["ch2_P"] = (v[2] * i[2]) / 1000000.0f;
-
 #if ENABLE_INA226
     payload["ina226_v"] = v[3] / 1000.0f;
     payload["ina226_i"] = i[3] / 1000.0f;
     payload["ina226_p"] = p[3] / 1.0f;
     payload["ch3_P"] = p[3] / 1.0f;
 #endif
-
     payload["log_entries"] = log_entries_count();
     payload["log_buffer_kb"] = log_buffer_capacity() / 1024;
     payload["log_overflow"] = log_has_overflow_file();
     payload["log_overflow_bytes"] = log_overflow_file_size();
 
-    for (uint8_t i = 0; i < 4; i++) {
+    for (uint8_t ch = 0; ch < 4; ch++) {
         char key[16];
-        snprintf(key, sizeof(key), "relay%d", i);
-        payload[key] = get_relay_state(i);
+        snprintf(key, sizeof(key), "relay%d", ch);
+        payload[key] = get_relay_state(ch);
     }
 
-    JsonObject metadata = g_supa_doc["p_metadata"].to<JsonObject>();
-    metadata["rssi"] = WiFi.RSSI();
-    metadata["vcc"] = analogRead(0) / 4095.0f * 3.3f;
-    metadata["uptime_s"] = millis() / 1000;
-    metadata["ip"] = get_local_ip_str();
-    metadata["heap_free"] = ESP.getFreeHeap();
-    metadata["temp_c"] = temperatureRead();
+    elem["p_recorded_at"] = (uint32_t)log_to_epoch(timestamp_ms);
+    g_log_last_ts = (uint32_t)log_to_epoch(timestamp_ms);
+    g_log_count++;
 
-    g_supa_doc["p_recorded_at"] = (uint32_t)log_to_epoch(timestamp_ms);
-
-    static char buffer[512];
-    size_t len = serializeJson(g_supa_doc, buffer);
-    // Serial.printf("[JSON] %s\n", buffer);
-
-    int rc = telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
-    if (rc != 200 && rc != 201 && rc != 204) {
-        print_http_error(g_supa_http, rc);
+    if (g_log_count >= LOG_BATCH_SIZE) {
+        flush_log_batch(supabase_url, anon_key, device_key, api_key);
     }
 }
 
@@ -601,7 +618,7 @@ static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
                 abs_p[ch] = e.p[ch];
             }
             *have_abs = true;
-            send_one_log_entry_supabase(*abs_ts, abs_v, abs_i, abs_p, "base",
+            send_log_entry(*abs_ts, abs_v, abs_i, abs_p, "base",
                 supabase_url, anon_key, device_key, api_key);
             offset += sizeof(BaseEntry);
         } else if (type == ENTRY_DELTA) {
@@ -615,7 +632,7 @@ static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
                 abs_i[ch] += e.di[ch];
                 abs_p[ch] += e.dp[ch];
             }
-            send_one_log_entry_supabase(*abs_ts, abs_v, abs_i, abs_p, "delta",
+            send_log_entry(*abs_ts, abs_v, abs_i, abs_p, "delta",
                 supabase_url, anon_key, device_key, api_key);
             offset += sizeof(DeltaEntry);
         } else {
@@ -728,6 +745,7 @@ void publish_log_batch_supabase() {
     }
 
     if (state == ST_DONE) {
+        flush_log_batch(supabase_url, anon_key, device_key, api_key);
         if (log_entries_count() > 0 || log_has_overflow_file()) {
             state = ST_RAM;
             ram_have = false;
