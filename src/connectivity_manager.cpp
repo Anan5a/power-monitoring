@@ -134,22 +134,20 @@ static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
 }
 
 static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
-    if (WiFi.status() != WL_CONNECTED) { Serial.printf("[SUPA_HTTP] WiFi not connected\n"); return false; }
-    // C3: at least 12KB free heap needed for TLS handshake + request buffers.
-    // Without this check, error -1 dominates because SSL context allocation (~8KB)
-    // fails on a tight heap, and the failed request chain keeps the heap low.
-    if (ESP.getFreeHeap() < 12288) { Serial.printf("[SUPA_HTTP] heap too low: %d\n", ESP.getFreeHeap()); return false; }
+    if (WiFi.status() != WL_CONNECTED) return false;
+    if (ESP.getFreeHeap() < 12288) return false;
+
+    // Always start fresh — avoid stale connection state
     if (g_supa_http_ready) {
-        supabase_http_reset();
+        g_supa_http.end();
+        g_supa_client.stop();
+        g_supa_http_ready = false;
     }
-    // Force-close the socket before begin() — prevents stale TCP state
-    // from corrupting the new TLS handshake on reused WiFiClientSecure instance
-    g_supa_client.stop();
-    g_supa_client.setInsecure(); // skip cert verification
+
+    g_supa_client.setInsecure();
     g_supa_client.setHandshakeTimeout(10);
     g_supa_http.setReuse(false);
     if (!g_supa_http.begin(g_supa_client, full_url)) {
-        Serial.printf("[SUPA_HTTP] begin failed for %s\n", full_url);
         g_supa_http_ready = false;
         return false;
     }
