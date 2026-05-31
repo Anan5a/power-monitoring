@@ -188,11 +188,24 @@ void update_display(const SensorData& data, const char* ip_str, float total_powe
 }
 
 void init_display() {
-    Wire.begin(I2C_SDA, I2C_SCL);
+    if (!wire_started) {
+        Wire.begin(I2C_SDA, I2C_SCL);
+    }
+    // Always set 400KHz — OLED works fine at this speed even if sensors are at 100KHz
+    Wire.setClock(400000);
+
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("Init...");  // immediate feedback while I2C settles
+    display.display();
+
     if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
         Serial.println("OLED init failed");
         return;
     }
+
     display.clearDisplay();
     display.setTextSize(2);
     display.setTextColor(SSD1306_WHITE);

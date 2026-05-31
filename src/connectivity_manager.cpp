@@ -340,10 +340,13 @@ static void print_http_error(HTTPClient& http, int rc) {
 }
 
 void publish_data_http(const SensorData& data, const char* json_buffer, size_t json_len) {
+    (void)data;
     if (ESP.getFreeHeap() < 4096) return;
     if (!settings_load_http_enabled()) return;
     char url[128], token[64];
     if (!settings_load_http_endpoint(url, token, sizeof(url))) return;
+    Serial.printf("[HTTP] posting %d bytes to %s\n", json_len, url);
+    Serial.printf("[JSON] %.*s\n", json_len < 256 ? json_len : 256, json_buffer);
     HTTPClient http;
     http.begin(url);
     http.addHeader("Content-Type", "application/json");
@@ -561,6 +564,7 @@ static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v,
 
     static char buffer[512];
     size_t len = serializeJson(g_supa_doc, buffer);
+    Serial.printf("[JSON] %s\n", buffer);
 
     int rc = telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
     if (rc != 200 && rc != 201 && rc != 204) {
@@ -797,6 +801,7 @@ void publish_data(const SensorData& data) {
 
     char buffer[512];
     size_t len = serializeJson(g_pub_doc, buffer);
+    Serial.printf("[JSON] %s\n", buffer);
 
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
     static unsigned long last_mqtt_pub = 0;
@@ -948,6 +953,7 @@ void publish_data_supabase(const SensorData& data) {
 
     static char buffer[4096];
     size_t len = serializeJson(g_supa_doc, buffer);
+    Serial.printf("[JSON] %s\n", buffer);
 
     int rc = telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
     if (rc != 200 && rc != 201 && rc != 204) {
