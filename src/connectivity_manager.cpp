@@ -56,8 +56,11 @@ static uint16_t g_deferred_requests = 0;
 static uint8_t  g_deferred_relay_idx = 0;
 static bool     g_deferred_relay_state = false;
 
-// 3-second telemetry batching: accumulate 3 readings, send as JSON array
-#define BATCH_SIZE 1
+// Telemetry batching: normal send=1 entry, drain burst=3-5 when backlogged
+// to prevent RAM buffer from filling up during network lag.
+#define BATCH_SIZE 5
+#define BATCH_DRAIN_THRESHOLD 2   // send up to BATCH_DRAIN entries when g_batch_count >= this
+#define BATCH_DRAIN_MAX 5         // cap burst at 5 entries
 static SensorData g_batch[BATCH_SIZE];
 static uint8_t    g_batch_count = 0;
 static unsigned long g_batch_last_ms = 0;
@@ -844,8 +847,8 @@ void publish_data_supabase(const SensorData& data) {
     g_batch[g_batch_count++] = data;
     g_batch_last_ms = millis();
 
-    // Not yet full — collect for next cycle
-    if (g_batch_count < BATCH_SIZE) return;
+    // Always attempt to send — drain burst when backlogged, single entry normally
+    if (g_batch_count < 1) return;
 
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) { g_batch_count = 0; return; }
@@ -861,10 +864,13 @@ void publish_data_supabase(const SensorData& data) {
     uint32_t ms = g_batch_last_ms;
     time_t epoch_s = (epoch_time > 0) ? epoch_time + ms / 1000 : time(nullptr);
 
+    uint8_t to_send = (g_batch_count >= BATCH_DRAIN_THRESHOLD)
+        ? min<uint8_t>(g_batch_count, BATCH_DRAIN_MAX)
+        : 1;  // normal: send 1, drain burst when backlogged
     g_supa_doc.clear();
     JsonArray arr = g_supa_doc.to<JsonArray>();
 
-    for (uint8_t r = 0; r < BATCH_SIZE; r++) {
+    for (uint8_t r = 0; r < to_send; r++) {
         const SensorData& d = g_batch[r];
         JsonObject elem = arr.add<JsonObject>();
         elem["p_device_key"] = device_key;
@@ -978,7 +984,13 @@ void publish_data_supabase(const SensorData& data) {
         }
     }
 
-    g_batch_count = 0;
+    // Compact remaining entries (those not sent) to front of batch
+    uint8_t remaining = g_batch_count - to_send;
+    for (uint8_t i = 0; i < remaining; i++) {
+        g_batch[i] = g_batch[to_send + i];
+    }
+    g_batch_count = remaining;
+
     publish_calibration_status();
 }
 
