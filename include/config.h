@@ -45,7 +45,7 @@
 #define CAL_VOLT_GAIN_CH2       1.0f
 #define CAL_CURR_OFFSET_MA_CH0  0.0f
 #define CAL_CURR_OFFSET_MA_CH1  0.0f
-#define CAL_CURR_OFFSET_MA_CH2  12.0f   // ghost current on CH2
+#define CAL_CURR_OFFSET_MA_CH2  0.0f
 #define CAL_CURR_GAIN_CH0       1.0f
 #define CAL_CURR_GAIN_CH1       1.0f
 #define CAL_CURR_GAIN_CH2       1.0f

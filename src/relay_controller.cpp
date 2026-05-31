@@ -33,6 +33,13 @@ void init_relays() {
         for (uint8_t i = 0; i < count; i++) {
             RelayRule rt;
             if (settings_load_relay(i, &rt)) {
+                // Defensive: if gpio_pin doesn't match board default, correct it
+                if (i < 4 && rt.gpio_pin != default_pins[i]) {
+                    Serial.printf("[RELAY] gpio_pin mismatch idx=%d: expected %d, got %d — correcting\n",
+                        i, default_pins[i], rt.gpio_pin);
+                    rt.gpio_pin = default_pins[i];
+                    settings_save_relay(i, &rt);
+                }
                 pinMode(rt.gpio_pin, OUTPUT);
                 digitalWrite(rt.gpio_pin, LOW); // active_high=true: LOW=OFF, HIGH=ON
                 relay_states[i] = { false, false, 0, false };

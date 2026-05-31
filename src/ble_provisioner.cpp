@@ -131,7 +131,7 @@ static void handle_command(const char* json) {
     } else if (strcmp(cmd, "set_relay") == 0) {
         if (!check_pin(doc)) return;
         RelayRule rt = {};
-        rt.channel = doc["channel"] | 0;
+        rt.channel = doc["idx"] | 0;
         rt.overcurrent_A = doc["overcurrent_A"] | 0.0f;
         rt.undervoltage_V = doc["undervoltage_V"] | 0.0f;
         rt.soc_low_pct = doc["soc_low_pct"] | 0.0f;
