@@ -1320,6 +1320,9 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
 void check_settings_commands() {
     if (skip_network) return;
     if (ESP.getFreeHeap() < 13000) return;
+    telemetry_http_reset();
+    vTaskDelay(pdMS_TO_TICKS(50));
+
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
