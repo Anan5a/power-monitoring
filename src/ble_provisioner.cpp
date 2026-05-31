@@ -535,7 +535,7 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         Serial.println("[CMD] resistors saved");
     } else if (strcmp(cmd_type, "set_relay") == 0) {
         RelayRule rt = {};
-        rt.channel = doc["channel"] | 0;
+        rt.channel = doc["idx"] | 0;  // use idx as channel, not the hardcoded channel field from UI
         rt.overcurrent_A = doc["overcurrent_A"] | 0.0f;
         rt.undervoltage_V = doc["undervoltage_V"] | 0.0f;
         rt.soc_low_pct = doc["soc_low_pct"] | 0.0f;
