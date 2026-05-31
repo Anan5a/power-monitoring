@@ -140,7 +140,7 @@ create or replace function public.sync_relay_state(
     p_gpio_pin smallint,
     p_is_energized boolean,
     p_active_high boolean default true,
-    p_last_tripped_at timestamptz,
+    p_last_tripped_at timestamptz default now(),
     p_channel smallint default 0
 ) returns void language plpgsql security definer as $$
 begin
