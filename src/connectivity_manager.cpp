@@ -63,50 +63,37 @@ static void drain_response() {
 
 static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     if (WiFi.status() != WL_CONNECTED) return false;
-    if (!g_supa_http_ready) {
-        g_supa_client.setInsecure(); // skip cert verification
-        g_supa_http.setReuse(true);
-        if (!g_supa_http.begin(g_supa_client, full_url)) {
-            return false;
-        }
-        g_supa_http.addHeader("Content-Type", "application/json");
-        g_supa_http.addHeader("apikey", anon_key);
-        char auth_hdr[384];
-        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
-        g_supa_http.addHeader("Authorization", auth_hdr);
-        g_supa_http_ready = true;
-    } else {
-        // Connection already active — begin() reuses it, no need to end()/begin()
-        // setReuse(true) ensures HTTPClient keeps the TCP connection alive across calls
-        // But if server closed the connection (error -1), WiFiClient still thinks it's open.
-        // Force a fresh connection in that case.
-        if (!g_supa_client.connected()) {
-            supabase_http_reset();
-            return supabase_http_prepare(full_url, anon_key);
-        }
-        g_supa_http.begin(g_supa_client, full_url);
+    // C3: disable connection reuse — setReuse(true) + TLS session cache causes
+    // ~44KB heap leak on connection close. Always use fresh connection.
+    if (g_supa_http_ready) {
+        supabase_http_reset();
     }
+    g_supa_client.setInsecure(); // skip cert verification
+    g_supa_http.setReuse(false);
+    if (!g_supa_http.begin(g_supa_client, full_url)) {
+        g_supa_http_ready = false;
+        return false;
+    }
+    g_supa_http.addHeader("Content-Type", "application/json");
+    g_supa_http.addHeader("apikey", anon_key);
+    char auth_hdr[384];
+    snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
+    g_supa_http.addHeader("Authorization", auth_hdr);
+    g_supa_http_ready = true;
     return true;
 }
 
 static int supabase_post(const char* url_path, const char* payload, size_t len,
     const char* supabase_url, const char* anon_key) {
-    static int fail_count = 0;
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!supabase_http_prepare(full_url, anon_key)) return -1;
     int rc = g_supa_http.POST((uint8_t*)payload, len);
     if (rc < 0) {
         drain_response();
-        // Only reset on persistent failure — avoid destroying persistent TLS connection
-        // which forces new TLS handshake (~4-8KB heap) on transient errors
-        if (++fail_count >= 3) {
-            supabase_http_reset();
-            fail_count = 0;
-        }
+        supabase_http_reset();
     } else {
         drain_response();
-        fail_count = 0;
     }
     return rc;
 }
