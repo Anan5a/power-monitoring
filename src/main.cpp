@@ -635,7 +635,7 @@ void setup() {
     init_ble_provisioner();  // BLE stack needs ~60-80KB contiguous heap
 
     xTaskCreatePinnedToCore(networkTask, "Network", 12288, NULL, 5, NULL, 0);
-    xTaskCreatePinnedToCore(sensorTask,    "Sensor",   4096, NULL, 10, NULL, 1);
+    xTaskCreatePinnedToCore(sensorTask,    "Sensor",   4096, NULL, 10, NULL, 0);
 
     Serial.println("Type 'help' for serial commands");
 }
