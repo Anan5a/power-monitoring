@@ -73,11 +73,8 @@ static void networkTask(void* param) {
             publish_data_supabase(data);
         }
 
-        // Flush log batch (RAM + LittleFS overflow) if MQTT connected
-        publish_log_batch();
-        // NOTE: publish_log_batch_supabase() disabled — log entries are now
-        // included in the 3-second telemetry batch via publish_data_supabase().
-        // Running both concurrently causes TLS contention on ESP32-C3 heap.
+        // Flush log batch to Supabase (RAM + LittleFS overflow)
+        publish_log_batch_supabase();
 
         // Poll Supabase for pending settings commands
         static unsigned long last_settings_check = 0;

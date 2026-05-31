@@ -679,7 +679,10 @@ void publish_log_batch_supabase() {
                 memcpy(ram_carry, work + consumed, ram_carry_len);
             }
         }
-        return;
+        // Immediately transition to FS if RAM drained — no waiting for next tick
+        if (log_entries_count() == 0 && state == ST_RAM) {
+            state = ST_FS;
+        }
     }
 
     if (state == ST_FS) {
@@ -718,7 +721,10 @@ void publish_log_batch_supabase() {
                 memcpy(fs_carry, work + consumed, fs_carry_len);
             }
         }
-        return;
+        // Immediately transition to DONE if no more FS data — no waiting for next tick
+        if (state == ST_FS && fs_carry_len == 0 && !log_has_overflow_file()) {
+            state = ST_DONE;
+        }
     }
 
     if (state == ST_DONE) {
