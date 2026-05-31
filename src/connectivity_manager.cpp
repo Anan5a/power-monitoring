@@ -1307,16 +1307,11 @@ void check_settings_commands() {
     if (millis() - last_check < 5000) return;  // poll every 5s
     last_check = millis();
 
-    g_cal_doc.clear();
-    g_cal_doc["p_device_key"] = device_key;
-    char buffer[256];
-    size_t len = serializeJson(g_cal_doc, buffer);
-    Serial.printf("[SETTINGS] >>> %s\n", buffer);
-
     char full_url[256];
-    snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, "/rest/v1/rpc/claim_settings_command");
+    snprintf(full_url, sizeof(full_url), "%s/rest/v1/rpc/claim_settings_command?p_device_key=%s",
+        supabase_url, device_key);
     if (!supabase_http_prepare(full_url, anon_key)) return;
-    int rc = g_supa_http.POST((uint8_t*)buffer, len);
+    int rc = g_supa_http.POST((uint8_t*)"", 0);
     Serial.printf("[SETTINGS] claim HTTP rc=%d\n", rc);
     if (rc == 200 || rc == 201 || rc == 204) {
         char body[1536];
