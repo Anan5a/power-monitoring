@@ -44,6 +44,7 @@ static bool is_valid_uuid(const char* s) {
 static WiFiClientSecure g_telemetry_client;
 static HTTPClient        g_telemetry_http;
 static bool              g_telemetry_http_ready = false;
+static bool              g_telemetry_error = false;  // force reset after POST failure
 static WiFiClientSecure g_supa_client;
 static HTTPClient       g_supa_http;
 static bool             g_supa_http_ready = false;
@@ -113,8 +114,11 @@ static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
         g_telemetry_http.addHeader("Authorization", auth_hdr);
         g_telemetry_http_ready = true;
     } else {
-        if (!g_telemetry_client.connected()) {
+        // Force reset when connection is dead — prevents esp-aes allocate failure
+        // on stale TLS sessions after WiFi reconnect or server close.
+        if (!g_telemetry_client.connected() || g_telemetry_error) {
             telemetry_http_reset();
+            g_telemetry_error = false;
             return telemetry_http_prepare(full_url, anon_key);
         }
         g_telemetry_http.begin(g_telemetry_client, full_url);
@@ -155,6 +159,7 @@ static int telemetry_post(const char* url_path, const char* payload, size_t len,
     if (rc < 0) {
         drain_telemetry_response();
         telemetry_http_reset();
+        g_telemetry_error = true;  // force fresh connection on next call
     } else {
         drain_telemetry_response();
     }
@@ -386,6 +391,7 @@ void loop_connectivity() {
         IPAddress ip = WiFi.localIP();
         snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
         Serial.println("[WiFi] connection restored — network re-enabled");
+        telemetry_http_reset();  // kill stale TLS session after WiFi reconnect
     }
 
     // WiFi dropped — restart BLE advertising so device can be re-provisioned
