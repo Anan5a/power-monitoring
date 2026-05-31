@@ -412,6 +412,9 @@ void loop_connectivity() {
         snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
         Serial.println("[WiFi] connection restored — network re-enabled");
         telemetry_http_reset();  // kill stale TLS session after WiFi reconnect
+        // Disable BLE to free ~50KB heap for TLS operations
+        Serial.println("[BLE] disabling BLE stack to free heap for TLS");
+        deinit_ble_provisioner();
     }
 
     // WiFi dropped — restart BLE advertising so device can be re-provisioned
