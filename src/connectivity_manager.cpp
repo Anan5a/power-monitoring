@@ -195,6 +195,7 @@ static void connect_wifi() {
             return;
         }
     }
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);  // reduce TX power to avoid RF issues on C3
     int attempts = 20; // ~10 seconds timeout
     while (WiFi.status() != WL_CONNECTED && attempts-- > 0) {
         delay(500);
