@@ -191,8 +191,7 @@ void init_display() {
     if (!wire_started) {
         Wire.begin(I2C_SDA, I2C_SCL);
     }
-    // Always set 400KHz — OLED works fine at this speed even if sensors are at 100KHz
-    Wire.setClock(400000);
+    Wire.setClock(I2C_FREQ);  // 100KHz — bus must run at this speed
 
     display.clearDisplay();
     display.setTextSize(1);
