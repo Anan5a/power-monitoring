@@ -1115,16 +1115,15 @@ static void sync_device_channels_to_supabase() {
     char path[256];
     snprintf(path, sizeof(path), "/rest/v1/rpc/sync_device_channels");
 
-    // Build RPC body: {p_device_key: "...", p_payload: {...cal_doc...}}
-    g_cal_doc.clear();
-    g_cal_doc["p_device_key"] = buffer;  // placeholder — build manually below
+    // Build RPC body: {p_device_key: "...", p_payload: {...}}
     JsonDocument rpc_doc;
     rpc_doc["p_device_key"] = device_key;
-    // Embed the full device_channels payload
+    // Embed the full device_channels payload directly (g_cal_doc is still intact here)
     rpc_doc["p_payload"]["channel_names"] = g_cal_doc["channel_names"];
     rpc_doc["p_payload"]["battery_profiles"] = g_cal_doc["battery_profiles"];
     rpc_doc["p_payload"]["channel_calibration"] = g_cal_doc["channel_calibration"];
     rpc_doc["p_payload"]["virtual_channels"] = g_cal_doc["virtual_channels"];
+    rpc_doc["p_payload"]["channel_groups"] = g_cal_doc["channel_groups"];
 
     len = serializeJson(rpc_doc, buffer);
     int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
