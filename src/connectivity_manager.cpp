@@ -136,16 +136,11 @@ static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
 static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     if (WiFi.status() != WL_CONNECTED) return false;
     if (ESP.getFreeHeap() < 12288) return false;
-
-    // Always start fresh — avoid stale connection state
     if (g_supa_http_ready) {
-        g_supa_http.end();
-        g_supa_client.stop();
-        g_supa_http_ready = false;
+        supabase_http_reset();
     }
-
     g_supa_client.setInsecure();
-    g_supa_client.setHandshakeTimeout(10);
+    g_supa_client.setHandshakeTimeout(30);
     g_supa_http.setReuse(false);
     if (!g_supa_http.begin(g_supa_client, full_url)) {
         g_supa_http_ready = false;
@@ -1316,7 +1311,6 @@ void check_settings_commands() {
     g_cal_doc["p_device_key"] = device_key;
     char buffer[256];
     size_t len = serializeJson(g_cal_doc, buffer);
-    Serial.printf("[SETTINGS] claim JSON: %s\n", buffer);
 
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, "/rest/v1/rpc/claim_settings_command");
