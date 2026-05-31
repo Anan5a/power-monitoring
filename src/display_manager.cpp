@@ -190,8 +190,8 @@ void update_display(const SensorData& data, const char* ip_str, float total_powe
 void init_display() {
     if (!wire_started) {
         Wire.begin(I2C_SDA, I2C_SCL);
+        Wire.setClock(I2C_FREQ);  // 100KHz — bus must run at this speed
     }
-    Wire.setClock(I2C_FREQ);  // 100KHz — bus must run at this speed
 
     display.clearDisplay();
     display.setTextSize(1);
