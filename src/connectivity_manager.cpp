@@ -103,6 +103,7 @@ static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
     if (ESP.getFreeHeap() < 13000) return false;
     if (!g_telemetry_http_ready) {
         g_telemetry_client.setInsecure();
+        g_telemetry_client.setHandshakeTimeout(30);
         g_telemetry_http.setReuse(true);  // connection reuse for high-frequency telemetry
         if (!g_telemetry_http.begin(g_telemetry_client, full_url)) {
             g_telemetry_http_ready = false;
@@ -137,6 +138,7 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
         supabase_http_reset();
     }
     g_supa_client.setInsecure(); // skip cert verification
+    g_supa_client.setHandshakeTimeout(30);
     g_supa_http.setReuse(false);
     if (!g_supa_http.begin(g_supa_client, full_url)) {
         g_supa_http_ready = false;
@@ -400,6 +402,7 @@ void loop_connectivity() {
     if (wifi_was_connected && !wifi_connected) {
         Serial.println("[WiFi] disconnected — restarting BLE advertising");
         start_ble_advertising();
+        telemetry_http_reset();  // kill TLS session on disconnect to prevent leak
     }
     wifi_was_connected = wifi_connected;
 
