@@ -57,7 +57,7 @@ static uint8_t  g_deferred_relay_idx = 0;
 static bool     g_deferred_relay_state = false;
 
 // 3-second telemetry batching: accumulate 3 readings, send as JSON array
-#define BATCH_SIZE 3
+#define BATCH_SIZE 1
 static SensorData g_batch[BATCH_SIZE];
 static uint8_t    g_batch_count = 0;
 static unsigned long g_batch_last_ms = 0;
