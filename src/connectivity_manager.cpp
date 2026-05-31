@@ -78,6 +78,12 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     } else {
         // Connection already active — begin() reuses it, no need to end()/begin()
         // setReuse(true) ensures HTTPClient keeps the TCP connection alive across calls
+        // But if server closed the connection (error -1), WiFiClient still thinks it's open.
+        // Force a fresh connection in that case.
+        if (!g_supa_client.connected()) {
+            supabase_http_reset();
+            return supabase_http_prepare(full_url, anon_key);
+        }
         g_supa_http.begin(g_supa_client, full_url);
     }
     return true;
@@ -195,6 +201,7 @@ static void connect_wifi() {
             return;
         }
     }
+    WiFi.setAutoReconnect(true);  // auto-reconnect on unexpected disconnect
     WiFi.setTxPower(WIFI_POWER_8_5dBm);  // reduce TX power to avoid RF issues on C3
     int attempts = 20; // ~10 seconds timeout
     while (WiFi.status() != WL_CONNECTED && attempts-- > 0) {
