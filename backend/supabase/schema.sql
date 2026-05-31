@@ -130,6 +130,63 @@ begin
 end;
 $$;
 
+-- ESP32 upserts relay state (security definer — bypasses RLS)
+create or replace function public.sync_relay_state(
+    p_device_key text,
+    p_relay_index smallint,
+    p_gpio_pin smallint,
+    p_is_energized boolean,
+    p_last_tripped_at timestamptz
+) returns void language plpgsql security definer as $$
+begin
+    insert into public.relay_states (device_key, relay_index, gpio_pin, is_energized, last_tripped_at)
+    values (p_device_key, p_relay_index, p_gpio_pin, p_is_energized, p_last_tripped_at)
+    on conflict (device_key, relay_index) do update
+        set gpio_pin = EXCLUDED.gpio_pin,
+            is_energized = EXCLUDED.is_energized,
+            last_tripped_at = EXCLUDED.last_tripped_at;
+end;
+$$;
+
+-- ESP32 upserts sensor calibration status (security definer — bypasses RLS)
+create or replace function public.sync_sensor_calibration_status(
+    p_device_key text,
+    p_calibrating boolean,
+    p_baseline_tick smallint,
+    p_baseline_stddev jsonb
+) returns void language plpgsql security definer as $$
+begin
+    insert into public.sensor_calibration_status (device_key, calibrating, baseline_tick, baseline_stddev, updated_at)
+    values (p_device_key, p_calibrating, p_baseline_tick, p_baseline_stddev, now())
+    on conflict (device_key) do update
+        set calibrating = EXCLUDED.calibrating,
+            baseline_tick = EXCLUDED.baseline_tick,
+            baseline_stddev = EXCLUDED.baseline_stddev,
+            updated_at = now();
+end;
+$$;
+
+-- ESP32 reads ble_pin from device_channels (security definer — bypasses RLS)
+create or replace function public.get_device_ble_pin(p_device_key text)
+returns text language plpgsql security definer as $$
+declare
+    pin_val text;
+begin
+    select ble_pin into pin_val from public.device_channels where device_key = p_device_key;
+    return pin_val;
+end;
+$$;
+
+-- ESP32 syncs ble_pin to device_channels (security definer — bypasses RLS)
+create or replace function public.sync_ble_pin(p_device_key text, p_ble_pin text)
+returns void language plpgsql security definer as $$
+begin
+    update public.device_channels
+    set ble_pin = p_ble_pin, updated_at = now()
+    where device_key = p_device_key;
+end;
+$$;
+
 -- ble_pin readable to device owner (for UI dynamic PIN)
 create policy "own_device_ble_pin" on public.devices
     for select to authenticated using (user_id = auth.uid());

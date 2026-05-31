@@ -1130,19 +1130,19 @@ void sync_ble_pin_to_supabase() {
     char pin_str[16];
     snprintf(pin_str, sizeof(pin_str), "%lu", (unsigned long)pin);
 
-    char path[256];
-    snprintf(path, sizeof(path), "/rest/v1/device_channels?device_key=eq.%s", device_key);
-
-    g_cal_doc.clear();
-    g_cal_doc["ble_pin"] = pin_str;
+    // Use security definer RPC to bypass RLS
+    JsonDocument rpc_doc;
+    rpc_doc["p_device_key"] = device_key;
+    rpc_doc["p_ble_pin"] = pin_str;
     static char buffer[256];
-    size_t len = serializeJson(g_cal_doc, buffer);
-    int rc = supabase_patch(path, buffer, len, supabase_url, anon_key);
-    supabase_http_reset();
+    size_t len = serializeJson(rpc_doc, buffer);
+    char path[256];
+    snprintf(path, sizeof(path), "/rest/v1/rpc/sync_ble_pin");
+    int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
         Serial.println("BLE PIN synced to Supabase");
     } else {
-        print_http_error(g_supa_http, rc);
+        Serial.printf("BLE PIN sync FAILED: HTTP %d\n", rc);
     }
 }
 
@@ -1157,27 +1157,23 @@ void publish_relay_state(uint8_t idx, bool is_energized) {
     RelayRule rt;
     if (!settings_load_relay(idx, &rt)) { Serial.printf("[RELAY] skip: no relay config idx=%d\n", idx); return; }
 
-    static JsonDocument doc;
-    doc.clear();
-    doc["device_key"] = device_key;
-    doc["relay_index"] = idx;
-    doc["gpio_pin"] = rt.gpio_pin;
-    doc["is_energized"] = is_energized;
-    doc["last_tripped_at"] = "now";
-    static char buffer[256];
-    size_t len = serializeJson(doc, buffer);
+    // Use security definer RPC to bypass RLS
+    JsonDocument rpc_doc;
+    rpc_doc["p_device_key"] = device_key;
+    rpc_doc["p_relay_index"] = idx;
+    rpc_doc["p_gpio_pin"] = rt.gpio_pin;
+    rpc_doc["p_is_energized"] = is_energized;
+    rpc_doc["p_last_tripped_at"] = "now";
 
-    char full_url[256];
-    snprintf(full_url, sizeof(full_url), "%s/rest/v1/relay_states", supabase_url);
-    if (!supabase_http_prepare(full_url, anon_key)) return;
-    // Merge-duplicates = upsert on conflict
-    g_supa_http.addHeader("Prefer", "resolution=merge-duplicates");
-    int rc = g_supa_http.POST((uint8_t*)buffer, len);
-    g_supa_http.addHeader("Prefer", "return=minimal"); // restore minimal for other calls
+    static char buffer[256];
+    size_t len = serializeJson(rpc_doc, buffer);
+    char path[256];
+    snprintf(path, sizeof(path), "/rest/v1/rpc/sync_relay_state");
+    int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
-        Serial.printf("[RELAY] upserted: idx=%d energized=%d\n", idx, is_energized);
+        Serial.printf("[RELAY] synced: idx=%d energized=%d\n", idx, is_energized);
     } else {
-        Serial.printf("[RELAY] upsert FAILED: HTTP %d\n", rc);
+        Serial.printf("[RELAY] sync FAILED: HTTP %d\n", rc);
     }
 }
 
@@ -1246,16 +1242,14 @@ void publish_calibration_status() {
 
     static char buffer[512];
     size_t len = serializeJson(g_cal_doc, buffer);
-    // Reset persistent client so the Prefer header is added to a fresh connection only
-    supabase_http_reset();
-    g_supa_http.addHeader("Prefer", "resolution=merge-duplicates");
-    int rc = supabase_patch("/rest/v1/sensor_calibration_status", buffer, len, supabase_url, anon_key);
-    // Force reset after PATCH so the custom header doesn't leak into subsequent POSTs
-    supabase_http_reset();
+    // Use security definer RPC to bypass RLS
+    char path[256];
+    snprintf(path, sizeof(path), "/rest/v1/rpc/sync_sensor_calibration_status");
+    int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
-        Serial.printf("[CALIB] status published: tick=%d\n", tick_count);
+        Serial.printf("[CALIB] status synced: tick=%d\n", tick_count);
     } else {
-        print_http_error(g_supa_http, rc);
+        Serial.printf("[CALIB] sync FAILED: HTTP %d\n", rc);
     }
 }
 
@@ -1266,15 +1260,19 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
     if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return false;
     if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return false;
 
-    char path[256];
-    snprintf(path, sizeof(path), "/rest/v1/device_channels?device_key=eq.%s&select=ble_pin", device_key);
+    // Use security definer RPC to bypass RLS
+    JsonDocument rpc_doc;
+    rpc_doc["p_device_key"] = device_key;
+    static char buffer[256];
+    size_t rpc_len = serializeJson(rpc_doc, buffer);
 
-    // Start with a fresh connection so stale response bytes don't corrupt the read
+    char path[256];
+    snprintf(path, sizeof(path), "/rest/v1/rpc/get_device_ble_pin");
     supabase_http_reset();
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, path);
     if (!supabase_http_prepare(full_url, anon_key)) return false;
-    int rc = g_supa_http.GET();
+    int rc = g_supa_http.POST((uint8_t*)buffer, rpc_len);
     bool ok = false;
     if (rc == 200) {
         char body[256];
@@ -1286,15 +1284,12 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
             if (c >= 0) body[body_len++] = (char)c;
         }
         body[body_len] = '\0';
-        const char* resp = body;
-        const char* needle = "\"ble_pin\":\"";
-        const char* p = strstr(resp, needle);
-        if (p) {
-            p += strlen(needle);
-            char* q = strchr(p, '"');
-            if (q && (size_t)(q - p) < (int)len) {
-                memcpy(pin_str, p, q - p);
-                pin_str[q - p] = '\0';
+        // RPC returns a quoted string, e.g. "\"1234\"" — strip quotes
+        if (body_len > 2 && body[0] == '"') {
+            size_t copy_len = body_len - 2;
+            if (copy_len < len) {
+                memcpy(pin_str, body + 1, copy_len);
+                pin_str[copy_len] = '\0';
                 ok = pin_str[0] != '\0';
             }
         }
