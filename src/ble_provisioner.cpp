@@ -538,7 +538,7 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         Serial.println("[CMD] resistors saved");
     } else if (strcmp(cmd_type, "set_relay") == 0) {
         RelayRule rt = {};
-        rt.channel = doc["idx"] | 0;  // use idx as channel, not the hardcoded channel field from UI
+        rt.channel = doc["channel"] | 0;  // which VC (0-3) this relay controls
         rt.overcurrent_A = doc["overcurrent_A"] | 0.0f;
         rt.undervoltage_V = doc["undervoltage_V"] | 0.0f;
         rt.soc_low_pct = doc["soc_low_pct"] | 0.0f;
@@ -546,7 +546,8 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         rt.trip_delay_ms = doc["trip_delay_ms"] | 1000;
         rt.reset_delay_ms = doc["reset_delay_ms"] | 5000;
         uint8_t default_relay_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
-        rt.gpio_pin = default_relay_pins[rt.channel];  // always use board-specific default — don't accept gpio_pin from Supabase
+        uint8_t idx = doc["idx"] | 0;
+        rt.gpio_pin = default_relay_pins[idx];  // always use board-specific default — don't accept gpio_pin from Supabase
         rt.active_high = doc["active_high"] | true;
         rt.enabled = doc["enabled"] | true;
         settings_save_relay(doc["idx"] | 0, &rt);
