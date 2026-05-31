@@ -52,6 +52,12 @@ static uint16_t g_deferred_requests = 0;
 static uint8_t  g_deferred_relay_idx = 0;
 static bool     g_deferred_relay_state = false;
 
+// 3-second telemetry batching: accumulate 3 readings, send as JSON array
+#define BATCH_SIZE 3
+static SensorData g_batch[BATCH_SIZE];
+static uint8_t    g_batch_count = 0;
+static unsigned long g_batch_last_ms = 0;
+
 // sync_device_channels_to_supabase is static and not in header — forward declare
 static void sync_device_channels_to_supabase();
 
@@ -773,8 +779,6 @@ void publish_data(const SensorData& data) {
 
 void publish_data_supabase(const SensorData& data) {
     if (skip_network) return;
-    // Heap check BEFORE last_pub_ms reset — peak ~8KB during serializeJson()
-    // Keep buffer tight to allow sensor task + network task to coexist on ~320KB heap
     if (ESP.getFreeHeap() < 13000) {
         static unsigned long last_warn = 0;
         if (millis() - last_warn > 10000) {
@@ -783,133 +787,127 @@ void publish_data_supabase(const SensorData& data) {
         }
         return;
     }
-    static unsigned long last_pub_ms = 0;
-    if (millis() - last_pub_ms < 1000) return; // rate limit: 1 POST per second
-    last_pub_ms = millis();
+
+    // Accumulate reading into batch
+    g_batch[g_batch_count++] = data;
+    g_batch_last_ms = millis();
+
+    // Not yet full — collect for next cycle
+    if (g_batch_count < BATCH_SIZE) return;
+
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
-    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
-    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
-    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
-    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) { g_batch_count = 0; return; }
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) { g_batch_count = 0; return; }
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) { g_batch_count = 0; return; }
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) { g_batch_count = 0; return; }
     if (!is_valid_uuid(api_key)) {
-        Serial.println("[WARN] device_api_key is not a valid UUID — skip Supabase publish. Use device_api_key from Supabase devices table (not sb_secret_...)");
+        Serial.println("[WARN] device_api_key is not a valid UUID — skip Supabase publish");
+        g_batch_count = 0;
         return;
     }
 
-    uint32_t ms = millis();
+    uint32_t ms = g_batch_last_ms;
     time_t epoch_s = (epoch_time > 0) ? epoch_time + ms / 1000 : time(nullptr);
 
     g_supa_doc.clear();
     g_supa_doc["p_device_key"] = device_key;
     g_supa_doc["p_device_api_key"] = api_key;
 
-    JsonObject payload = g_supa_doc["p_payload"].to<JsonObject>();
-    for (uint8_t i = 0; i < 3; i++) {
-        char key[16];
-        snprintf(key, sizeof(key), "ina3221_v%d", i);
-        payload[key] = data.ina3221_busV[i];
-        snprintf(key, sizeof(key), "ina3221_i%d", i);
-        payload[key] = data.ina3221_current[i];
-    }
-#if ENABLE_INA226
-    payload["ina226_v"] = data.ina226_busV;
-    payload["ina226_i"] = data.ina226_current;
-    payload["ina226_p"] = data.ina226_power;
-#endif
-    for (uint8_t i = 0; i < 4; i++) {
-        char key[16];
-        snprintf(key, sizeof(key), "coulomb_mah%d", i);
-        payload[key] = get_coulomb_mAh(i);
-        snprintf(key, sizeof(key), "energy_wh%d", i);
-        payload[key] = get_energy_Wh(i);
-    }
-    for (uint8_t i = 0; i < 4; i++) {
-        BatteryConfig bat;
-        if (settings_load_battery(i, &bat) && bat.capacity_mAh > 0) {
-            float soc = bat.initial_soc_pct + (get_coulomb_mAh(i) / bat.capacity_mAh) * 100.0f;
-            soc = soc < 0 ? 0 : soc > 100 ? 100 : soc;
+    JsonArray readings = g_supa_doc["readings"].to<JsonArray>();
+    for (uint8_t r = 0; r < BATCH_SIZE; r++) {
+        const SensorData& d = g_batch[r];
+        JsonObject payload = readings.add<JsonObject>();
+
+        for (uint8_t i = 0; i < 3; i++) {
             char key[16];
-            snprintf(key, sizeof(key), "soc_pct%d", i);
-            payload[key] = soc;
+            snprintf(key, sizeof(key), "ina3221_v%d", i);
+            payload[key] = d.ina3221_busV[i];
+            snprintf(key, sizeof(key), "ina3221_i%d", i);
+            payload[key] = d.ina3221_current[i];
         }
-    }
-    payload["log_entries"] = log_entries_count();
-    payload["log_buffer_kb"] = log_buffer_capacity() / 1024;
-    payload["log_overflow"] = log_has_overflow_file();
-    payload["log_overflow_bytes"] = log_overflow_file_size();
-
-    // Relay states
-    for (uint8_t i = 0; i < 4; i++) {
-        char key[16];
-        snprintf(key, sizeof(key), "relay%d", i);
-        payload[key] = get_relay_state(i);
-    }
-
-    // Virtual channels: compute V, I, P per channel from configured sources
-    for (uint8_t ch = 0; ch < 4; ch++) {
-        VirtualChannelConfig vc;
-        char key[16];
-        float v = 0, i = 0, p = 0;
-
-        if (settings_load_virtual_channel(ch, &vc) && (vc.voltage_src > 0 || vc.current_src > 0)) {
-            if (vc.voltage_src > 0) {
-                v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data);
+#if ENABLE_INA226
+        payload["ina226_v"] = d.ina226_busV;
+        payload["ina226_i"] = d.ina226_current;
+        payload["ina226_p"] = d.ina226_power;
+#endif
+        for (uint8_t i = 0; i < 4; i++) {
+            char key[16];
+            snprintf(key, sizeof(key), "coulomb_mah%d", i);
+            payload[key] = get_coulomb_mAh(i);
+            snprintf(key, sizeof(key), "energy_wh%d", i);
+            payload[key] = get_energy_Wh(i);
+        }
+        for (uint8_t i = 0; i < 4; i++) {
+            BatteryConfig bat;
+            if (settings_load_battery(i, &bat) && bat.capacity_mAh > 0) {
+                float soc = bat.initial_soc_pct + (get_coulomb_mAh(i) / bat.capacity_mAh) * 100.0f;
+                soc = soc < 0 ? 0 : soc > 100 ? 100 : soc;
+                char key[16];
+                snprintf(key, sizeof(key), "soc_pct%d", i);
+                payload[key] = soc;
             }
-            if (vc.current_src > 0) {
-                i = get_sensor_current(vc.current_src, vc.current_idx, data);
-                if (vc.current_src == 3) {
-                    p = get_sensor_power(vc.current_src, vc.current_idx, data);
-                } else if (vc.voltage_src > 0) {
-                    p = v * i;
+        }
+        payload["log_entries"] = log_entries_count();
+        payload["log_buffer_kb"] = log_buffer_capacity() / 1024;
+        payload["log_overflow"] = log_has_overflow_file();
+        payload["log_overflow_bytes"] = log_overflow_file_size();
+
+        for (uint8_t i = 0; i < 4; i++) {
+            char key[16];
+            snprintf(key, sizeof(key), "relay%d", i);
+            payload[key] = get_relay_state(i);
+        }
+
+        for (uint8_t ch = 0; ch < 4; ch++) {
+            VirtualChannelConfig vc;
+            char key[16];
+            float v = 0, i = 0, p = 0;
+
+            if (settings_load_virtual_channel(ch, &vc) && (vc.voltage_src > 0 || vc.current_src > 0)) {
+                if (vc.voltage_src > 0) v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, d);
+                if (vc.current_src > 0) {
+                    i = get_sensor_current(vc.current_src, vc.current_idx, d);
+                    if (vc.current_src == 3) p = get_sensor_power(vc.current_src, vc.current_idx, d);
+                    else if (vc.voltage_src > 0) p = v * i;
                 }
+            } else if (ch < 3) {
+                v = d.ads1115_volts[ch];
+                i = d.ina3221_current[ch];
+                p = v * i;
+            } else {
+                v = d.ina226_busV;
+                i = d.ina226_current;
+                p = d.ina226_power;
             }
-        } else if (ch < 3) {
-            v = data.ads1115_volts[ch];
-            i = data.ina3221_current[ch];
-            p = v * i;
-        } else {
-            v = data.ina226_busV;
-            i = data.ina226_current;
-            p = data.ina226_power;
+            snprintf(key, sizeof(key), "ch%d_V", ch); payload[key] = v;
+            snprintf(key, sizeof(key), "ch%d_I", ch); payload[key] = i;
+            snprintf(key, sizeof(key), "ch%d_P", ch); payload[key] = p;
         }
 
-        snprintf(key, sizeof(key), "ch%d_V", ch);
-        payload[key] = v;
-        snprintf(key, sizeof(key), "ch%d_I", ch);
-        payload[key] = i;
-        snprintf(key, sizeof(key), "ch%d_P", ch);
-        payload[key] = p;
-    }
+        for (uint8_t i = 0; i < 3; i++) {
+            char key[16];
+            SampleMeta m = sensor_get_meta(i);
+            snprintf(key, sizeof(key), "ina3221_i%d_stddev", i); payload[key] = m.stddev;
+            snprintf(key, sizeof(key), "ina3221_i%d_spike", i); payload[key] = m.spike;
+            m = sensor_get_meta(i + 3);
+            snprintf(key, sizeof(key), "ina3221_v%d_stddev", i); payload[key] = m.stddev;
+            snprintf(key, sizeof(key), "ina3221_v%d_spike", i); payload[key] = m.spike;
+        }
 
-    // Add stddev + spike flags for INA3221 channels
-    for (uint8_t i = 0; i < 3; i++) {
-        char key[16];
-        SampleMeta m = sensor_get_meta(i); // 0-2 = INA3221 current
-        snprintf(key, sizeof(key), "ina3221_i%d_stddev", i);
-        payload[key] = m.stddev;
-        snprintf(key, sizeof(key), "ina3221_i%d_spike", i);
-        payload[key] = m.spike;
-        m = sensor_get_meta(i + 3); // 3-5 = INA3221 voltage
-        snprintf(key, sizeof(key), "ina3221_v%d_stddev", i);
-        payload[key] = m.stddev;
-        snprintf(key, sizeof(key), "ina3221_v%d_spike", i);
-        payload[key] = m.spike;
+        JsonObject metadata = payload["_meta"].to<JsonObject>();
+        metadata["rssi"] = WiFi.RSSI();
+        metadata["vcc"] = analogRead(0) / 4095.0f * 3.3f;
+        metadata["uptime_s"] = millis() / 1000;
+        metadata["ip"] = get_local_ip_str();
+        metadata["heap_free"] = ESP.getFreeHeap();
+        metadata["temp_c"] = temperatureRead();
     }
-
-    JsonObject metadata = g_supa_doc["p_metadata"].to<JsonObject>();
-    metadata["rssi"] = WiFi.RSSI();
-    metadata["vcc"] = analogRead(0) / 4095.0f * 3.3f;
-    metadata["uptime_s"] = millis() / 1000;
-    metadata["ip"] = get_local_ip_str();
-    metadata["heap_free"] = ESP.getFreeHeap();
-    metadata["temp_c"] = temperatureRead();  // ESP32 internal sensor, Celsius
 
     g_supa_doc["p_recorded_at"] = (uint32_t)epoch_s;
 
-    static char buffer[2048];
+    static char buffer[3072];
     size_t len = serializeJson(g_supa_doc, buffer);
 
-    // HTTP primary — WebSocket broadcasts have no guaranteed delivery to DB
     int rc = telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
     if (rc != 200 && rc != 201 && rc != 204) {
         print_http_error(g_supa_http, rc);
@@ -919,7 +917,7 @@ void publish_data_supabase(const SensorData& data) {
         }
     }
 
-    // Update calibration status table while baseline is collecting
+    g_batch_count = 0;
     publish_calibration_status();
 }
 
