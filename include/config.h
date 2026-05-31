@@ -16,9 +16,9 @@
 #define BLYNK_TEMPLATE_NAME "PowerMonitor"
 #define BLYNK_AUTH_TOKEN    "YOUR_BLYNK_TOKEN"
 
-// I2C bus pins
-#define I2C_SDA         16
-#define I2C_SCL         17
+// I2C bus pins (ESP32-C3)
+#define I2C_SDA         5
+#define I2C_SCL         6
 #define I2C_FREQ        100000
 
 // Hardware enable/disable
@@ -76,11 +76,11 @@
 #define LOG_MAX_DELTA_MA      32760
 #define LOG_MAX_DELTA_POWER   32760
 
-// Relay GPIO defaults
-#define RELAY_1_GPIO    25
-#define RELAY_2_GPIO    26
-#define RELAY_3_GPIO    27
-#define RELAY_4_GPIO    14
+// Relay GPIO defaults (ESP32-C3)
+#define RELAY_1_GPIO    7
+#define RELAY_2_GPIO    10
+#define RELAY_3_GPIO    20
+#define RELAY_4_GPIO    21
 
 // Serial1 interface (external device: inverter, generator, etc.)
 // TX not needed — RX only on D23
