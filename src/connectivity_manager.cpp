@@ -138,9 +138,11 @@ static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
 
 static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     if (WiFi.status() != WL_CONNECTED) return false;
-    if (ESP.getFreeHeap() < 13000) return false;
+    if (ESP.getFreeHeap() < 12288) return false;
     if (g_supa_http_ready) {
-        // Force fresh connection — stale TLS sessions cause rc=-1 on ESP32
+        // Always tear down and rebuild — setReuse(false) means no pooling benefit,
+        // and WiFiClientSecure::connected() only checks TCP, not TLS session health.
+        // Keeping a dead TLS session alive causes rc=-1 on every subsequent POST.
         supabase_http_reset();
     }
 
