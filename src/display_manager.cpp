@@ -1,6 +1,4 @@
 #include "display_manager.h"
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 #include "config.h"
 #include "coulomb_counter.h"
 #include "data_logger.h"
@@ -69,8 +67,9 @@ static void draw_status_page(const char* ip_str, float total_power, float temp_c
 
 static void draw_channel_page(uint8_t ch, const SensorData& data) {
     float v, i, p;
-    char name[24] = "";
-    VirtualChannelConfig vc;
+    static char name[24];
+    static VirtualChannelConfig vc;
+    name[0] = '\0';
     bool has_vc = settings_load_virtual_channel(ch, &vc);
 
     if (has_vc && (vc.voltage_src > 0 || vc.current_src > 0)) {
@@ -147,7 +146,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
 
     // Bottom: SoC or mAh/Ah at y=50
     float mAh = get_coulomb_mAh(ch);
-    BatteryConfig bat;
+    static BatteryConfig bat;
     float soc = -1;
     if (settings_load_battery(ch, &bat) && bat.capacity_mAh > 0.001f) {
         soc = bat.initial_soc_pct + (mAh / bat.capacity_mAh) * 100.0f;
@@ -216,7 +215,7 @@ void init_display() {
     display->setCursor(0, 0);
     display->println("Init...");
     display->display();
-    vTaskDelay(pdMS_TO_TICKS(500));
+    delay(500);
 
     display->clearDisplay();
     display->setTextSize(2);
@@ -226,7 +225,7 @@ void init_display() {
     display->setCursor(20, 40);
     display->println("Monitor");
     display->display();
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    delay(2000);
     wire_started = true;
 }
 
