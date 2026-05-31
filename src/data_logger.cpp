@@ -178,15 +178,22 @@ void log_sample(const SensorData& data, uint32_t timestamp_ms) {
         }
         entry_count++;
     } else {
-        // Buffer full — flush to LittleFS, only drop if flash itself is full
+        // Buffer full — only write to LittleFS if network is down.
+        // When WiFi is connected, entries go to RAM and get published directly.
+        bool network_down = (WiFi.status() != WL_CONNECTED);
         size_t fs_total = LittleFS.totalBytes();
         size_t fs_used  = LittleFS.usedBytes();
         if (fs_used >= fs_total || (fs_total - fs_used) < 4096) {
             Serial.println("[LOG] flash full, dropping oldest entries");
             tail = head;
             entry_count = 0;
-        } else {
+        } else if (network_down) {
             flush_to_littlefs();
+        } else {
+            // Network up — just drop oldest entries, they get published from RAM
+            Serial.println("[LOG] buffer full but network up, dropping oldest");
+            tail = head;
+            entry_count = 0;
         }
         // After flush (or drop), retry write
         if (can_fit(entry_size)) {

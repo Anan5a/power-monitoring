@@ -944,7 +944,13 @@ void publish_data_supabase(const SensorData& data) {
     // Serial.printf("[JSON] %s\n", buffer);
 
     int rc = telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
-    if (rc != 200 && rc != 201 && rc != 204) {
+    if (rc == 200 || rc == 201 || rc == 204) {
+        // Network confirmed up and reachable — clear any stale overflow file
+        // since entries were captured in RAM and have now been published.
+        if (log_has_overflow_file()) {
+            log_close_overflow();
+        }
+    } else {
         print_http_error(g_supa_http, rc);
         if (rc == 400) {
             Serial.print("Payload preview: ");
