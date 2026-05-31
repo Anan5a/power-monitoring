@@ -138,7 +138,9 @@ static void handle_command(const char* json) {
         rt.soc_high_pct = doc["soc_high_pct"] | 0.0f;
         rt.trip_delay_ms = doc["trip_delay_ms"] | 1000;
         rt.reset_delay_ms = doc["reset_delay_ms"] | 5000;
-        rt.gpio_pin = doc["gpio_pin"] | 25;
+        uint8_t idx = doc["idx"] | 0;
+        uint8_t default_relay_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
+        rt.gpio_pin = default_relay_pins[idx];  // use board default, not hardcoded 25
         rt.active_high = doc["active_high"] | false;
         rt.enabled = doc["enabled"] | true;
         settings_save_relay(doc["idx"] | 0, &rt);
@@ -537,11 +539,12 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         rt.overcurrent_A = doc["overcurrent_A"] | 0.0f;
         rt.undervoltage_V = doc["undervoltage_V"] | 0.0f;
         rt.soc_low_pct = doc["soc_low_pct"] | 0.0f;
-        rt.soc_high_pct = doc["soc_high_pct"] | 0.0f;
+        rt.soc_high_pct = doc["soc_high_pct"] | 100.0f;
         rt.trip_delay_ms = doc["trip_delay_ms"] | 1000;
         rt.reset_delay_ms = doc["reset_delay_ms"] | 5000;
-        rt.gpio_pin = doc["gpio_pin"] | 25;
-        rt.active_high = doc["active_high"] | false;
+        uint8_t default_relay_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
+        rt.gpio_pin = default_relay_pins[rt.channel];  // always use board-specific default — don't accept gpio_pin from Supabase
+        rt.active_high = doc["active_high"] | true;
         rt.enabled = doc["enabled"] | true;
         settings_save_relay(doc["idx"] | 0, &rt);
         Serial.println("[CMD] relay saved");
