@@ -38,7 +38,12 @@ static bool is_valid_uuid(const char* s) {
     return true;
 }
 
-// Persistent HTTPS client for Supabase — avoids repeated TLS handshakes / heap churn
+// Persistent HTTPS clients for Supabase
+// g_telemetry_http: connection reuse for 5s telemetry POSTs (high frequency)
+// g_supa_http: fresh connection per request for low-frequency calls (relays, settings)
+static WiFiClientSecure g_telemetry_client;
+static HTTPClient        g_telemetry_http;
+static bool              g_telemetry_http_ready = false;
 static WiFiClientSecure g_supa_client;
 static HTTPClient       g_supa_http;
 static bool             g_supa_http_ready = false;
@@ -61,10 +66,55 @@ static void drain_response() {
     }
 }
 
+static void telemetry_http_reset() {
+    if (g_telemetry_http_ready) {
+        g_telemetry_http.end();
+        g_telemetry_client.stop();
+        g_telemetry_http_ready = false;
+    }
+}
+
+static void drain_telemetry_response() {
+    if (!g_telemetry_http_ready) return;
+    Stream& stream = g_telemetry_http.getStream();
+    unsigned long t0 = millis();
+    while (stream.available() && millis() - t0 < 500) {
+        stream.read();
+    }
+}
+
+static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
+    if (WiFi.status() != WL_CONNECTED) return false;
+    if (ESP.getFreeHeap() < 13000) return false;
+    if (!g_telemetry_http_ready) {
+        g_telemetry_client.setInsecure();
+        g_telemetry_http.setReuse(true);  // connection reuse for high-frequency telemetry
+        if (!g_telemetry_http.begin(g_telemetry_client, full_url)) {
+            g_telemetry_http_ready = false;
+            return false;
+        }
+        g_telemetry_http.addHeader("Content-Type", "application/json");
+        g_telemetry_http.addHeader("apikey", anon_key);
+        char auth_hdr[384];
+        snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
+        g_telemetry_http.addHeader("Authorization", auth_hdr);
+        g_telemetry_http_ready = true;
+    } else {
+        if (!g_telemetry_client.connected()) {
+            telemetry_http_reset();
+            return telemetry_http_prepare(full_url, anon_key);
+        }
+        g_telemetry_http.begin(g_telemetry_client, full_url);
+    }
+    return true;
+}
+
 static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     if (WiFi.status() != WL_CONNECTED) return false;
-    // C3: disable connection reuse — setReuse(true) + TLS session cache causes
-    // ~44KB heap leak on connection close. Always use fresh connection.
+    // C3: at least 12KB free heap needed for TLS handshake + request buffers.
+    // Without this check, error -1 dominates because SSL context allocation (~8KB)
+    // fails on a tight heap, and the failed request chain keeps the heap low.
+    if (ESP.getFreeHeap() < 12288) return false;
     if (g_supa_http_ready) {
         supabase_http_reset();
     }
@@ -81,6 +131,21 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     g_supa_http.addHeader("Authorization", auth_hdr);
     g_supa_http_ready = true;
     return true;
+}
+
+static int telemetry_post(const char* url_path, const char* payload, size_t len,
+    const char* supabase_url, const char* anon_key) {
+    char full_url[256];
+    snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
+    if (!telemetry_http_prepare(full_url, anon_key)) return -1;
+    int rc = g_telemetry_http.POST((uint8_t*)payload, len);
+    if (rc < 0) {
+        drain_telemetry_response();
+        telemetry_http_reset();
+    } else {
+        drain_telemetry_response();
+    }
+    return rc;
 }
 
 static int supabase_post(const char* url_path, const char* payload, size_t len,
@@ -305,6 +370,8 @@ void loop_connectivity() {
     // WiFi came back up after boot failure — re-enable network
     if (skip_network && wifi_connected) {
         skip_network = false;
+        IPAddress ip = WiFi.localIP();
+        snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
         Serial.println("[WiFi] connection restored — network re-enabled");
     }
 
@@ -417,7 +484,7 @@ static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v,
     static char buffer[512];
     size_t len = serializeJson(g_supa_doc, buffer);
 
-    int rc = supabase_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
+    int rc = telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
     if (rc != 200 && rc != 201 && rc != 204) {
         print_http_error(g_supa_http, rc);
     }
@@ -674,7 +741,7 @@ void publish_data_supabase(const SensorData& data) {
     if (skip_network) return;
     // Heap check BEFORE last_pub_ms reset — peak ~8KB during serializeJson()
     // Keep buffer tight to allow sensor task + network task to coexist on ~320KB heap
-    if (ESP.getFreeHeap() < 8000) {
+    if (ESP.getFreeHeap() < 13000) {
         static unsigned long last_warn = 0;
         if (millis() - last_warn > 10000) {
             Serial.printf("[WARN] Low heap (%d), skipping Supabase publish\n", ESP.getFreeHeap());
@@ -809,7 +876,7 @@ void publish_data_supabase(const SensorData& data) {
     size_t len = serializeJson(g_supa_doc, buffer);
 
     // HTTP primary — WebSocket broadcasts have no guaranteed delivery to DB
-    int rc = supabase_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
+    int rc = telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
     if (rc != 200 && rc != 201 && rc != 204) {
         print_http_error(g_supa_http, rc);
         if (rc == 400) {
@@ -1143,7 +1210,7 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
 
 void check_settings_commands() {
     if (skip_network) return;
-    if (ESP.getFreeHeap() < 3072) return;
+    if (ESP.getFreeHeap() < 13000) return;
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
