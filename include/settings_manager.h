@@ -43,6 +43,7 @@ struct RelayRule {
     uint8_t gpio_pin;
     bool active_high;
     bool enabled;
+    bool is_energized;       // current physical state — persisted to NVS
 };
 
 struct Calibration {

@@ -90,7 +90,16 @@ bool settings_load_relay(uint8_t idx, RelayRule* out) {
     snprintf(key, sizeof(key), "relay_%d", idx);
     if (!prefs.isKey(key)) return false;
     size_t len = prefs.getBytesLength(key);
-    if (len != sizeof(RelayRule)) return false;
+    if (len != sizeof(RelayRule)) {
+        // Backward compat: older struct without is_energized field — zero new fields
+        if (len < sizeof(RelayRule)) {
+            memset(out, 0, sizeof(RelayRule));
+            prefs.getBytes(key, out, len);
+            out->is_energized = false;  // default to off for migrated entries
+            return true;
+        }
+        return false;
+    }
     prefs.getBytes(key, out, sizeof(RelayRule));
     return true;
 }

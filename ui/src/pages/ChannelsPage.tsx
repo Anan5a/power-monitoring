@@ -273,10 +273,12 @@ export default function ChannelsPage() {
 
 function RelaysTab({ deviceKey }: { deviceKey: string }) {
   const [relayStates, setRelayStates] = useState<Array<{relay_index:number,gpio_pin:number,is_energized:boolean,last_tripped_at?:string}>>([])
+  const [relayLoaded, setRelayLoaded] = useState(false)
 
   useEffect(() => {
     supabase.from('relay_states').select('*').eq('device_key', deviceKey).then(({ data }) => {
       if (data) setRelayStates(data as typeof relayStates)
+      setRelayLoaded(true)
     })
 
     const relayChannel = supabase
@@ -306,10 +308,12 @@ function RelaysTab({ deviceKey }: { deviceKey: string }) {
   }, [deviceKey])
 
   const toggleRelay = async (idx: number) => {
+    const rs = relayStates.find(r => r.relay_index === idx)
+    const isOn = rs?.is_energized ?? false
     await supabase.from('settings_commands').insert({
       device_key: deviceKey,
       cmd_type: 'set_relay',
-      payload: { idx, enabled: true, overcurrent_A: 0, undervoltage_V: 0, soc_low_pct: 0, soc_high_pct: 100, trip_delay_ms: 500, reset_delay_ms: 5000, active_high: true },
+      payload: { idx, is_energized: !isOn, enabled: true, overcurrent_A: 0, undervoltage_V: 0, soc_low_pct: 0, soc_high_pct: 100, trip_delay_ms: 500, reset_delay_ms: 5000, active_high: true },
       status: 'pending',
     })
   }
@@ -335,9 +339,10 @@ function RelaysTab({ deviceKey }: { deviceKey: string }) {
             )}
             <button
               onClick={() => toggleRelay(idx)}
-              className={`w-full mt-2 py-1 rounded text-sm font-medium ${isOn ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+              disabled={!relayLoaded}
+              className={`w-full mt-2 py-1 rounded text-sm font-medium ${isOn ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-blue-600 hover:bg-blue-700 text-white'} ${!relayLoaded ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
-              {isOn ? 'Turn Off' : 'Turn On'}
+              {!relayLoaded ? 'Loading...' : isOn ? 'Turn Off' : 'Turn On'}
             </button>
           </div>
         )

@@ -1457,12 +1457,19 @@ void check_settings_commands() {
         g_deferred_requests |= 1;  // sync_device_channels
         if (strcmp(cmd_type, "set_relay") == 0) {
             uint8_t idx = 0;
+            bool energize = false;
             if (JsonObject obj = g_cal_doc["payload"]) {
                 idx = obj["idx"] | 0;
+                if (obj.containsKey("is_energized")) {
+                    energize = obj["is_energized"].as<bool>();
+                    relay_set(idx, energize);  // toggles GPIO + publishes to Supabase
+                    g_deferred_requests &= ~4; // skip deferred sync (relay_set already published)
+                } else {
+                    g_deferred_relay_idx = idx;
+                    g_deferred_relay_state = get_relay_state(idx);
+                    g_deferred_requests |= 4;  // sync relay state via deferred path
+                }
             }
-            g_deferred_relay_idx = idx;
-            g_deferred_relay_state = get_relay_state(idx);
-            g_deferred_requests |= 4;  // sync relay state
         }
     } else {
         // Read any error body before resetting — stale response data corrupts subsequent requests

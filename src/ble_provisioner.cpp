@@ -6,6 +6,7 @@
 #include "sensor_manager.h"
 #include "data_logger.h"
 #include "coulomb_counter.h"
+#include "relay_controller.h"
 #include "connectivity_manager.h"
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -143,7 +144,9 @@ static void handle_command(const char* json) {
         rt.gpio_pin = default_relay_pins[idx];  // use board default, not hardcoded 25
         rt.active_high = doc["active_high"] | false;
         rt.enabled = doc["enabled"] | true;
-        settings_save_relay(doc["idx"] | 0, &rt);
+        rt.is_energized = get_relay_state(idx);  // preserve current state
+        settings_save_relay(idx, &rt);
+        publish_relay_state(idx, rt.is_energized);  // sync to Supabase
         send_response("{\"ok\":true,\"msg\":\"relay_saved\"}");
     } else if (strcmp(cmd, "set_battery") == 0) {
         if (!check_pin(doc)) return;

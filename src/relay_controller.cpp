@@ -118,6 +118,17 @@ void relay_set_auto(bool enabled) {
     relay_auto_enabled = enabled;
 }
 
+void relay_set(uint8_t idx, bool is_energized) {
+    RelayRule rt;
+    if (!settings_load_relay(idx, &rt)) return;
+    digitalWrite(rt.gpio_pin, rt.active_high ? (is_energized ? HIGH : LOW) : (is_energized ? LOW : HIGH));
+    relay_states[idx].energized = is_energized;
+    relay_states[idx].was_energized = is_energized;
+    rt.is_energized = is_energized;
+    settings_save_relay(idx, &rt);
+    publish_relay_state(idx, is_energized);
+}
+
 bool get_relay_state(uint8_t idx) {
     RelayRule rt;
     if (!settings_load_relay(idx, &rt) || !rt.enabled) return false;
