@@ -432,9 +432,9 @@ export default function SettingsPage() {
               </div>
             )}
 
-            {/* Relays tab placeholder */}
+            {/* Relays tab */}
             {activeTab === 'relays' && (
-              <RelaysTab onSave={(idx, rt) =>
+              <RelaysTab deviceKey={selectedKey} onSave={(idx, rt) =>
                 sendCommand('set_relay', { idx, ...rt })
               } />
             )}
@@ -792,7 +792,7 @@ function BatteriesTab({ onSave, sendCommand }: { onSave: (ch: number, bat: Batte
   )
 }
 
-function RelaysTab({ onSave }: { onSave: (idx: number, rt: RelayRule) => void }) {
+function RelaysTab({ deviceKey, onSave }: { deviceKey: string; onSave: (idx: number, rt: RelayRule) => void }) {
   const [relays, setRelays] = useState(Array.from({ length: 4 }, () => ({
     channel: 0, overcurrent_A: '0', undervoltage_V: '0',
     soc_low_pct: '0', soc_high_pct: '0', trip_delay_ms: '1000',
@@ -800,9 +800,31 @@ function RelaysTab({ onSave }: { onSave: (idx: number, rt: RelayRule) => void })
   })))
 
   useEffect(() => {
-    // Load from relay_states via props — parent passes deviceKey
-    // This component is rendered inside a selectedKey context
-  }, [])
+    if (!deviceKey) return
+    supabase.from('relay_states').select('*').eq('device_key', deviceKey).order('relay_index').then(({ data }) => {
+      if (!data) return
+      setRelays(prev => prev.map((r, i) => {
+        const db = data.find(d => d.relay_index === i)
+        return db ? { ...r, gpio_pin: String(db.gpio_pin), active_high: db.active_high ?? true } : r
+      }))
+    })
+
+    const ch = supabase
+      .channel(`settings-relays-${deviceKey}`)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'relay_states',
+        filter: `device_key=eq.${deviceKey}`,
+      }, (payload) => {
+        const r = payload.new as { relay_index: number; active_high?: boolean; gpio_pin: number }
+        if (r.relay_index >= 0 && r.relay_index < 4) {
+          setRelays(prev => prev.map((rel, i) =>
+            i === r.relay_index ? { ...rel, active_high: r.active_high ?? rel.active_high, gpio_pin: String(r.gpio_pin) } : rel
+          ))
+        }
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [deviceKey])
 
   return (
     <div className="bg-white rounded-lg shadow p-6">
