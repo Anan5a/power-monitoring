@@ -142,8 +142,11 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     if (g_supa_http_ready) {
         supabase_http_reset();
     }
+    // Force-close the socket before begin() — prevents stale TCP state
+    // from corrupting the new TLS handshake on reused WiFiClientSecure instance
+    g_supa_client.stop();
     g_supa_client.setInsecure(); // skip cert verification
-    g_supa_client.setHandshakeTimeout(30);
+    g_supa_client.setHandshakeTimeout(10);
     g_supa_http.setReuse(false);
     if (!g_supa_http.begin(g_supa_client, full_url)) {
         Serial.printf("[SUPA_HTTP] begin failed for %s\n", full_url);
