@@ -66,6 +66,7 @@ create table public.relay_states (
     relay_index smallint not null,
     gpio_pin smallint not null,
     is_energized boolean default false,
+    active_high boolean default true,
     last_tripped_at timestamptz,
     constraint unique_relay unique(device_key, relay_index)
 );
@@ -136,14 +137,16 @@ create or replace function public.sync_relay_state(
     p_relay_index smallint,
     p_gpio_pin smallint,
     p_is_energized boolean,
+    p_active_high boolean default true,
     p_last_tripped_at timestamptz
 ) returns void language plpgsql security definer as $$
 begin
-    insert into public.relay_states (device_key, relay_index, gpio_pin, is_energized, last_tripped_at)
-    values (p_device_key, p_relay_index, p_gpio_pin, p_is_energized, p_last_tripped_at)
+    insert into public.relay_states (device_key, relay_index, gpio_pin, is_energized, active_high, last_tripped_at)
+    values (p_device_key, p_relay_index, p_gpio_pin, p_is_energized, p_active_high, p_last_tripped_at)
     on conflict (device_key, relay_index) do update
         set gpio_pin = EXCLUDED.gpio_pin,
             is_energized = EXCLUDED.is_energized,
+            active_high = EXCLUDED.active_high,
             last_tripped_at = EXCLUDED.last_tripped_at;
 end;
 $$;

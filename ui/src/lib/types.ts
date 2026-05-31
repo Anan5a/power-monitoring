@@ -86,9 +86,10 @@ export interface RelayRule {
   soc_high_pct: number
   trip_delay_ms: number
   reset_delay_ms: number
-  gpio_pin: number
+  gpio_pin?: number
   active_high: boolean
   enabled: boolean
+  is_energized?: boolean
 }
 
 export interface VirtualChannelConfig {

@@ -1225,6 +1225,7 @@ void publish_relay_state(uint8_t idx, bool is_energized) {
     rpc_doc["p_relay_index"] = idx;
     rpc_doc["p_gpio_pin"] = rt.gpio_pin;
     rpc_doc["p_is_energized"] = is_energized;
+    rpc_doc["p_active_high"] = rt.active_high;
     rpc_doc["p_last_tripped_at"] = "now";
 
     static char buffer[256];

@@ -272,7 +272,7 @@ export default function ChannelsPage() {
 }
 
 function RelaysTab({ deviceKey }: { deviceKey: string }) {
-  const [relayStates, setRelayStates] = useState<Array<{relay_index:number,gpio_pin:number,is_energized:boolean,last_tripped_at?:string}>>([])
+  const [relayStates, setRelayStates] = useState<Array<{relay_index:number,gpio_pin:number,is_energized:boolean,active_high?:boolean,last_tripped_at?:string}>>([])
   const [relayLoaded, setRelayLoaded] = useState(false)
 
   useEffect(() => {
@@ -310,10 +310,11 @@ function RelaysTab({ deviceKey }: { deviceKey: string }) {
   const toggleRelay = async (idx: number) => {
     const rs = relayStates.find(r => r.relay_index === idx)
     const isOn = rs?.is_energized ?? false
+    const activeHigh = rs?.active_high ?? true
     await supabase.from('settings_commands').insert({
       device_key: deviceKey,
       cmd_type: 'set_relay',
-      payload: { idx, is_energized: !isOn, enabled: true, overcurrent_A: 0, undervoltage_V: 0, soc_low_pct: 0, soc_high_pct: 100, trip_delay_ms: 500, reset_delay_ms: 5000, active_high: true },
+      payload: { idx, is_energized: !isOn, active_high: activeHigh, enabled: true, overcurrent_A: 0, undervoltage_V: 0, soc_low_pct: 0, soc_high_pct: 100, trip_delay_ms: 500, reset_delay_ms: 5000 },
       status: 'pending',
     })
   }

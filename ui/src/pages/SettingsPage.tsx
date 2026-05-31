@@ -796,12 +796,18 @@ function RelaysTab({ onSave }: { onSave: (idx: number, rt: RelayRule) => void })
   const [relays, setRelays] = useState(Array.from({ length: 4 }, () => ({
     channel: 0, overcurrent_A: '0', undervoltage_V: '0',
     soc_low_pct: '0', soc_high_pct: '0', trip_delay_ms: '1000',
-    reset_delay_ms: '5000', gpio_pin: '25', active_high: false, enabled: true,
+    reset_delay_ms: '5000', gpio_pin: '--', active_high: true, enabled: true,
   })))
+
+  useEffect(() => {
+    // Load from relay_states via props — parent passes deviceKey
+    // This component is rendered inside a selectedKey context
+  }, [])
 
   return (
     <div className="bg-white rounded-lg shadow p-6">
       <h3 className="font-semibold mb-4">Relay Rules</h3>
+      <p className="text-xs text-gray-500 mb-4">GPIO pin is set by the device firmware based on board type. Active High should match your relay board wiring (NO=high, NC=low).</p>
       <div className="space-y-4">
         {[0,1,2,3].map(idx => (
           <div key={idx} className="border rounded p-3">
@@ -841,8 +847,8 @@ function RelaysTab({ onSave }: { onSave: (idx: number, rt: RelayRule) => void })
               </div>
               <div>
                 <label className="text-xs text-gray-500">GPIO</label>
-                <input value={relays[idx].gpio_pin} onChange={e => setRelays(r => r.map((x, i) => i === idx ? { ...x, gpio_pin: e.target.value } : x))}
-                  className="w-full rounded border border-gray-300 px-1 py-1" />
+                <input value={relays[idx].gpio_pin} readOnly
+                  className="w-full rounded border border-gray-200 px-1 py-1 bg-gray-50 text-gray-500" />
               </div>
               <div className="flex items-center gap-1 pt-4">
                 <input type="checkbox" checked={relays[idx].active_high}
@@ -858,7 +864,6 @@ function RelaysTab({ onSave }: { onSave: (idx: number, rt: RelayRule) => void })
               soc_high_pct: parseFloat(relays[idx].soc_high_pct) || 0,
               trip_delay_ms: parseInt(relays[idx].trip_delay_ms) || 1000,
               reset_delay_ms: parseInt(relays[idx].reset_delay_ms) || 5000,
-              gpio_pin: parseInt(relays[idx].gpio_pin) || 25,
               active_high: relays[idx].active_high,
               enabled: relays[idx].enabled,
             })} className="mt-2 text-xs bg-blue-600 text-white px-3 py-1 rounded">Save</button>
