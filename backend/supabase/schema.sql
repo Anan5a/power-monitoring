@@ -108,14 +108,15 @@ create policy "own_device_channels" on public.device_channels
 create or replace function public.sync_device_channels(p_device_key text, p_payload jsonb)
 returns void language plpgsql security definer as $$
 begin
-    insert into public.device_channels (device_key, channel_names, battery_profiles, channel_calibration, virtual_channels)
+    insert into public.device_channels (device_key, channel_names, battery_profiles, channel_calibration, virtual_channels, channel_groups)
     values (p_device_key, p_payload->'channel_names', p_payload->'battery_profiles',
-            p_payload->'channel_calibration', p_payload->'virtual_channels')
+            p_payload->'channel_calibration', p_payload->'virtual_channels', p_payload->'channel_groups')
     on conflict (device_key) do update
         set channel_names = EXCLUDED.channel_names,
             battery_profiles = EXCLUDED.battery_profiles,
             channel_calibration = EXCLUDED.channel_calibration,
             virtual_channels = EXCLUDED.virtual_channels,
+            channel_groups = EXCLUDED.channel_groups,
             updated_at = now();
 end;
 $$;
