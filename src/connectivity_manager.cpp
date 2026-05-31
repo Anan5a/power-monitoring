@@ -146,6 +146,7 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     g_supa_client.setHandshakeTimeout(30);
     g_supa_http.setReuse(false);
     if (!g_supa_http.begin(g_supa_client, full_url)) {
+        Serial.printf("[SUPA_HTTP] begin failed for %s\n", full_url);
         g_supa_http_ready = false;
         return false;
     }
@@ -1383,11 +1384,27 @@ void check_settings_commands() {
             g_deferred_requests |= 4;  // sync relay state
         }
     } else {
+        // Read any error body before resetting — stale response data corrupts subsequent requests
+        char err_body[256];
+        size_t err_len = 0;
+        Stream& err_stream = g_supa_http.getStream();
+        unsigned long t0 = millis();
+        while (err_stream.available() && err_len < sizeof(err_body)-1 && millis()-t0 < 1000) {
+            int c = err_stream.read();
+            if (c >= 0) err_body[err_len++] = (char)c;
+        }
+        err_body[err_len] = '\0';
         drain_response();
+        supabase_http_reset();
         static int settings_fail_count = 0;
-        Serial.printf("[SETTINGS] claim failed rc=%d fail_count=%d\n", rc, settings_fail_count);
+        if (err_len > 0) {
+            Serial.printf("[SETTINGS] claim failed rc=%d fail_count=%d err_body(%d): %.*s\n",
+                rc, settings_fail_count, (int)err_len, (int)err_len, err_body);
+        } else {
+            Serial.printf("[SETTINGS] claim failed rc=%d fail_count=%d err_body: (empty)\n",
+                rc, settings_fail_count);
+        }
         if (++settings_fail_count >= 3) {
-            supabase_http_reset();
             settings_fail_count = 0;
         }
     }
