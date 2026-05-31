@@ -616,6 +616,7 @@ static void handle_serial_cli() {
 // ─────────────────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
+    Serial.setTxBufferSize(4096);
     while (!Serial) { ; }
     vTaskDelay(pdMS_TO_TICKS(1000));
     Serial.println("Power Monitor v2 starting...");
