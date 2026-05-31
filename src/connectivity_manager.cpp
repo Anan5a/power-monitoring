@@ -519,6 +519,14 @@ static void send_one_log_entry_supabase(uint32_t timestamp_ms, const int16_t* v,
         payload[key] = get_relay_state(i);
     }
 
+    JsonObject metadata = g_supa_doc["p_metadata"].to<JsonObject>();
+    metadata["rssi"] = WiFi.RSSI();
+    metadata["vcc"] = analogRead(0) / 4095.0f * 3.3f;
+    metadata["uptime_s"] = millis() / 1000;
+    metadata["ip"] = get_local_ip_str();
+    metadata["heap_free"] = ESP.getFreeHeap();
+    metadata["temp_c"] = temperatureRead();
+
     g_supa_doc["p_recorded_at"] = (uint32_t)log_to_epoch(timestamp_ms);
 
     static char buffer[512];
@@ -894,13 +902,15 @@ void publish_data_supabase(const SensorData& data) {
             snprintf(key, sizeof(key), "ina3221_v%d_spike", i); payload[key] = m.spike;
         }
 
-        payload["rssi"] = WiFi.RSSI();
-        payload["vcc"] = analogRead(0) / 4095.0f * 3.3f;
-        payload["uptime_s"] = millis() / 1000;
-        payload["ip"] = get_local_ip_str();
-        payload["heap_free"] = ESP.getFreeHeap();
-        payload["temp_c"] = temperatureRead();
     }
+
+    JsonObject metadata = g_supa_doc["p_metadata"].to<JsonObject>();
+    metadata["rssi"] = WiFi.RSSI();
+    metadata["vcc"] = analogRead(0) / 4095.0f * 3.3f;
+    metadata["uptime_s"] = millis() / 1000;
+    metadata["ip"] = get_local_ip_str();
+    metadata["heap_free"] = ESP.getFreeHeap();
+    metadata["temp_c"] = temperatureRead();
 
     g_supa_doc["p_recorded_at"] = (uint32_t)epoch_s;
 
