@@ -48,9 +48,9 @@ static WiFiClientSecure g_telemetry_client;
 static HTTPClient        g_telemetry_http;
 static bool              g_telemetry_http_ready = false;
 static bool              g_telemetry_error = false;  // force reset after POST failure
-static WiFiClientSecure g_supa_client;
-static HTTPClient       g_supa_http;
-static bool             g_supa_http_ready = false;
+static WiFiClientSecure* g_supa_client = nullptr;
+static HTTPClient        g_supa_http;
+static bool              g_supa_http_ready = false;
 static unsigned long g_defer_cooldown = 0;
 static uint16_t g_deferred_requests = 0;
 static uint8_t  g_deferred_relay_idx = 0;
@@ -67,10 +67,13 @@ static void sync_device_channels_to_supabase();
 
 static void supabase_http_reset() {
     if (g_supa_http_ready) {
-        g_supa_http.setReuse(false); // force _client->stop() inside end()
         g_supa_http.end();
-        g_supa_client.stop();        // belt-and-suspenders: close TLS socket
         g_supa_http_ready = false;
+    }
+    if (g_supa_client) {
+        g_supa_client->stop();
+        delete g_supa_client;
+        g_supa_client = nullptr;
     }
 }
 
@@ -135,21 +138,20 @@ static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
 
 static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     if (WiFi.status() != WL_CONNECTED) return false;
-    if (ESP.getFreeHeap() < 12288) return false;
+    if (ESP.getFreeHeap() < 13000) return false;
     if (g_supa_http_ready) {
+        // Force fresh connection — stale TLS sessions cause rc=-1 on ESP32
         supabase_http_reset();
     }
 
-    // Create a fresh WiFiClientSecure each time and move it into the member.
-    // This destroys any stale SSL session state from previous connections,
-    // which was causing the server to close the connection before POST completed.
-    g_supa_client = WiFiClientSecure();
-    g_supa_client.setInsecure();
-    g_supa_client.setHandshakeTimeout(30);
+    // Heap-allocate fresh WiFiClientSecure each call — ensures clean SSL context.
+    g_supa_client = new WiFiClientSecure();
+    g_supa_client->setInsecure();
+    g_supa_client->setHandshakeTimeout(30);
     g_supa_http.setReuse(false);
-    if (!g_supa_http.begin(g_supa_client, full_url)) {
+    if (!g_supa_http.begin(*g_supa_client, full_url)) {
         Serial.printf("[SUPA_HTTP] begin failed: %s\n", full_url);
-        g_supa_http_ready = false;
+        supabase_http_reset();
         return false;
     }
 
@@ -186,6 +188,12 @@ static int supabase_post(const char* url_path, const char* payload, size_t len,
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!supabase_http_prepare(full_url, anon_key)) return -1;
     int rc = g_supa_http.POST((uint8_t*)payload, len);
+    if (rc < 0) {
+        supabase_http_reset();
+        delay(50);
+        if (!supabase_http_prepare(full_url, anon_key)) return -1;
+        rc = g_supa_http.POST((uint8_t*)payload, len);
+    }
     drain_response();
     supabase_http_reset();
     return rc;
@@ -197,6 +205,12 @@ static int supabase_patch(const char* url_path, const char* payload, size_t len,
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!supabase_http_prepare(full_url, anon_key)) return -1;
     int rc = g_supa_http.sendRequest("PATCH", (uint8_t*)payload, len);
+    if (rc < 0) {
+        supabase_http_reset();
+        delay(50);
+        if (!supabase_http_prepare(full_url, anon_key)) return -1;
+        rc = g_supa_http.sendRequest("PATCH", (uint8_t*)payload, len);
+    }
     drain_response();
     supabase_http_reset();
     return rc;
@@ -1323,6 +1337,14 @@ void check_settings_commands() {
     snprintf(full_url, sizeof(full_url), "%s/rest/v1/rpc/claim_settings_command", supabase_url);
     if (!supabase_http_prepare(full_url, anon_key)) return;
     int rc = g_supa_http.POST((uint8_t*)buffer, len);
+    // Retry once on rc=-1 (TLS handshake failure after WiFi reconnect)
+    if (rc < 0) {
+        Serial.println("[SETTINGS] claim rc=-1, retrying...");
+        supabase_http_reset();
+        delay(100);
+        if (!supabase_http_prepare(full_url, anon_key)) return;
+        rc = g_supa_http.POST((uint8_t*)buffer, len);
+    }
     Serial.printf("[SETTINGS] claim HTTP rc=%d\n", rc);
     if (rc == 200 || rc == 201 || rc == 204) {
         char body[1536];
@@ -1337,8 +1359,7 @@ void check_settings_commands() {
         drain_response();
 
         Serial.printf("[SETTINGS] claim body_len=%d\n", body_len);
-
-        if (body_len == 0) return;
+        if (body_len == 0) { supabase_http_reset(); return; }
         // Skip HTTP chunked encoding size prefix if present (e.g. "f2\r\n...")
         const char* json_start = body;
         if (body_len > 2 && body[0] != '{') {
@@ -1348,7 +1369,7 @@ void check_settings_commands() {
                 Serial.printf("[SETTINGS] chunked prefix skipped, json_start at offset %d\n", json_start - body);
             }
         }
-        if (json_start[0] == '\0' || strncmp(json_start, "null", 4) == 0) return;
+        if (json_start[0] == '\0' || strncmp(json_start, "null", 4) == 0) { supabase_http_reset(); return; }
 
         static char resp_buf[1536];
         size_t json_offset = json_start - body;
@@ -1362,11 +1383,12 @@ void check_settings_commands() {
         DeserializationError err = deserializeJson(g_cal_doc, resp_buf);
         if (err) {
             Serial.printf("[SETTINGS] parse error: %s | body: %.200s\n", err.c_str(), resp_buf);
+            supabase_http_reset();
             return;
         }
 
         const char* cmd_type = g_cal_doc["cmd_type"] | "";
-        if (strlen(cmd_type) == 0) return;
+        if (strlen(cmd_type) == 0) { supabase_http_reset(); return; }
 
         char payload_buf[1024];
         JsonVariant payload_var = g_cal_doc["payload"];
