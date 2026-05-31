@@ -1462,8 +1462,8 @@ void check_settings_commands() {
             if (JsonObject obj = g_cal_doc["payload"]) {
                 idx = obj["idx"] | 0;
                 Serial.printf("[SETTINGS] set_relay idx=%d has_is_energized=%d val=%d\n",
-                    idx, obj.containsKey("is_energized"), obj["is_energized"].as<int>());
-                if (obj.containsKey("is_energized")) {
+                    idx, !obj["is_energized"].isNull(), obj["is_energized"].as<int>());
+                if (!obj["is_energized"].isNull()) {
                     energize = obj["is_energized"].as<bool>();
                     relay_set(idx, energize);  // toggles GPIO + publishes to Supabase
                     g_deferred_requests &= ~4; // skip deferred sync (relay_set already published)

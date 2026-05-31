@@ -52,11 +52,23 @@ export default function RelayControl({ deviceKey }: Props) {
 
   async function toggle(relay: RelayState) {
     const newState = !relay.is_energized
-    await supabase
-      .from('relay_states')
-      .update({ is_energized: newState })
-      .eq('id', relay.id)
-    setRelays(relays.map(r => r.id === relay.id ? { ...r, is_energized: newState } : r))
+    await supabase.from('settings_commands').insert({
+      device_key: deviceKey,
+      cmd_type: 'set_relay',
+      payload: {
+        idx: relay.relay_index,
+        is_energized: newState,
+        active_high: relay.active_high ?? true,
+        enabled: true,
+        overcurrent_A: 0,
+        undervoltage_V: 0,
+        soc_low_pct: 0,
+        soc_high_pct: 100,
+        trip_delay_ms: 500,
+        reset_delay_ms: 5000,
+      },
+      status: 'pending',
+    })
   }
 
   if (relays.length === 0) return null

@@ -42,6 +42,7 @@ export interface RelayState {
   relay_index: number
   gpio_pin: number
   is_energized: boolean
+  active_high?: boolean
   last_tripped_at: string | null
 }
 
