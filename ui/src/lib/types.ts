@@ -40,6 +40,7 @@ export interface RelayState {
   id: number
   device_key: string
   relay_index: number
+  channel: number
   gpio_pin: number
   is_energized: boolean
   active_high?: boolean

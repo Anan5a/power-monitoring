@@ -1226,6 +1226,7 @@ void publish_relay_state(uint8_t idx, bool is_energized) {
     rpc_doc["p_is_energized"] = is_energized;
     rpc_doc["p_active_high"] = rt.active_high;
     rpc_doc["p_last_tripped_at"] = "now";
+    rpc_doc["p_channel"] = rt.channel;
 
     static char buffer[256];
     size_t len = serializeJson(rpc_doc, buffer);

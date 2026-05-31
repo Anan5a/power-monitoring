@@ -64,6 +64,7 @@ create table public.relay_states (
     id bigint generated always as identity primary key,
     device_key text not null references public.devices(device_key) on delete cascade,
     relay_index smallint not null,
+    channel smallint not null default 0,
     gpio_pin smallint not null,
     is_energized boolean default false,
     active_high boolean default true,
@@ -139,15 +140,17 @@ create or replace function public.sync_relay_state(
     p_gpio_pin smallint,
     p_is_energized boolean,
     p_active_high boolean default true,
-    p_last_tripped_at timestamptz
+    p_last_tripped_at timestamptz,
+    p_channel smallint default 0
 ) returns void language plpgsql security definer as $$
 begin
-    insert into public.relay_states (device_key, relay_index, gpio_pin, is_energized, active_high, last_tripped_at)
-    values (p_device_key, p_relay_index, p_gpio_pin, p_is_energized, p_active_high, p_last_tripped_at)
+    insert into public.relay_states (device_key, relay_index, channel, gpio_pin, is_energized, active_high, last_tripped_at)
+    values (p_device_key, p_relay_index, p_channel, p_gpio_pin, p_is_energized, p_active_high, p_last_tripped_at)
     on conflict (device_key, relay_index) do update
         set gpio_pin = EXCLUDED.gpio_pin,
             is_energized = EXCLUDED.is_energized,
             active_high = EXCLUDED.active_high,
+            channel = EXCLUDED.channel,
             last_tripped_at = EXCLUDED.last_tripped_at;
 end;
 $$;

@@ -62,11 +62,13 @@ export default function DashboardPage() {
         table: 'relay_states',
         filter: `device_key=eq.${selectedDevice.device_key}`,
       }, (payload) => {
-        const r = payload.new as { relay_index: number; is_energized: boolean }
-        if (r.relay_index >= 0 && r.relay_index < 4) {
+        const r = payload.new as { relay_index: number; channel: number; is_energized: boolean }
+        // Use channel (which VC this relay controls) as array index
+        const vcIdx = r.channel >= 0 && r.channel < 4 ? r.channel : r.relay_index
+        if (vcIdx >= 0 && vcIdx < 4) {
           setRelayOn(prev => {
             const next = [...prev]
-            next[r.relay_index] = r.is_energized
+            next[vcIdx] = r.is_energized
             return next
           })
         }
