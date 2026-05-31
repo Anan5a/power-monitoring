@@ -356,6 +356,11 @@ void init_connectivity() {
         return;
     }
 
+    // Let WiFi connection stabilize before any HTTP traffic
+    Serial.println("[HTTP] waiting 3s for WiFi to stabilize...");
+    delay(3000);
+    Serial.println("[HTTP] ready");
+
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
         mqtt.setServer(mqtt_broker, mqtt_port);
