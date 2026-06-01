@@ -27,40 +27,12 @@ export default function ProvisioningPage() {
   const [storedPin, setStoredPin] = useState('123456')
   const [virtualChannels, setVirtualChannels] = useState<Array<{ voltage_src: number; voltage_idx: number; current_src: number; current_idx: number } | null>>([null, null, null, null])
   const [vcSaving, setVcSaving] = useState(false)
-  const [rawCmd, setRawCmd] = useState('')
-  const [rawPayload, setRawPayload] = useState('{}')
-  const [rawSending, setRawSending] = useState(false)
-  const [rawResponse, setRawResponse] = useState('')
-
-  const defaultPayload = (cmd: string) => {
-    if (cmd === 'set_wifi') return '{"ssid":"","pass":""}'
-    if (cmd === 'set_mqtt') return '{"broker":"","port":1883,"topic":""}'
-    if (cmd === 'set_supabase') return '{"url":"","anon_key":"","api_key":"","device_key":""}'
-    if (cmd === 'set_calibration') return '{"channel":0,"type":0,"value":0}'
-    if (cmd === 'set_relay') return '{"idx":0,"channel":0,"is_energized":false,"active_high":true}'
-    if (cmd === 'set_battery') return '{"channel":0,"capacity_mAh":0,"initial_soc_pct":100}'
-    if (cmd === 'set_virtual_channel') return '{"channel":0,"voltage_src":0,"voltage_idx":0,"current_src":0,"current_idx":0}'
-    if (cmd === 'set_channel_name') return '{"channel":0,"name":""}'
-    if (cmd === 'set_channel_group') return '{"group_id":0,"name":"","icon":0,"channel_mask":0}'
-    if (cmd === 'set_invert_curr') return '{"channel":0,"invert":false}'
-    if (cmd === 'reset_coulomb') return '{"channel":0}'
-    if (cmd === 'calibrate_baseline') return '{}'
-    if (cmd === 'factory_reset') return '{}'
-    if (cmd === 'reboot') return '{}'
-    return '{}'
-  }
-
-  async function sendRawCommand() {
-    setRawResponse('')
-    setRawSending(true)
-    try {
-      const resp = await sendCommand({ cmd: rawCmd, ...JSON.parse(rawPayload) })
-      setRawResponse(JSON.stringify(resp, null, 2))
-    } catch (e: unknown) {
-      setRawResponse(e instanceof Error ? e.message : 'Error')
-    }
-    setRawSending(false)
-  }
+  const [wifiCmd, setWifiCmd] = useState({ssid:'', pass:''})
+  const [calCmd, setCalCmd] = useState({channel:0, type:0, value:0})
+  const [invCmd, setInvCmd] = useState({channel:0, invert:false})
+  const [coulombCh, setCoulombCh] = useState(0)
+  const [batCmd, setBatCmd] = useState({channel:0, capacity:0, soc:100})
+  const [chnCmd, setChnCmd] = useState({channel:0, name:''})
 
   // Listen for unexpected BLE disconnects and auto-reconnect once
   useEffect(() => {
@@ -289,10 +261,10 @@ export default function ProvisioningPage() {
           <div className="space-y-4">
             <div className="text-center mb-4">
               <p className="text-gray-600 text-sm mb-3">
-                Send raw BLE commands to your PowerMonitor device — no setup required.
+                Send commands to your PowerMonitor — no setup required.
               </p>
               <button onClick={connectBLE} className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 font-medium">
-                Connect BLE Device
+                {device ? 'Reconnect BLE' : 'Connect BLE Device'}
               </button>
             </div>
 
@@ -306,38 +278,122 @@ export default function ProvisioningPage() {
                     className="text-xs text-red-600 hover:underline">Disconnect</button>
                 </div>
 
-                <div className="space-y-2">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Command</label>
-                    <div className="flex gap-1 flex-wrap mb-1">
-                      {['set_wifi','set_mqtt','set_supabase','set_calibration','set_relay','set_battery','set_virtual_channel','set_channel_name','set_channel_group','set_invert_curr','reset_coulomb','calibrate_baseline','factory_reset','reboot'].map(cmd => (
-                        <button key={cmd} onClick={() => { setRawCmd(cmd); setRawPayload(defaultPayload(cmd)); }}
-                          className={`text-xs px-2 py-1 rounded border ${rawCmd === cmd ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-50 text-gray-700 border-gray-300 hover:bg-gray-100'}`}>
-                          {cmd}
-                        </button>
-                      ))}
-                    </div>
-                    <input value={rawCmd} onChange={e => { setRawCmd(e.target.value); setRawPayload(defaultPayload(e.target.value)); }}
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono" placeholder="command_name" />
+                <div className="grid grid-cols-2 gap-3">
+
+                  {/* set_wifi */}
+                  <div className="border rounded p-3 space-y-2">
+                    <div className="font-medium text-sm text-gray-800">set_wifi</div>
+                    <input value={wifiCmd.ssid} onChange={e => setWifiCmd(c => ({...c, ssid: e.target.value}))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-xs" placeholder="SSID" />
+                    <input type="password" value={wifiCmd.pass} onChange={e => setWifiCmd(c => ({...c, pass: e.target.value}))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-xs" placeholder="Password" />
+                    <button onClick={() => sendCommand({cmd:'set_wifi', ssid: wifiCmd.ssid, pass: wifiCmd.pass, pin: storedPin}).then(() => setWifiCmd({ssid:'', pass:''}))}
+                      disabled={!wifiCmd.ssid.trim()}
+                      className="w-full bg-blue-600 text-white text-xs py-1 rounded disabled:opacity-50">Send</button>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Payload JSON</label>
-                    <textarea value={rawPayload} onChange={e => setRawPayload(e.target.value)}
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono h-28 resize-none" placeholder='{}' />
+                  {/* set_calibration */}
+                  <div className="border rounded p-3 space-y-2">
+                    <div className="font-medium text-sm text-gray-800">set_calibration</div>
+                    <div className="flex gap-1">
+                      <select value={calCmd.channel} onChange={e => setCalCmd(c => ({...c, channel: Number(e.target.value)}))}
+                        className="flex-1 rounded border border-gray-300 px-1 py-0.5 text-xs bg-white">
+                        {[0,1,2].map(i => <option key={i} value={i}>CH{i}</option>)}
+                      </select>
+                      <select value={calCmd.type} onChange={e => setCalCmd(c => ({...c, type: Number(e.target.value)}))}
+                        className="flex-1 rounded border border-gray-300 px-1 py-0.5 text-xs bg-white">
+                        <option value={0}>V offset</option>
+                        <option value={1}>V gain</option>
+                        <option value={2}>I offset</option>
+                        <option value={3}>I gain</option>
+                      </select>
+                      <input type="number" step="any" value={calCmd.value} onChange={e => setCalCmd(c => ({...c, value: Number(e.target.value)}))}
+                        className="w-16 rounded border border-gray-300 px-1 py-0.5 text-xs" placeholder="0" />
+                    </div>
+                    <button onClick={() => sendCommand({cmd:'set_calibration', channel: calCmd.channel, type: calCmd.type, value: calCmd.value, pin: storedPin})}
+                      className="w-full bg-blue-600 text-white text-xs py-1 rounded">Send</button>
                   </div>
 
-                  <button onClick={sendRawCommand}
-                    disabled={!rawCmd.trim() || rawSending}
-                    className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50 text-sm">
-                    {rawSending ? 'Sending...' : 'Send Command'}
-                  </button>
-
-                  {rawResponse && (
-                    <div className="bg-gray-50 rounded p-2 text-xs font-mono whitespace-pre-wrap max-h-40 overflow-y-auto">
-                      {rawResponse}
+                  {/* set_invert_curr */}
+                  <div className="border rounded p-3 space-y-2">
+                    <div className="font-medium text-sm text-gray-800">set_invert_curr</div>
+                    <div className="flex items-center gap-2">
+                      <select value={invCmd.channel} onChange={e => setInvCmd(c => ({...c, channel: Number(e.target.value)}))}
+                        className="flex-1 rounded border border-gray-300 px-1 py-0.5 text-xs bg-white">
+                        {[0,1,2].map(i => <option key={i} value={i}>CH{i}</option>)}
+                      </select>
+                      <label className="flex items-center gap-1 text-xs">
+                        <input type="checkbox" checked={invCmd.invert} onChange={e => setInvCmd(c => ({...c, invert: e.target.checked}))}
+                          className="w-4 h-4" />
+                        Invert
+                      </label>
                     </div>
-                  )}
+                    <button onClick={() => sendCommand({cmd:'set_invert_curr', channel: invCmd.channel, invert: invCmd.invert, pin: storedPin})}
+                      className="w-full bg-blue-600 text-white text-xs py-1 rounded">Send</button>
+                  </div>
+
+                  {/* reset_coulomb */}
+                  <div className="border rounded p-3 space-y-2">
+                    <div className="font-medium text-sm text-gray-800">reset_coulomb</div>
+                    <select value={coulombCh} onChange={e => setCoulombCh(Number(e.target.value))}
+                      className="w-full rounded border border-gray-300 px-1 py-0.5 text-xs bg-white mb-2">
+                      {[0,1,2,3].map(i => <option key={i} value={i}>Channel {i}</option>)}
+                    </select>
+                    <button onClick={() => sendCommand({cmd:'reset_coulomb', channel: coulombCh, pin: storedPin})}
+                      className="w-full bg-orange-500 text-white text-xs py-1 rounded">Reset</button>
+                  </div>
+
+                  {/* set_battery */}
+                  <div className="border rounded p-3 space-y-2">
+                    <div className="font-medium text-sm text-gray-800">set_battery</div>
+                    <select value={batCmd.channel} onChange={e => setBatCmd(c => ({...c, channel: Number(e.target.value)}))}
+                      className="w-full rounded border border-gray-300 px-1 py-0.5 text-xs bg-white mb-1">
+                      {[0,1,2,3].map(i => <option key={i} value={i}>Channel {i}</option>)}
+                    </select>
+                    <input type="number" step="any" value={batCmd.capacity} onChange={e => setBatCmd(c => ({...c, capacity: Number(e.target.value)}))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-xs" placeholder="Capacity mAh" />
+                    <input type="number" step="any" value={batCmd.soc} onChange={e => setBatCmd(c => ({...c, soc: Number(e.target.value)}))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-xs" placeholder="Initial SoC %" />
+                    <button onClick={() => sendCommand({cmd:'set_battery', channel: batCmd.channel, capacity_mAh: batCmd.capacity, initial_soc_pct: batCmd.soc, pin: storedPin})}
+                      className="w-full bg-blue-600 text-white text-xs py-1 rounded">Send</button>
+                  </div>
+
+                  {/* set_channel_name */}
+                  <div className="border rounded p-3 space-y-2">
+                    <div className="font-medium text-sm text-gray-800">set_channel_name</div>
+                    <select value={chnCmd.channel} onChange={e => setChnCmd(c => ({...c, channel: Number(e.target.value)}))}
+                      className="w-full rounded border border-gray-300 px-1 py-0.5 text-xs bg-white mb-1">
+                      {[0,1,2,3].map(i => <option key={i} value={i}>Channel {i}</option>)}
+                    </select>
+                    <input value={chnCmd.name} onChange={e => setChnCmd(c => ({...c, name: e.target.value}))}
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-xs" placeholder="Display name" />
+                    <button onClick={() => sendCommand({cmd:'set_channel_name', channel: chnCmd.channel, name: chnCmd.name, pin: storedPin})}
+                      className="w-full bg-blue-600 text-white text-xs py-1 rounded">Send</button>
+                  </div>
+
+                  {/* calibrate_baseline */}
+                  <div className="border rounded p-3 space-y-2">
+                    <div className="font-medium text-sm text-gray-800">calibrate_baseline</div>
+                    <p className="text-xs text-gray-500">16 samples, ~16s. Device continues normal operation.</p>
+                    <button onClick={() => sendCommand({cmd:'calibrate_baseline', pin: storedPin})}
+                      className="w-full bg-indigo-600 text-white text-xs py-1 rounded">Start</button>
+                  </div>
+
+                  {/* reboot */}
+                  <div className="border rounded p-3 space-y-2">
+                    <div className="font-medium text-sm text-gray-800">reboot</div>
+                    <button onClick={() => { if (confirm('Reboot device now?')) sendCommand({cmd:'reboot', pin: storedPin}) }}
+                      className="w-full bg-yellow-500 text-white text-xs py-1 rounded">Reboot</button>
+                  </div>
+
+                  {/* factory_reset */}
+                  <div className="border rounded p-3 space-y-2 col-span-2">
+                    <div className="font-medium text-sm text-red-700">factory_reset</div>
+                    <p className="text-xs text-gray-500">Erases ALL settings — WiFi, Supabase, calibration, coulomb counters.</p>
+                    <button onClick={() => { if (confirm('Wipe ALL settings? This cannot be undone.')) sendCommand({cmd:'factory_reset', pin: storedPin}) }}
+                      className="w-full bg-red-600 text-white text-xs py-1 rounded">Factory Reset</button>
+                  </div>
+
                 </div>
               </div>
             )}
