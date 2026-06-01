@@ -113,6 +113,7 @@ export interface ChannelCalibration {
   volt_gain: number[]
   curr_offset_ma: number[]
   curr_gain: number[]
+  invert_curr?: boolean[]
 }
 
 export interface DeviceChannels {

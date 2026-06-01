@@ -183,7 +183,9 @@ SensorData read_sensors() {
 
         float cal_ma = (med - cal.curr_offset_ma[ch]) * cal.curr_gain[ch];
         if (fabsf(cal_ma) < 5.0f) cal_ma = 0.0f; // dead-zone
-        d.ina3221_current[ch] = cal_ma / 1000.0f;
+        float curr_a = cal_ma / 1000.0f;
+        if (cal.invert_curr[ch]) curr_a = -curr_a;
+        d.ina3221_current[ch] = curr_a;
     }
 #else
     for (uint8_t ch = 0; ch < 3; ch++) {
@@ -346,5 +348,16 @@ void sensor_reset_calibration(uint8_t ch) {
     cal.volt_gain[ch] = 1.0f;
     cal.curr_offset_ma[ch] = 0.0f;
     cal.curr_gain[ch] = 1.0f;
+    cal.invert_curr[ch] = false;
+    settings_save_channel_calibration(&cal);
+}
+
+void sensor_set_invert_curr(uint8_t ch, bool invert) {
+    cal.invert_curr[ch] = invert;
+    settings_save_channel_calibration(&cal);
+}
+
+void sensor_reset_invert_curr(uint8_t ch) {
+    cal.invert_curr[ch] = false;
     settings_save_channel_calibration(&cal);
 }

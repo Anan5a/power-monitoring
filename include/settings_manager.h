@@ -59,6 +59,7 @@ struct ChannelCalibration {
     float volt_gain[3];        // multiplier per voltage channel
     float curr_offset_ma[3];  // mA offset per current channel (ghost current sub)
     float curr_gain[3];        // multiplier per current channel
+    bool invert_curr[3];      // invert current direction (shunt wired backwards)
 };
 
 void init_settings();

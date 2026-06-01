@@ -123,7 +123,14 @@ void settings_save_calibration(const Calibration* in) {
 bool settings_load_channel_calibration(ChannelCalibration* out) {
     if (!prefs.isKey("chan_cal")) return false;
     size_t len = prefs.getBytes("chan_cal", out, sizeof(ChannelCalibration));
-    return len == sizeof(ChannelCalibration);
+    if (len == sizeof(ChannelCalibration)) return true;
+    // Backward compat: older struct (48 bytes) without invert_curr field
+    if (len == 48) {
+        memset(out, 0, sizeof(ChannelCalibration));
+        prefs.getBytes("chan_cal", out, len);
+        return true;
+    }
+    return false;
 }
 void settings_save_channel_calibration(const ChannelCalibration* in) {
     prefs.putBytes("chan_cal", in, sizeof(ChannelCalibration));

@@ -453,6 +453,7 @@ function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannel
     curr_offset_ma: ['0','0','0'],
     curr_gain: ['1','1','1'],
   })
+  const [invertCurr, setInvertCurr] = useState([false, false, false])
   const [baselineMsg, setBaselineMsg] = useState('')
   useEffect(() => {
     if (cal) {
@@ -462,6 +463,7 @@ function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannel
         curr_offset_ma: cal.curr_offset_ma.map(v => String(v)),
         curr_gain: cal.curr_gain.map(v => String(v)),
       })
+      if (cal.invert_curr) setInvertCurr(cal.invert_curr.map(v => !!v))
     }
   }, [cal])
 
@@ -478,6 +480,7 @@ function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannel
             <th className="pb-2">volt_gain</th>
             <th className="pb-2">curr_offset_ma</th>
             <th className="pb-2">curr_gain</th>
+            <th className="pb-2">Invert</th>
           </tr>
         </thead>
         <tbody>
@@ -498,11 +501,20 @@ function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannel
                 </td>
               ))}
               <td className="py-2">
+                <input
+                  type="checkbox"
+                  checked={invertCurr[ch] ?? false}
+                  onChange={e => setInvertCurr(v => v.map((_, i) => i === ch ? e.target.checked : _))}
+                  className="w-5 h-5"
+                />
+              </td>
+              <td className="py-2">
                 <button onClick={() => {
                   types.forEach((type, ti) => {
                     const key = type === 'volt_offset_mv' ? 'volt_offset_mv' : type === 'volt_gain' ? 'volt_gain' : type === 'curr_offset_ma' ? 'curr_offset_ma' : 'curr_gain'
                     onSave(ch, ti, parseFloat(vals[key][ch]) || 0)
                   })
+                  sendCommand?.('set_invert_curr', { channel: ch, invert: invertCurr[ch] })
                 }}
                   className="text-xs bg-blue-600 text-white px-2 py-1 rounded">Save</button>
               </td>

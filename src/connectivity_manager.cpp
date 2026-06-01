@@ -1100,11 +1100,13 @@ static void sync_device_channels_to_supabase() {
         JsonArray volt_gain = cal_obj["volt_gain"].to<JsonArray>();
         JsonArray curr_offset = cal_obj["curr_offset_ma"].to<JsonArray>();
         JsonArray curr_gain = cal_obj["curr_gain"].to<JsonArray>();
+        JsonArray invert_curr = cal_obj["invert_curr"].to<JsonArray>();
         for (uint8_t i = 0; i < 3; i++) {
             volt_offset.add(cal.volt_offset_mv[i]);
             volt_gain.add(cal.volt_gain[i]);
             curr_offset.add(cal.curr_offset_ma[i]);
             curr_gain.add(cal.curr_gain[i]);
+            invert_curr.add(cal.invert_curr[i]);
         }
     }
 
@@ -1155,11 +1157,13 @@ void sync_calibration_to_supabase() {
     JsonArray volt_gain = cal_obj["volt_gain"].to<JsonArray>();
     JsonArray curr_offset = cal_obj["curr_offset_ma"].to<JsonArray>();
     JsonArray curr_gain = cal_obj["curr_gain"].to<JsonArray>();
+    JsonArray invert_curr = cal_obj["invert_curr"].to<JsonArray>();
     for (uint8_t i = 0; i < 3; i++) {
         volt_offset.add(cal.volt_offset_mv[i]);
         volt_gain.add(cal.volt_gain[i]);
         curr_offset.add(cal.curr_offset_ma[i]);
         curr_gain.add(cal.curr_gain[i]);
+        invert_curr.add(cal.invert_curr[i]);
     }
 
     static char buffer[512];

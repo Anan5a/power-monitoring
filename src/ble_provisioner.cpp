@@ -443,6 +443,40 @@ static void handle_command(const char* json) {
         }
         sensor_reset_calibration(ch);
         send_response("{\"ok\":true,\"msg\":\"calibration_reset\"}");
+    } else if (strcmp(cmd, "set_invert_curr") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        if (ch > 2) {
+            send_response("{\"ok\":false,\"error\":\"invalid_channel\"}");
+            return;
+        }
+        sensor_set_invert_curr(ch, doc["invert"] | false);
+        send_response("{\"ok\":true,\"msg\":\"invert_curr_saved\"}");
+    } else if (strcmp(cmd, "get_invert_curr") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        if (ch > 2) {
+            send_response("{\"ok\":false,\"error\":\"invalid_channel\"}");
+            return;
+        }
+        ChannelCalibration cal;
+        settings_load_channel_calibration(&cal);
+        JsonDocument resp;
+        resp["ok"] = true;
+        resp["channel"] = ch;
+        resp["invert_curr"] = cal.invert_curr[ch];
+        char buf[128];
+        serializeJson(resp, buf);
+        send_response(buf);
+    } else if (strcmp(cmd, "reset_invert_curr") == 0) {
+        if (!check_pin(doc)) return;
+        uint8_t ch = doc["channel"] | 0;
+        if (ch > 2) {
+            send_response("{\"ok\":false,\"error\":\"invalid_channel\"}");
+            return;
+        }
+        sensor_reset_invert_curr(ch);
+        send_response("{\"ok\":true,\"msg\":\"invert_curr_reset\"}");
     } else if (strcmp(cmd, "set_virtual_channel") == 0) {
         if (!check_pin(doc)) return;
         uint8_t ch = doc["channel"] | 0;
@@ -589,6 +623,10 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         float value = doc["value"] | 0.0f;
         sensor_set_calibration(ch, type, value);
         Serial.println("[CMD] calibration saved");
+    } else if (strcmp(cmd_type, "set_invert_curr") == 0) {
+        uint8_t ch = doc["channel"] | 0;
+        sensor_set_invert_curr(ch, doc["invert"] | false);
+        Serial.println("[CMD] invert_curr saved");
     } else if (strcmp(cmd_type, "set_virtual_channel") == 0) {
         uint8_t ch = doc["channel"] | 0;
         if (ch > 3) return;
