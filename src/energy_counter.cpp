@@ -1,6 +1,7 @@
 #include "energy_counter.h"
 #include "settings_manager.h"
 #include "sensor_manager.h"
+#include "connectivity_manager.h"
 #include <Arduino.h>
 
 static float accumulated_Wh[4] = {0};
@@ -14,15 +15,25 @@ void init_energy_counter() {
 }
 
 void update_energy_counter(const SensorData& data, float dt_seconds) {
-    float power[4] = {
-        data.ina3221_busV[0] * data.ina3221_current[0],
-        data.ina3221_busV[1] * data.ina3221_current[1],
-        data.ina3221_busV[2] * data.ina3221_current[2],
-        data.ina226_power
-    };
+    for (uint8_t vc = 0; vc < 4; vc++) {
+        VirtualChannelConfig vc_cfg;
+        float power;
 
-    for (uint8_t ch = 0; ch < 4; ch++) {
-        accumulated_Wh[ch] += power[ch] * dt_seconds / 3600.0f;
+        if (settings_load_virtual_channel(vc, &vc_cfg) && (vc_cfg.voltage_src > 0 || vc_cfg.current_src > 0)) {
+            // Use virtual channel mapping
+            float v = get_sensor_voltage(vc_cfg.voltage_src, vc_cfg.voltage_idx, data);
+            float i = get_sensor_current(vc_cfg.current_src, vc_cfg.current_idx, data);
+            power = v * i;
+        } else {
+            // Fall back to physical channels: VC0→CH0, VC1→CH1, VC2→CH2, VC3→INA226
+            if (vc < 3) {
+                power = data.ina3221_busV[vc] * data.ina3221_current[vc];
+            } else {
+                power = data.ina226_power;
+            }
+        }
+
+        accumulated_Wh[vc] += power * dt_seconds / 3600.0f;
     }
     if (millis() - last_persist_ms >= 300000) {
         for (uint8_t ch = 0; ch < 4; ch++) settings_save_energy_Wh(ch, accumulated_Wh[ch]);
