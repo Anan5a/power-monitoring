@@ -3,6 +3,7 @@
 #include <freertos/task.h>
 #include "config.h"
 #include "settings_manager.h"
+#include "coulomb_counter.h"
 #include "sensor_manager.h"
 #include "data_logger.h"
 #include "coulomb_counter.h"
@@ -627,6 +628,10 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         uint8_t ch = doc["channel"] | 0;
         sensor_set_invert_curr(ch, doc["invert"] | false);
         Serial.println("[CMD] invert_curr saved");
+    } else if (strcmp(cmd_type, "reset_coulomb") == 0) {
+        uint8_t ch = doc["channel"] | 0;
+        reset_coulomb_counter(ch);
+        Serial.println("[CMD] coulomb_reset done");
     } else if (strcmp(cmd_type, "set_virtual_channel") == 0) {
         uint8_t ch = doc["channel"] | 0;
         if (ch > 3) return;

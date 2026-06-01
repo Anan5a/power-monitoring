@@ -735,6 +735,8 @@ function BatteriesTab({ onSave, sendCommand }: { onSave: (ch: number, bat: Batte
               capacity_mAh: parseFloat(vals[ch].capacity_mAh) || 0,
               initial_soc_pct: parseFloat(vals[ch].initial_soc_pct) || 100,
             })} className="mt-2 text-xs bg-blue-600 text-white px-3 py-1 rounded">Save Basic</button>
+              <button onClick={() => sendCommand?.('reset_coulomb', { channel: ch })}
+                className="mt-2 ml-2 text-xs bg-orange-500 text-white px-3 py-1 rounded">Reset Coulomb</button>
 
             {expanded === ch && (
               <div className="mt-3 pt-3 border-t space-y-2">
