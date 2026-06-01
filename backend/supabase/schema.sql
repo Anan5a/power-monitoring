@@ -574,3 +574,234 @@ select cron.schedule(
 
 -- Add energy_hourly to realtime publication
 alter publication supabase_realtime add table public.energy_hourly;
+
+---------------------------------------------------------------
+-- Telemetry Computed: trigger-computed enriched telemetry
+-- One row per telemetry insert (append-only, not upsert)
+-- Keeps full history — telemetry_live can be purged without losing computed data
+-- Never auto-deleted
+---------------------------------------------------------------
+
+create table public.telemetry_computed (
+    id bigint generated always as identity primary key,
+    device_key text not null,
+    recorded_at timestamptz not null,
+
+    -- Power breakdowns
+    pv_power float not null default 0,
+    battery_power float not null default 0,       -- positive=discharge, negative=charge
+    battery_charging_power float not null default 0,
+    battery_discharging_power float not null default 0,
+    dc_load_power float not null default 0,
+    unclassified_power float not null default 0,
+
+    -- Inverter net power
+    inverter_power float not null default 0,
+
+    -- System state
+    system_status text not null default 'unknown',
+
+    -- Aggregated SoC
+    min_soc_pct float,
+    max_soc_pct float,
+
+    -- Energy
+    total_energy_wh float not null default 0,
+
+    -- Raw payload + metadata copies
+    raw_payload jsonb not null default '{}'::jsonb,
+    raw_metadata jsonb not null default '{}'::jsonb,
+
+    created_at timestamptz not null default now(),
+
+    unique (device_key, recorded_at)
+);
+
+alter table public.telemetry_computed enable row level security;
+
+create policy "own_telemetry_computed" on public.telemetry_computed
+    for all to authenticated using (
+        exists (
+            select 1 from public.devices d
+            join public.profiles p on p.id = d.user_id
+            where d.device_key = telemetry_computed.device_key
+              and p.id = auth.uid()
+        )
+    );
+
+grant select, insert on public.telemetry_computed to authenticated;
+
+create index idx_telemetry_computed_device_time
+    on public.telemetry_computed (device_key, recorded_at desc);
+
+alter publication supabase_realtime add table public.telemetry_computed;
+
+---------------------------------------------------------------
+-- Trigger function: compute telemetry values from raw payload
+-- Append-only: one computed row per telemetry_live insert
+-- Defensive: all lookups use coalesce to avoid NULL propagation
+---------------------------------------------------------------
+create or replace function public.compute_telemetry_row()
+returns trigger language plpgsql security definer as $$
+declare
+    cg_arr jsonb;
+    pv_power_val float := 0;
+    battery_charging float := 0;
+    battery_discharging float := 0;
+    dc_load_val float := 0;
+    unclassified_val float := 0;
+    ch_idx int;
+    ch_power float;
+    grp jsonb;
+    grp_icon int;
+    grp_mask int;
+    ch_in_any_group boolean := false;
+    min_soc float;
+    max_soc float;
+    total_energy float;
+    inv_power float;
+    sys_status text;
+begin
+    -- Read channel_groups for this device
+    select channel_groups into cg_arr
+    from public.device_channels
+    where device_key = new.device_id;
+
+    -- Iterate each channel (0-3)
+    for ch_idx in 0..3 loop
+        ch_power := coalesce((new.payload->>('ch' || ch_idx || '_P'))::float, 0);
+        ch_in_any_group := false;
+
+        -- If we have channel_groups, use them for classification
+        if cg_arr is not null and jsonb_array_length(cg_arr) > 0 then
+
+            -- Iterate each group (SELECT syntax to avoid parser ambiguity)
+            for grp in select elem from jsonb_array_elements(cg_arr) as elem loop
+                grp_icon := (grp->>'icon')::int;
+                grp_mask := (grp->>'channel_mask')::int;
+
+                -- Check if this channel's bit is set in this group's mask
+                if (grp_mask & (1 << ch_idx)) != 0 then
+                    ch_in_any_group := true;
+
+                    if grp_icon = 0 then
+                        -- Solar: only count positive (generating)
+                        pv_power_val := pv_power_val + greatest(ch_power, 0);
+                    elsif grp_icon = 1 then
+                        -- Battery
+                        if ch_power < 0 then
+                            battery_charging := battery_charging + abs(ch_power);
+                        else
+                            battery_discharging := battery_discharging + ch_power;
+                        end if;
+                    elsif grp_icon = 2 then
+                        -- Load
+                        dc_load_val := dc_load_val + greatest(ch_power, 0);
+                    else
+                        -- Generic (icon 3) or unknown: treat as load
+                        dc_load_val := dc_load_val + greatest(ch_power, 0);
+                    end if;
+
+                    -- Channel found — don't check other groups (first match wins)
+                    exit;
+                end if;
+            end loop;
+
+        end if;
+
+        -- Channel not in any group — fall back: check battery_profiles
+        if not ch_in_any_group then
+            declare
+                bp_capacity float;
+            begin
+                -- Look for a battery profile for this channel with capacity > 0
+                select (bp->>'capacity_mAh')::float into bp_capacity
+                from (
+                    select jsonb_array_elements(device_channels.battery_profiles) as bp,
+                           (jsonb_array_elements(device_channels.battery_profiles)->>'channel')::int as bp_ch
+                    from public.device_channels
+                    where device_key = new.device_id
+                ) sub
+                where bp_ch = ch_idx
+                  and bp_capacity > 0;
+
+                if bp_capacity is not null and bp_capacity > 0 then
+                    if ch_power < 0 then
+                        battery_charging := battery_charging + abs(ch_power);
+                    else
+                        battery_discharging := battery_discharging + ch_power;
+                    end if;
+                    ch_in_any_group := true;
+                end if;
+            end;
+        end if;
+
+        -- Still not in any group — treat as unclassified
+        if not ch_in_any_group then
+            unclassified_val := unclassified_val + greatest(ch_power, 0);
+        end if;
+    end loop;
+
+    -- Compute inverter power
+    inv_power := battery_charging + dc_load_val - pv_power_val;
+
+    -- System status
+    if battery_charging > 5 then
+        sys_status := 'charging';
+    elsif battery_discharging > 5 then
+        sys_status := 'discharging';
+    elsif abs(inv_power) <= 5 then
+        sys_status := 'balanced';
+    else
+        sys_status := 'unknown';
+    end if;
+
+    -- SoC: extract soc_pct0..3, filter nulls
+    select min(v), max(v) into min_soc, max_soc
+    from unnest(array[
+        (new.payload->>'soc_pct0')::float,
+        (new.payload->>'soc_pct1')::float,
+        (new.payload->>'soc_pct2')::float,
+        (new.payload->>'soc_pct3')::float
+    ]) as v where v is not null;
+
+    -- Total energy
+    total_energy := coalesce((new.payload->>'energy_wh0')::float, 0)
+                  + coalesce((new.payload->>'energy_wh1')::float, 0)
+                  + coalesce((new.payload->>'energy_wh2')::float, 0)
+                  + coalesce((new.payload->>'energy_wh3')::float, 0);
+
+    -- Insert computed row (append-only, no upsert)
+    insert into public.telemetry_computed (
+        device_key, recorded_at,
+        pv_power, battery_power,
+        battery_charging_power, battery_discharging_power,
+        dc_load_power, unclassified_power, inverter_power,
+        system_status,
+        min_soc_pct, max_soc_pct,
+        total_energy_wh,
+        raw_payload, raw_metadata
+    ) values (
+        new.device_id, new.recorded_at,
+        pv_power_val,
+        battery_discharging - battery_charging,
+        battery_charging,
+        battery_discharging,
+        dc_load_val, unclassified_val, inv_power,
+        sys_status,
+        case when min_soc isnull then null else min_soc end,
+        case when max_soc isnull then null else max_soc end,
+        total_energy,
+        new.payload,
+        coalesce(new.metadata, '{}'::jsonb)
+    );
+
+    return new;
+end;
+$$;
+
+-- Trigger: fires AFTER each insert on telemetry_live
+drop trigger if exists on_telemetry_computed_update on public.telemetry_live;
+create trigger on_telemetry_computed_update
+    after insert on public.telemetry_live
+    for each row execute function public.compute_telemetry_row();

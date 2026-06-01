@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Scatter
@@ -11,12 +12,16 @@ interface Props {
 }
 
 type Range = '1h' | '6h' | '24h' | '7d' | '30d'
+type Metric = 'power' | 'voltage' | 'current'
 
 const RANGE_HOURS: Record<Range, number> = { '1h': 1, '6h': 6, '24h': 24, '7d': 168, '30d': 720 }
 const RANGE_LIMITS: Record<Range, number> = { '1h': 500, '6h': 500, '24h': 200, '7d': 500, '30d': 500 }
 
+const UNIT: Record<Metric, string> = { power: 'W', voltage: 'V', current: 'A' }
+
 // Vibrant gradient palette — each line gets a unique gradient
-const VC_GRADIENTS: Record<string, { id: string; start: string; end: string }> = {
+const SERIES_GRADIENTS: Record<string, { id: string; start: string; end: string }> = {
+  // Power
   ina3221_p0: { id: 'grad_p0', start: '#3b82f6', end: '#93c5fd' },
   ina3221_p1: { id: 'grad_p1', start: '#22c55e', end: '#86efac' },
   ina3221_p2: { id: 'grad_p2', start: '#f59e0b', end: '#fcd34d' },
@@ -25,6 +30,24 @@ const VC_GRADIENTS: Record<string, { id: string; start: string; end: string }> =
   ch1_P:      { id: 'grad_ch1', start: '#ec4899', end: '#f9a8d4' },
   ch2_P:      { id: 'grad_ch2', start: '#f97316', end: '#fdba74' },
   ch3_P:      { id: 'grad_ch3', start: '#84cc16', end: '#bef264' },
+  // Voltage
+  ina3221_v0: { id: 'grad_v0', start: '#0ea5e9', end: '#7dd3fc' },
+  ina3221_v1: { id: 'grad_v1', start: '#10b981', end: '#6ee7b7' },
+  ina3221_v2: { id: 'grad_v2', start: '#f59e0b', end: '#fcd34d' },
+  ina226_v:   { id: 'grad_inav', start: '#8b5cf6', end: '#c4b5fd' },
+  ch0_V:      { id: 'grad_ch0v', start: '#0891b2', end: '#67e8f9' },
+  ch1_V:      { id: 'grad_ch1v', start: '#db2777', end: '#f9a8d4' },
+  ch2_V:      { id: 'grad_ch2v', start: '#ea580c', end: '#fdba74' },
+  ch3_V:      { id: 'grad_ch3v', start: '#65a30d', end: '#bef264' },
+  // Current
+  ina3221_i0: { id: 'grad_i0', start: '#2563eb', end: '#93c5fd' },
+  ina3221_i1: { id: 'grad_i1', start: '#16a34a', end: '#86efac' },
+  ina3221_i2: { id: 'grad_i2', start: '#d97706', end: '#fcd34d' },
+  ina226_i:   { id: 'grad_inai', start: '#9333ea', end: '#d8b4fe' },
+  ch0_I:      { id: 'grad_ch0i', start: '#0284c7', end: '#7dd3fc' },
+  ch1_I:      { id: 'grad_ch1i', start: '#be185d', end: '#f9a8d4' },
+  ch2_I:      { id: 'grad_ch2i', start: '#c2410c', end: '#fdba74' },
+  ch3_I:      { id: 'grad_ch3i', start: '#4d7c0f', end: '#bef264' },
 }
 
 // Fallback palette for unregistered keys
@@ -37,24 +60,35 @@ const FALLBACK_COLORS = [
   { start: '#10b981', end: '#6ee7b7' },
 ]
 
-function extractVCPowerKeys(data: TelemetryPoint[]): string[] {
+const METRIC_REGEX: Record<Metric, RegExp> = {
+  power: /^ch\d_P$|ina226_p|^ina3221_p\d$/,
+  voltage: /^ch\d_V$|ina226_v|^ina3221_v\d$/,
+  current: /^ch\d_I$|ina226_i|^ina3221_i\d$/,
+}
+
+function extractKeys(data: TelemetryPoint[], metric: Metric): string[] {
   if (data.length === 0) return []
   const payloadKeys = Object.keys(data[0].payload as Record<string, number>)
-  return payloadKeys.filter(k => k.match(/^ch\d_P$/) || k === 'ina226_p' || k.match(/^ina3221_p\d$/))
+  return payloadKeys.filter(k => METRIC_REGEX[metric].test(k))
 }
 
 function keyToLabel(k: string): string {
-  if (k === 'ina226_p') return 'INA226'
-  if (k === 'ina3221_p0') return 'VC0'
-  if (k === 'ina3221_p1') return 'VC1'
-  if (k === 'ina3221_p2') return 'VC2'
-  return k.replace(/^ch(\d)_P$/i, 'VC$1').toUpperCase()
+  if (k === 'ina226_p' || k === 'ina226_v' || k === 'ina226_i') return 'INA226'
+  if (/^ina3221_[pvi][0-2]$/.test(k)) {
+    const m = k.match(/^ina3221_([pvi])([0-2])$/)!
+    const m2m: Record<string, string> = { p: 'P', v: 'V', i: 'I' }
+    return `VC${m[2]}${m2m[m[1]]}`
+  }
+  const m = k.match(/^ch(\d)_([PVI])$/i)
+  if (m) return `VC${m[1]}${m[2].toUpperCase()}`
+  return k
 }
 
 export default function PowerHistoryChart({ deviceKey }: Props) {
   const [range, setRange] = useState<Range>('24h')
+  const [metric, setMetric] = useState<Metric>('power')
   const [historyData, setHistoryData] = useState<TelemetryPoint[]>([])
-  const [powerKeys, setPowerKeys] = useState<string[]>([])
+  const [seriesKeys, setSeriesKeys] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [visibleLines, setVisibleLines] = useState<Set<string>>(new Set())
 
@@ -73,38 +107,50 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
       .then(({ data }) => {
         if (data) {
           setHistoryData(data as TelemetryPoint[])
-          const keys = extractVCPowerKeys(data as TelemetryPoint[])
-          setPowerKeys(keys)
+          const keys = extractKeys(data as TelemetryPoint[], metric)
+          setSeriesKeys(keys)
           setVisibleLines(new Set(keys))
         }
         setLoading(false)
       })
-  }, [deviceKey, range])
+  }, [deviceKey, range, metric])
 
-  const chartData = historyData.map(pt => {
+  // Re-extract visible keys when metric changes (so empty filter from old metric doesn't persist)
+  useEffect(() => {
+    if (historyData.length === 0) return
+    const keys = extractKeys(historyData, metric)
+    setSeriesKeys(keys)
+    setVisibleLines(new Set(keys))
+  }, [metric, historyData])
+
+  const chartData = useMemo(() => historyData.map(pt => {
     const rec: Record<string, unknown> = {
       time: new Date(pt.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     }
-    for (const k of powerKeys) {
+    for (const k of seriesKeys) {
       rec[k] = (pt.payload as Record<string, number>)[k] ?? null
     }
     return rec
-  })
+  }), [historyData, seriesKeys])
 
-  // Spike markers
-  const spikeData: Array<{ time: string; spike_y: number }> = []
-  for (const pt of historyData) {
-    const payload = pt.payload as Record<string, unknown>
-    for (let i = 0; i < 3; i++) {
-      if (payload[`ina3221_i${i}_spike`] === true) {
-        spikeData.push({
-          time: new Date(pt.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          spike_y: 0,
-        })
-        break
+  // Spike markers (only meaningful on power tab)
+  const spikeData: Array<{ time: string; spike_y: number }> = useMemo(() => {
+    if (metric !== 'power') return []
+    const out: Array<{ time: string; spike_y: number }> = []
+    for (const pt of historyData) {
+      const payload = pt.payload as Record<string, unknown>
+      for (let i = 0; i < 3; i++) {
+        if (payload[`ina3221_i${i}_spike`] === true) {
+          out.push({
+            time: new Date(pt.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            spike_y: 0,
+          })
+          break
+        }
       }
     }
-  }
+    return out
+  }, [historyData, metric])
 
   const toggleLine = (key: string) => {
     const next = new Set(visibleLines)
@@ -114,18 +160,18 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
   }
 
   const toggleAll = () => {
-    if (visibleLines.size === powerKeys.length) {
+    if (visibleLines.size === seriesKeys.length) {
       setVisibleLines(new Set())
     } else {
-      setVisibleLines(new Set(powerKeys))
+      setVisibleLines(new Set(seriesKeys))
     }
   }
 
-  const visibleKeys = powerKeys.filter(k => visibleLines.has(k))
+  const visibleKeys = seriesKeys.filter(k => visibleLines.has(k))
 
   // Build unique gradient defs for visible lines
   const gradientDefs = visibleKeys.map((k, i) => {
-    const g = VC_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
+    const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
     return (
       <defs key={g.id + k}>
         <linearGradient id={g.id + k} x1="0" y1="0" x2="0" y2="1">
@@ -138,7 +184,7 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
 
   // Build gradient fill defs for each area
   const areaGradients = visibleKeys.map((k, i) => {
-    const g = VC_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
+    const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
     const gradId = `area_fill_${k}`
     return (
       <defs key={`area_${k}`}>
@@ -152,15 +198,51 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
 
   const allDefs = [...gradientDefs, ...areaGradients]
 
+  const metricLabel = { power: 'Power', voltage: 'Voltage', current: 'Current' }[metric]
+  const unit = UNIT[metric]
+  const showDualAxis = metric !== 'power'
+
+  // Custom tooltip with all visible metrics
+  interface TooltipPayload {
+    payload?: Record<string, unknown>
+    name?: string
+    value?: number
+    dataKey?: string
+    color?: string
+  }
+  const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: TooltipPayload[]; label?: string }) => {
+    if (!active || !payload || payload.length === 0) return null
+    return (
+      <div className="bg-slate-800 rounded-xl shadow-lg px-3 py-2.5 min-w-[140px]">
+        <div className="text-[11px] text-slate-400 mb-1.5 font-medium">{label}</div>
+        {payload.map(p => {
+          const v = typeof p.value === 'number' ? p.value : null
+          if (v === null) return null
+          return (
+            <div key={p.dataKey} className="flex items-center justify-between gap-3 text-[12px] py-0.5">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: p.color }} />
+                <span className="text-slate-300">{keyToLabel(p.dataKey ?? '')}</span>
+              </div>
+              <span className="text-slate-100 font-semibold font-mono">
+                {v.toFixed(metric === 'voltage' ? 2 : 1)} {unit}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+    <div className="bg-white rounded-2xl shadow-[0_1px_2px_rgba(15,23,42,0.04),0_1px_3px_rgba(15,23,42,0.06)] border border-slate-100 overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
         <div className="flex items-center gap-2">
-          <h3 className="font-bold text-gray-800 text-base">Power History</h3>
+          <h3 className="font-bold text-slate-800 text-base">History</h3>
           {loading && (
-            <span className="flex items-center gap-1 text-xs text-gray-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+            <span className="flex items-center gap-1 text-xs text-slate-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
               loading
             </span>
           )}
@@ -172,8 +254,8 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
               onClick={() => setRange(r)}
               className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all duration-150 ${
                 range === r
-                  ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-sm'
-                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-sm'
+                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
               }`}
             >
               {r}
@@ -182,18 +264,35 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
         </div>
       </div>
 
+      {/* Metric tabs */}
+      <div className="flex items-center gap-1.5 px-5 pt-4">
+        {(['power', 'voltage', 'current'] as Metric[]).map(m => (
+          <button
+            key={m}
+            onClick={() => setMetric(m)}
+            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-all duration-150 ${
+              metric === m
+                ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-sm'
+                : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+            }`}
+          >
+            {metricLabel}
+          </button>
+        ))}
+      </div>
+
       {/* Legend */}
-      {powerKeys.length > 0 && (
-        <div className="flex items-center gap-2 px-5 pt-4 pb-2">
+      {seriesKeys.length > 0 && (
+        <div className="flex items-center gap-2 px-5 pt-3 pb-2 flex-wrap">
           <button
             onClick={toggleAll}
-            className="text-xs px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors"
+            className="text-xs px-2 py-0.5 rounded border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors"
           >
-            {visibleLines.size === powerKeys.length ? 'Hide all' : 'Show all'}
+            {visibleLines.size === seriesKeys.length ? 'Hide all' : 'Show all'}
           </button>
-          <div className="w-px h-4 bg-gray-200" />
-          {powerKeys.map((k, i) => {
-            const g = VC_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
+          <div className="w-px h-4 bg-slate-200" />
+          {seriesKeys.map((k, i) => {
+            const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
             const active = visibleLines.has(k)
             return (
               <button
@@ -202,7 +301,7 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
                 className={`flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border transition-all duration-150 ${
                   active
                     ? 'border-transparent shadow-sm'
-                    : 'border-gray-200 text-gray-400 opacity-60'
+                    : 'border-slate-200 text-slate-400 opacity-60'
                 }`}
                 style={active ? { backgroundColor: g.start + '18', borderColor: g.start + '40' } : {}}
               >
@@ -219,94 +318,108 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
 
       {/* Chart */}
       <div className="px-2 pb-4">
-        {loading && chartData.length === 0 ? (
-          <div className="h-72 flex flex-col items-center justify-center text-gray-300 gap-3">
-            <svg className="w-10 h-10 animate-spin" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-            <span className="text-sm">Fetching power data…</span>
-          </div>
-        ) : chartData.length === 0 ? (
-          <div className="h-72 flex flex-col items-center justify-center text-gray-400 gap-2">
-            <svg viewBox="0 0 24 24" className="w-10 h-10 text-gray-300" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M7 12.5l4-4m0 0l4 4m-4-4v12m8-12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span className="text-sm font-medium">No power data for this range</span>
-            <span className="text-xs text-gray-300">Data arrives every 5 seconds</span>
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={chartData} margin={{ top: 10, right: 16, left: -8, bottom: 0 }}>
-              {allDefs}
-              <CartesianGrid
-                strokeDasharray="0"
-                stroke="#f1f5f9"
-                strokeWidth={1}
-                vertical={false}
-              />
-              <XAxis
-                dataKey="time"
-                tick={{ fontSize: 11, fill: '#94a3b8', fontFamily: 'inherit' }}
-                axisLine={false}
-                tickLine={false}
-                interval="preserveStartEnd"
-              />
-              <YAxis
-                tick={{ fontSize: 11, fill: '#94a3b8', fontFamily: 'inherit' }}
-                axisLine={false}
-                tickLine={false}
-                unit=" W"
-                width={56}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#1e293b',
-                  border: 'none',
-                  borderRadius: '10px',
-                  boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-                  fontSize: 12,
-                  color: '#e2e8f0',
-                  padding: '8px 12px',
-                }}
-                labelStyle={{ color: '#94a3b8', fontSize: 11, marginBottom: 4 }}
-                itemStyle={{ padding: '2px 0' }}
-                formatter={(value: number, name: string) => [`${value?.toFixed(1)} W`, keyToLabel(name)]}
-              />
-              {visibleKeys.map((k, i) => {
-                const g = VC_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
-                const fillId = `area_fill_${k}`
-                return (
-                  <Area
-                    key={k}
-                    type="monotone"
-                    dataKey={k}
-                    stroke={g.start}
-                    strokeWidth={2.5}
-                    fill={`url(#${fillId})`}
-                    dot={false}
-                    activeDot={{
-                      r: 5,
-                      fill: g.start,
-                      stroke: '#fff',
-                      strokeWidth: 2,
-                    }}
-                    connectNulls
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={`${metric}-${range}`}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            {loading && chartData.length === 0 ? (
+              <div className="h-72 flex flex-col items-center justify-center text-slate-300 gap-3">
+                <svg className="w-10 h-10 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span className="text-sm">Fetching {metricLabel.toLowerCase()} data…</span>
+              </div>
+            ) : chartData.length === 0 ? (
+              <div className="h-72 flex flex-col items-center justify-center text-slate-400 gap-2">
+                <svg viewBox="0 0 24 24" className="w-10 h-10 text-slate-300" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 12.5l4-4m0 0l4 4m-4-4v12m8-12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="text-sm font-medium">No {metricLabel.toLowerCase()} data for this range</span>
+                <span className="text-xs text-slate-300">Data arrives every 5 seconds</span>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <AreaChart data={chartData} margin={{ top: 10, right: 16, left: -8, bottom: 0 }}>
+                  {allDefs}
+                  <CartesianGrid
+                    strokeDasharray="0"
+                    stroke="#f1f5f9"
+                    strokeWidth={1}
+                    vertical={false}
                   />
-                )
-              })}
-              {spikeData.length > 0 && (
-                <Scatter
-                  data={spikeData}
-                  dataKey="spike_y"
-                  line={false}
-                  fill="#ef4444"
-                  shape="triangle"
-                />
-              )}
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
+                  <XAxis
+                    dataKey="time"
+                    tick={{ fontSize: 11, fill: '#94a3b8', fontFamily: 'inherit' }}
+                    axisLine={false}
+                    tickLine={false}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    yAxisId="left"
+                    tick={{ fontSize: 11, fill: '#94a3b8', fontFamily: 'inherit' }}
+                    axisLine={false}
+                    tickLine={false}
+                    unit={` ${unit}`}
+                    width={56}
+                  />
+                  {showDualAxis && (
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      tick={{ fontSize: 11, fill: '#94a3b8', fontFamily: 'inherit' }}
+                      axisLine={false}
+                      tickLine={false}
+                      unit={` ${unit}`}
+                      width={56}
+                    />
+                  )}
+                  <Tooltip
+                    content={<CustomTooltip />}
+                    cursor={{ stroke: '#94a3b8', strokeWidth: 1, strokeDasharray: '3 3' }}
+                  />
+                  {visibleKeys.map((k, i) => {
+                    const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
+                    const fillId = `area_fill_${k}`
+                    return (
+                      <Area
+                        key={k}
+                        type="monotone"
+                        dataKey={k}
+                        yAxisId={showDualAxis ? 'right' : 'left'}
+                        stroke={g.start}
+                        strokeWidth={2.5}
+                        fill={`url(#${fillId})`}
+                        dot={false}
+                        activeDot={{
+                          r: 5,
+                          fill: g.start,
+                          stroke: '#fff',
+                          strokeWidth: 2,
+                        }}
+                        connectNulls
+                      />
+                    )
+                  })}
+                  {spikeData.length > 0 && (
+                    <Scatter
+                      yAxisId={showDualAxis ? 'right' : 'left'}
+                      data={spikeData}
+                      dataKey="spike_y"
+                      line={false}
+                      fill="#ef4444"
+                      shape="triangle"
+                    />
+                  )}
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </motion.div>
+        </AnimatePresence>
       </div>
     </div>
   )

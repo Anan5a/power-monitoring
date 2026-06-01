@@ -1,4 +1,7 @@
+import { motion, AnimatePresence } from 'framer-motion'
+import { SunIcon, Battery0Icon, ArrowUpIcon, ArrowDownIcon } from '@heroicons/react/24/outline'
 import type { DeviceChannels } from '../lib/types'
+import { computeTelemetry } from '../lib/computedTelemetry'
 
 interface Props {
   latestReading: Record<string, number> | null
@@ -6,79 +9,181 @@ interface Props {
   relayOn: boolean[]
 }
 
-export default function QuickStatsRow({ latestReading, deviceChannels, relayOn }: Props) {
-  // Sum all power values from payload
-  const totalPower = latestReading
-    ? Object.entries(latestReading)
-        .filter(([k]) => k.endsWith('_P') || k.endsWith('_p'))
-        .reduce((sum, [, v]) => sum + (v as number), 0)
-    : 0
+const STATUS_STYLES: Record<string, { dot: string; text: string; label: string }> = {
+  charging: { dot: 'bg-emerald-500', text: 'text-emerald-700', label: 'Charging' },
+  discharging: { dot: 'bg-amber-500', text: 'text-amber-700', label: 'Discharging' },
+  balanced: { dot: 'bg-sky-500', text: 'text-sky-700', label: 'Balanced' },
+  unknown: { dot: 'bg-slate-400', text: 'text-slate-600', label: 'Unknown' },
+}
 
-  // Sum all energy values from payload
-  const totalEnergyWh = latestReading
-    ? Object.entries(latestReading)
-        .filter(([k]) => k.startsWith('energy_wh'))
-        .reduce((sum, [, v]) => sum + (v as number), 0)
-    : 0
-
-  const batteryProfiles = deviceChannels?.battery_profiles ?? []
+function AnimatedNumber({ value, suffix = '', decimals = 1 }: { value: number; suffix?: string; decimals?: number }) {
+  const display = Math.abs(value) < 0.05 && value !== 0 ? '0' : value.toFixed(decimals)
   return (
-    <div className="flex flex-wrap gap-4 items-center justify-between bg-white rounded-lg shadow px-6 py-4 mb-6">
-      {/* Total power + energy */}
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500">Total Power</span>
-          <span className="text-xl font-bold text-blue-600">
-            {totalPower > 0 ? `${totalPower.toFixed(1)} W` : '--'}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500">Total Energy</span>
-          <span className="text-xl font-bold text-green-600">
-            {totalEnergyWh > 0
-              ? totalEnergyWh >= 1000
-                ? `${(totalEnergyWh / 1000).toFixed(2)} kWh`
-                : `${totalEnergyWh.toFixed(1)} Wh`
-              : '--'}
-          </span>
-        </div>
-      </div>
+    <AnimatePresence mode="popLayout" initial={false}>
+      <motion.span
+        key={value.toFixed(decimals)}
+        initial={{ y: 8, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: -8, opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        className="inline-block"
+      >
+        {display}
+        {suffix}
+      </motion.span>
+    </AnimatePresence>
+  )
+}
 
-      {/* SoC bars for VCs with batteries */}
-      <div className="flex gap-4 items-center">
-        {batteryProfiles.map((bp, idx) => {
-          if (!bp.capacity_mAh || bp.capacity_mAh === 0) return null
-          const socKey = `soc_pct${idx}`
-          const soc = latestReading?.[socKey] ?? null
-          const color = soc === null ? 'bg-gray-300' : soc > 50 ? 'bg-green-500' : soc > 20 ? 'bg-yellow-400' : 'bg-red-500'
-          return (
-            <div key={idx} className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">VC{idx}</span>
-              <div className="w-20 bg-gray-200 rounded-full h-2">
-                {soc !== null && (
-                  <div className={`h-2 rounded-full ${color}`} style={{ width: `${Math.min(soc, 100)}%` }} />
-                )}
+function MetricChip({
+  label,
+  value,
+  unit,
+  color,
+  icon,
+}: {
+  label: string
+  value: number | null
+  unit: string
+  color: string
+  icon?: React.ReactNode
+}) {
+  return (
+    <div className="flex items-center gap-2.5">
+      {icon && <div className={`shrink-0 ${color}`}>{icon}</div>}
+      <div className="flex flex-col leading-tight">
+        <span className="text-[11px] uppercase tracking-wide text-slate-400 font-medium">{label}</span>
+        <span className={`text-lg font-semibold tabular-nums ${color}`}>
+          {value === null || value === undefined ? (
+            <span className="text-slate-300">--</span>
+          ) : (
+            <>
+              <AnimatedNumber value={value} />
+              <span className="text-sm font-normal text-slate-400 ml-0.5">{unit}</span>
+            </>
+          )}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function DirectionalMetric({
+  label,
+  value,
+  unit,
+}: {
+  label: string
+  value: number
+  unit: string
+}) {
+  const positive = value > 0.5
+  const negative = value < -0.5
+  const color = positive ? 'text-emerald-600' : negative ? 'text-cyan-600' : 'text-slate-400'
+  const Icon = positive ? ArrowUpIcon : negative ? ArrowDownIcon : null
+
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="shrink-0">
+        {Icon ? <Icon className={`w-5 h-5 ${color}`} /> : <div className="w-5 h-5" />}
+      </div>
+      <div className="flex flex-col leading-tight">
+        <span className="text-[11px] uppercase tracking-wide text-slate-400 font-medium">{label}</span>
+        <span className={`text-lg font-semibold tabular-nums ${color}`}>
+          <AnimatedNumber value={Math.abs(value)} />
+          <span className="text-sm font-normal text-slate-400 ml-0.5">{unit}</span>
+        </span>
+      </div>
+    </div>
+  )
+}
+
+export default function QuickStatsRow({ latestReading, deviceChannels }: Props) {
+  const payload = latestReading ?? {}
+  const groups = deviceChannels?.channel_groups ?? []
+  const batteryProfiles = deviceChannels?.battery_profiles ?? []
+  const computed = computeTelemetry(payload, groups, batteryProfiles)
+
+  const totalPower = computed.pv_power + computed.battery_discharging_power + computed.dc_load_power
+
+  const status = STATUS_STYLES[computed.system_status]
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-6 py-4 mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
+        <div className="flex items-center gap-4">
+          <div className="flex flex-col leading-tight">
+            <span className="text-[11px] uppercase tracking-wide text-slate-400 font-medium">Total Power</span>
+            <span className="text-2xl font-bold text-slate-800 tabular-nums">
+              {totalPower > 0 ? (
+                <>
+                  <AnimatedNumber value={totalPower} />
+                  <span className="text-base font-normal text-slate-400 ml-1">W</span>
+                </>
+              ) : (
+                <span className="text-slate-300">--</span>
+              )}
+            </span>
+          </div>
+
+          <div className="h-10 w-px bg-slate-200" />
+
+          <MetricChip
+            label="PV"
+            value={computed.pv_power}
+            unit="W"
+            color="text-amber-500"
+            icon={<SunIcon className="w-5 h-5" />}
+          />
+
+          <div className="h-10 w-px bg-slate-200" />
+
+          <DirectionalMetric
+            label={computed.inverter_power > 0 ? 'Inverter (out)' : 'Inverter (in)'}
+            value={computed.inverter_power}
+            unit="W"
+          />
+
+          <div className="h-10 w-px bg-slate-200" />
+
+          <DirectionalMetric
+            label="Battery"
+            value={computed.battery_power}
+            unit="W"
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          {batteryProfiles.map((bp, idx) => {
+            if (!bp.capacity_mAh || bp.capacity_mAh === 0) return null
+            const socKey = `soc_pct${idx}`
+            const soc = payload[socKey] ?? null
+            const colorBar = soc === null ? 'bg-slate-200' : soc > 50 ? 'bg-emerald-500' : soc > 20 ? 'bg-amber-400' : 'bg-red-500'
+            return (
+              <div key={idx} className="flex items-center gap-2">
+                <Battery0Icon className="w-4 h-4 text-slate-400" />
+                <span className="text-[11px] text-slate-500 font-medium uppercase tracking-wide">
+                  {bp.name || `VC${idx}`}
+                </span>
+                <div className="w-20 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                  {soc !== null && (
+                    <div className={`h-1.5 rounded-full ${colorBar} transition-all duration-300`} style={{ width: `${Math.min(soc, 100)}%` }} />
+                  )}
+                </div>
+                <span className="text-xs font-semibold text-slate-700 tabular-nums w-9 text-right">
+                  {soc !== null ? `${soc.toFixed(0)}%` : '--'}
+                </span>
               </div>
-              <span className="text-xs font-medium text-gray-700">
-                {soc !== null ? `${soc.toFixed(0)}%` : '--'}
-              </span>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
 
-      {/* Relay chips */}
-      <div className="flex gap-2">
-        {[0, 1, 2, 3].map(i => (
-          <span
-            key={i}
-            className={`text-xs px-2 py-1 rounded font-medium ${
-              relayOn[i] ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-500'
-            }`}
-          >
-            R{i}: {relayOn[i] ? 'ON' : 'OFF'}
-          </span>
-        ))}
+          <div className="h-8 w-px bg-slate-200" />
+
+          <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-50">
+            <span className={`w-2 h-2 rounded-full ${status.dot} ${computed.system_status !== 'unknown' && computed.system_status !== 'balanced' ? 'animate-pulse' : ''}`} />
+            <span className={`text-xs font-semibold ${status.text}`}>{status.label}</span>
+          </div>
+        </div>
       </div>
     </div>
   )
