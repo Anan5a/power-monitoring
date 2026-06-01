@@ -27,6 +27,40 @@ export default function ProvisioningPage() {
   const [storedPin, setStoredPin] = useState('123456')
   const [virtualChannels, setVirtualChannels] = useState<Array<{ voltage_src: number; voltage_idx: number; current_src: number; current_idx: number } | null>>([null, null, null, null])
   const [vcSaving, setVcSaving] = useState(false)
+  const [rawCmd, setRawCmd] = useState('')
+  const [rawPayload, setRawPayload] = useState('{}')
+  const [rawSending, setRawSending] = useState(false)
+  const [rawResponse, setRawResponse] = useState('')
+
+  const defaultPayload = (cmd: string) => {
+    if (cmd === 'set_wifi') return '{"ssid":"","pass":""}'
+    if (cmd === 'set_mqtt') return '{"broker":"","port":1883,"topic":""}'
+    if (cmd === 'set_supabase') return '{"url":"","anon_key":"","api_key":"","device_key":""}'
+    if (cmd === 'set_calibration') return '{"channel":0,"type":0,"value":0}'
+    if (cmd === 'set_relay') return '{"idx":0,"channel":0,"is_energized":false,"active_high":true}'
+    if (cmd === 'set_battery') return '{"channel":0,"capacity_mAh":0,"initial_soc_pct":100}'
+    if (cmd === 'set_virtual_channel') return '{"channel":0,"voltage_src":0,"voltage_idx":0,"current_src":0,"current_idx":0}'
+    if (cmd === 'set_channel_name') return '{"channel":0,"name":""}'
+    if (cmd === 'set_channel_group') return '{"group_id":0,"name":"","icon":0,"channel_mask":0}'
+    if (cmd === 'set_invert_curr') return '{"channel":0,"invert":false}'
+    if (cmd === 'reset_coulomb') return '{"channel":0}'
+    if (cmd === 'calibrate_baseline') return '{}'
+    if (cmd === 'factory_reset') return '{}'
+    if (cmd === 'reboot') return '{}'
+    return '{}'
+  }
+
+  async function sendRawCommand() {
+    setRawResponse('')
+    setRawSending(true)
+    try {
+      const resp = await sendCommand({ cmd: rawCmd, ...JSON.parse(rawPayload) })
+      setRawResponse(JSON.stringify(resp, null, 2))
+    } catch (e: unknown) {
+      setRawResponse(e instanceof Error ? e.message : 'Error')
+    }
+    setRawSending(false)
+  }
 
   // Listen for unexpected BLE disconnects and auto-reconnect once
   useEffect(() => {
@@ -53,7 +87,7 @@ export default function ProvisioningPage() {
       if (!d.gatt) throw new Error('GATT not available')
       await d.gatt.connect()
       setDevice(d)
-      setStep(2)
+      setStep(0)
       setProgress('Connected to PowerMonitor')
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Connection failed')
@@ -252,13 +286,61 @@ export default function ProvisioningPage() {
         {progress && <div className="bg-blue-50 text-blue-700 p-3 rounded mb-4 text-sm">{progress}</div>}
 
         {step === 0 && (
-          <div className="text-center">
-            <p className="text-gray-600 mb-6">
-              Connect to your PowerMonitor device via Bluetooth to configure WiFi and Supabase.
-            </p>
-            <button onClick={connectBLE} className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 font-medium">
-              Scan for PowerMonitor
-            </button>
+          <div className="space-y-4">
+            <div className="text-center mb-4">
+              <p className="text-gray-600 text-sm mb-3">
+                Send raw BLE commands to your PowerMonitor device — no setup required.
+              </p>
+              <button onClick={connectBLE} className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 font-medium">
+                Connect BLE Device
+              </button>
+            </div>
+
+            {device && (
+              <div className="border-t pt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-medium text-green-700">
+                    Connected: {device.name || 'PowerMonitor'}
+                  </span>
+                  <button onClick={() => { device.gatt?.disconnect(); setDevice(null); setStep(0); setProgress(''); }}
+                    className="text-xs text-red-600 hover:underline">Disconnect</button>
+                </div>
+
+                <div className="space-y-2">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Command</label>
+                    <div className="flex gap-1 flex-wrap mb-1">
+                      {['set_wifi','set_mqtt','set_supabase','set_calibration','set_relay','set_battery','set_virtual_channel','set_channel_name','set_channel_group','set_invert_curr','reset_coulomb','calibrate_baseline','factory_reset','reboot'].map(cmd => (
+                        <button key={cmd} onClick={() => { setRawCmd(cmd); setRawPayload(defaultPayload(cmd)); }}
+                          className={`text-xs px-2 py-1 rounded border ${rawCmd === cmd ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-50 text-gray-700 border-gray-300 hover:bg-gray-100'}`}>
+                          {cmd}
+                        </button>
+                      ))}
+                    </div>
+                    <input value={rawCmd} onChange={e => { setRawCmd(e.target.value); setRawPayload(defaultPayload(e.target.value)); }}
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono" placeholder="command_name" />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Payload JSON</label>
+                    <textarea value={rawPayload} onChange={e => setRawPayload(e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono h-28 resize-none" placeholder='{}' />
+                  </div>
+
+                  <button onClick={sendRawCommand}
+                    disabled={!rawCmd.trim() || rawSending}
+                    className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50 text-sm">
+                    {rawSending ? 'Sending...' : 'Send Command'}
+                  </button>
+
+                  {rawResponse && (
+                    <div className="bg-gray-50 rounded p-2 text-xs font-mono whitespace-pre-wrap max-h-40 overflow-y-auto">
+                      {rawResponse}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
