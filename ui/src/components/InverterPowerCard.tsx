@@ -66,7 +66,7 @@ export default function InverterPowerCard({ inverterPower, systemStatus }: Props
       <div className="mt-3 flex items-center gap-2">
         <span className={`text-sm font-medium ${valueColor}`}>
           {sourcing && 'Sourcing from battery'}
-          {surplus && 'Surplus to grid'}
+          {surplus && 'Surplus to inverter'}
           {balanced && 'Idle'}
         </span>
       </div>

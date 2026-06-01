@@ -276,7 +276,7 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
                 : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
             }`}
           >
-            {metricLabel}
+            {m.charAt(0).toUpperCase() + m.slice(1)}
           </button>
         ))}
       </div>

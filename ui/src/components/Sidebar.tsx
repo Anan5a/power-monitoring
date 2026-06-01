@@ -4,7 +4,7 @@ import {
   BoltIcon,
   Cog6ToothIcon,
   ShieldCheckIcon,
-  ArrowRightOnRectangleIcon,
+  ArrowLeftOnRectangleIcon,
 } from '@heroicons/react/24/outline'
 
 export interface SidebarProps {
@@ -82,7 +82,7 @@ export default function Sidebar({
           onClick={onSignOut}
           className="w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-700/50 hover:text-white transition-colors"
         >
-          <ArrowRightOnRectangleIcon className="h-5 w-5 shrink-0" />
+          <ArrowLeftOnRectangleIcon className="h-5 w-5 shrink-0" />
           <span>Sign Out</span>
         </button>
       </div>
@@ -93,15 +93,13 @@ export default function Sidebar({
     <AnimatePresence>
       {isOpen && (
         <>
-          <motion.button
-            type="button"
-            aria-label="Close sidebar"
-            onClick={onClose}
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
             className="fixed inset-0 z-30 bg-black/50 md:hidden"
+            onClick={onClose}
           />
           <motion.div
             key="mobile-drawer"
