@@ -1,52 +1,57 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
-import { supabase, fetchDeviceChannels } from '../lib/supabase'
-import { computeTelemetry, type ComputedValues } from '../lib/computedTelemetry'
-import type { DeviceChannels, TelemetryPoint } from '../lib/types'
+import { useEffect, useState, useCallback } from 'react'
+import { supabase } from '../lib/supabase'
+import type { ComputedValues } from '../lib/computedTelemetry'
 
 interface ComputedRow {
   id: number
   device_key: string
   recorded_at: string
-  payload: Record<string, number>
+  pv_power: number; battery_power: number
+  battery_charging_power: number; battery_discharging_power: number
+  dc_load_power: number; unclassified_power: number
+  inverter_power: number
+  system_status: 'unknown' | 'charging' | 'discharging' | 'balanced'
+  min_soc_pct: number | null; max_soc_pct: number | null
+  total_energy_wh: number
+  // typed columns
+  ch0_v: number | null; ch0_i: number | null; ch0_p: number | null
+  ch1_v: number | null; ch1_i: number | null; ch1_p: number | null
+  ch2_v: number | null; ch2_i: number | null; ch2_p: number | null
+  ch3_v: number | null; ch3_i: number | null; ch3_p: number | null
+  energy_wh0: number | null; energy_wh1: number | null; energy_wh2: number | null; energy_wh3: number | null
+  soc_pct0: number | null; soc_pct1: number | null; soc_pct2: number | null; soc_pct3: number | null
 }
 
 const HISTORY_LIMIT = 200
-// If no telemetry_computed row within this window, fall back to client compute from telemetry_live
-const FALLBACK_AGE_MS = 30_000
 
 export function useComputedTelemetry(deviceKey: string | null) {
   const [computedLatest, setComputedLatest] = useState<ComputedValues | null>(null)
   const [computedHistory, setComputedHistory] = useState<ComputedValues[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const computedChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
-  const liveChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
-  const deviceChannelsRef = useRef<DeviceChannels | null>(null)
-  const lastComputedAtRef = useRef<number | null>(null)
 
-  const recompute = useCallback((payload: Record<string, number>): ComputedValues | null => {
-    const channels = deviceChannelsRef.current
-    if (!channels) return null
-    return computeTelemetry(
-      payload,
-      channels.channel_groups ?? [],
-      channels.battery_profiles ?? []
-    )
+  const recompute = useCallback((row: ComputedRow): ComputedValues => {
+    return {
+      pv_power: row.pv_power ?? 0,
+      battery_power: row.battery_power ?? 0,
+      battery_charging_power: row.battery_charging_power ?? 0,
+      battery_discharging_power: row.battery_discharging_power ?? 0,
+      dc_load_power: row.dc_load_power ?? 0,
+      unclassified_power: row.unclassified_power ?? 0,
+      inverter_power: row.inverter_power ?? 0,
+      system_status: row.system_status ?? 'unknown',
+      min_soc_pct: row.min_soc_pct,
+      max_soc_pct: row.max_soc_pct,
+      total_energy_wh: row.total_energy_wh ?? 0,
+    }
   }, [])
 
   useEffect(() => {
     if (!deviceKey) {
       setComputedLatest(null)
       setComputedHistory([])
-      lastComputedAtRef.current = null
       return
     }
     setIsLoading(true)
-
-    // Load device channels once for client-side computation
-    fetchDeviceChannels(deviceKey).then(dc => {
-      deviceChannelsRef.current = dc
-      setIsLoading(false)
-    })
 
     // Load recent computed rows (server-side precomputed)
     supabase
@@ -58,19 +63,17 @@ export function useComputedTelemetry(deviceKey: string | null) {
       .then(({ data }) => {
         if (data) {
           const rows = (data as ComputedRow[]).slice().reverse()
-          const history = rows
-            .map(r => recompute(r.payload))
-            .filter((v): v is ComputedValues => v !== null)
+          const history = rows.map(r => recompute(r))
           setComputedHistory(history)
           if (history.length > 0) {
             setComputedLatest(history[history.length - 1])
-            lastComputedAtRef.current = new Date(rows[rows.length - 1].recorded_at).getTime()
           }
         }
+        setIsLoading(false)
       })
 
-    // Subscribe to server-computed telemetry
-    const computedChannel = supabase
+    // Subscribe to telemetry_computed (typed columns, server-computed aggregates)
+    const channel = supabase
       .channel(`telemetry-computed-${deviceKey}`)
       .on('postgres_changes', {
         event: 'INSERT',
@@ -79,9 +82,7 @@ export function useComputedTelemetry(deviceKey: string | null) {
         filter: `device_key=eq.${deviceKey}`,
       }, payload => {
         const row = payload.new as ComputedRow
-        const computed = recompute(row.payload)
-        if (!computed) return
-        lastComputedAtRef.current = new Date(row.recorded_at).getTime()
+        const computed = recompute(row)
         setComputedLatest(computed)
         setComputedHistory(prev => {
           const next = [...prev, computed]
@@ -89,41 +90,9 @@ export function useComputedTelemetry(deviceKey: string | null) {
         })
       })
       .subscribe()
-    computedChannelRef.current = computedChannel
-
-    // Fallback: subscribe to telemetry_live and compute client-side
-    const liveChannel = supabase
-      .channel(`telemetry-live-fallback-${deviceKey}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'telemetry_live',
-        filter: `device_id=eq.${deviceKey}`,
-      }, payload => {
-        // Skip if server-computed is fresh
-        const last = lastComputedAtRef.current
-        if (last && Date.now() - last < FALLBACK_AGE_MS) return
-        const point = payload.new as TelemetryPoint
-        const computed = recompute(point.payload as Record<string, number>)
-        if (!computed) return
-        setComputedLatest(computed)
-        setComputedHistory(prev => {
-          const next = [...prev, computed]
-          return next.length > HISTORY_LIMIT ? next.slice(-HISTORY_LIMIT) : next
-        })
-      })
-      .subscribe()
-    liveChannelRef.current = liveChannel
 
     return () => {
-      if (computedChannelRef.current) {
-        supabase.removeChannel(computedChannelRef.current)
-        computedChannelRef.current = null
-      }
-      if (liveChannelRef.current) {
-        supabase.removeChannel(liveChannelRef.current)
-        liveChannelRef.current = null
-      }
+      supabase.removeChannel(channel)
     }
   }, [deviceKey, recompute])
 

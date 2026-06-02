@@ -99,20 +99,42 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
     setLoading(true)
     const hours = RANGE_HOURS[range]
 
-    // Short ranges: raw data
+    // Short ranges: query telemetry_computed typed columns
     if (range === '1h' || range === '6h') {
       const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
       supabase
-        .from('telemetry_live')
+        .from('telemetry_computed')
         .select('*')
-        .eq('device_id', deviceKey)
+        .eq('device_key', deviceKey)
         .gte('recorded_at', since)
         .order('recorded_at', { ascending: true })
         .limit(RANGE_LIMITS[range])
         .then(({ data }) => {
           if (data) {
-            setHistoryData(data as TelemetryPoint[])
-            const keys = extractKeys(data as TelemetryPoint[], metric)
+            // Reconstruct payload from typed columns
+            const typed = data as Array<Record<string, unknown>>
+            const points = typed.map(row => ({
+              id: (row.id as number) ?? 0,
+              device_id: row.device_key as string,
+              recorded_at: row.recorded_at as string,
+              payload: {
+                ...(row.ch0_v != null && { 'ch0_V': row.ch0_v }),
+                ...(row.ch0_i != null && { 'ch0_I': row.ch0_i }),
+                ...(row.ch0_p != null && { 'ch0_P': row.ch0_p }),
+                ...(row.ch1_v != null && { 'ch1_V': row.ch1_v }),
+                ...(row.ch1_i != null && { 'ch1_I': row.ch1_i }),
+                ...(row.ch1_p != null && { 'ch1_P': row.ch1_p }),
+                ...(row.ch2_v != null && { 'ch2_V': row.ch2_v }),
+                ...(row.ch2_i != null && { 'ch2_I': row.ch2_i }),
+                ...(row.ch2_p != null && { 'ch2_P': row.ch2_p }),
+                ...(row.ch3_v != null && { 'ch3_V': row.ch3_v }),
+                ...(row.ch3_i != null && { 'ch3_I': row.ch3_i }),
+                ...(row.ch3_p != null && { 'ch3_P': row.ch3_p }),
+              },
+              metadata: {},
+            }))
+            setHistoryData(points as TelemetryPoint[])
+            const keys = extractKeys(points as TelemetryPoint[], metric)
             setSeriesKeys(keys)
             setVisibleLines(new Set(keys))
           }
