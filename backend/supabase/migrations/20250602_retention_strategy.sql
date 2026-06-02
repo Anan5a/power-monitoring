@@ -236,9 +236,10 @@ begin
     return query
     with buckets as (
         select
-            date_trunc('epoch', recorded_at)::timestamptz
-                + (extract(epoch from recorded_at)::bigint / extract(epoch from bucket_interval)::bigint)
-                * bucket_interval as b,
+            to_timestamp(
+                (extract(epoch from recorded_at)::bigint / extract(epoch from bucket_interval)::bigint)
+                * extract(epoch from bucket_interval)::bigint
+            )::timestamptz as b,
             key,
             (raw_payload->>key)::float as val
         from public.telemetry_computed,
