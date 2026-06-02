@@ -461,7 +461,7 @@ $$;
 do $$
 begin
     perform cron.unschedule('telemetry-rollup');
-exception when undefined_object then null;
+exception when others then null;
 end
 $$;
 select cron.schedule(
@@ -656,7 +656,7 @@ $$;
 do $$
 begin
     perform cron.unschedule('telemetry-maintenance');
-exception when undefined_object then null;
+exception when others then null;
 end
 $$;
 select cron.schedule(
