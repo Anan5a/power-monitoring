@@ -16,6 +16,7 @@ interface ComputedRow {
   ch3_v: number | null; ch3_i: number | null; ch3_p: number | null
   // Additional fields from telemetry_computed that ChannelsPage reads
   ina3221_v0: number | null; ina3221_v1: number | null; ina3221_v2: number | null
+  ina3221_i0: number | null; ina3221_i1: number | null; ina3221_i2: number | null
   ina226_v: number | null; ina226_i: number | null; ina226_p: number | null
   ads1115_0: number | null; ads1115_1: number | null; ads1115_2: number | null; ads1115_3: number | null
   energy_wh0: number | null; energy_wh1: number | null; energy_wh2: number | null; energy_wh3: number | null
@@ -41,6 +42,9 @@ function computedToPayload(row: ComputedRow): Record<string, number> {
   if (row.ina3221_v0 != null) p['ina3221_v0'] = row.ina3221_v0
   if (row.ina3221_v1 != null) p['ina3221_v1'] = row.ina3221_v1
   if (row.ina3221_v2 != null) p['ina3221_v2'] = row.ina3221_v2
+  if (row.ina3221_i0 != null) p['ina3221_i0'] = row.ina3221_i0
+  if (row.ina3221_i1 != null) p['ina3221_i1'] = row.ina3221_i1
+  if (row.ina3221_i2 != null) p['ina3221_i2'] = row.ina3221_i2
   if (row.ina226_v != null) p['ina226_v'] = row.ina226_v
   if (row.ina226_i != null) p['ina226_i'] = row.ina226_i
   if (row.ina226_p != null) p['ina226_p'] = row.ina226_p
@@ -59,6 +63,9 @@ function computedToPayload(row: ComputedRow): Record<string, number> {
   if (row.ina3221_v0 != null) p['ina3221_v0'] = row.ina3221_v0
   if (row.ina3221_v1 != null) p['ina3221_v1'] = row.ina3221_v1
   if (row.ina3221_v2 != null) p['ina3221_v2'] = row.ina3221_v2
+  if (row.ina3221_i0 != null) p['ina3221_i0'] = row.ina3221_i0
+  if (row.ina3221_i1 != null) p['ina3221_i1'] = row.ina3221_i1
+  if (row.ina3221_i2 != null) p['ina3221_i2'] = row.ina3221_i2
   if (row.ina226_v != null) p['ina226_v'] = row.ina226_v
   if (row.ina226_i != null) p['ina226_i'] = row.ina226_i
   if (row.ina226_p != null) p['ina226_p'] = row.ina226_p

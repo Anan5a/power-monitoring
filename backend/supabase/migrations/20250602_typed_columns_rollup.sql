@@ -22,6 +22,9 @@
 alter table public.telemetry_computed add column if not exists ina3221_v0 real;
 alter table public.telemetry_computed add column if not exists ina3221_v1 real;
 alter table public.telemetry_computed add column if not exists ina3221_v2 real;
+alter table public.telemetry_computed add column if not exists ina3221_i0 real;
+alter table public.telemetry_computed add column if not exists ina3221_i1 real;
+alter table public.telemetry_computed add column if not exists ina3221_i2 real;
 alter table public.telemetry_computed add column if not exists ina226_v real;
 alter table public.telemetry_computed add column if not exists ina226_i real;
 alter table public.telemetry_computed add column if not exists ina226_p real;
@@ -194,8 +197,9 @@ begin
         min_soc_pct, max_soc_pct,
         total_energy_wh,
 
-        -- INA3221 bus voltages (from JSON array, index by channel)
+        -- INA3221 bus voltages + currents (top-level keys: ina3221_v0/v1/v2, ina3221_i0/i1/i2)
         ina3221_v0, ina3221_v1, ina3221_v2,
+        ina3221_i0, ina3221_i1, ina3221_i2,
         -- INA226
         ina226_v, ina226_i, ina226_p,
         -- ADS1115
@@ -228,17 +232,23 @@ begin
         case when max_soc isnull then null else max_soc end,
         total_energy,
 
-        -- Extract typed values from payload JSONB
-        (new.payload->'ina3221'->0->>'v')::real,
-        (new.payload->'ina3221'->1->>'v')::real,
-        (new.payload->'ina3221'->2->>'v')::real,
+        -- INA3221 bus voltages (top-level keys: ina3221_v0, ina3221_v1, ina3221_v2)
+        (new.payload->>'ina3221_v0')::real,
+        (new.payload->>'ina3221_v1')::real,
+        (new.payload->>'ina3221_v2')::real,
+        -- INA3221 currents (top-level keys: ina3221_i0, ina3221_i1, ina3221_i2)
+        (new.payload->>'ina3221_i0')::real,
+        (new.payload->>'ina3221_i1')::real,
+        (new.payload->>'ina3221_i2')::real,
+        -- INA226 (top-level keys: ina226_v, ina226_i, ina226_p)
         (new.payload->>'ina226_v')::real,
         (new.payload->>'ina226_i')::real,
         (new.payload->>'ina226_p')::real,
-        (new.payload->>'ads1115_0')::real,
-        (new.payload->>'ads1115_1')::real,
-        (new.payload->>'ads1115_2')::real,
-        (new.payload->>'ads1115_3')::real,
+        -- ADS1115 (array: ads1115[0..3])
+        (new.payload->'ads1115'->0)::real,
+        (new.payload->'ads1115'->1)::real,
+        (new.payload->'ads1115'->2)::real,
+        (new.payload->'ads1115'->3)::real,
         (new.payload->>'coulomb_mah0')::real,
         (new.payload->>'coulomb_mah1')::real,
         (new.payload->>'coulomb_mah2')::real,
