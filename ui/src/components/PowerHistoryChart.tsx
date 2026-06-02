@@ -98,18 +98,63 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
     if (!deviceKey) return
     setLoading(true)
     const hours = RANGE_HOURS[range]
-    const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
+
+    // Short ranges: raw data
+    if (range === '1h' || range === '6h') {
+      const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
+      supabase
+        .from('telemetry_live')
+        .select('*')
+        .eq('device_id', deviceKey)
+        .gte('recorded_at', since)
+        .order('recorded_at', { ascending: true })
+        .limit(RANGE_LIMITS[range])
+        .then(({ data }) => {
+          if (data) {
+            setHistoryData(data as TelemetryPoint[])
+            const keys = extractKeys(data as TelemetryPoint[], metric)
+            setSeriesKeys(keys)
+            setVisibleLines(new Set(keys))
+          }
+          setLoading(false)
+        })
+      return
+    }
+
+    // Long ranges: use RPC aggregation
     supabase
-      .from('telemetry_live')
-      .select('*')
-      .eq('device_id', deviceKey)
-      .gte('recorded_at', since)
-      .order('recorded_at', { ascending: true })
-      .limit(RANGE_LIMITS[range])
-      .then(({ data }) => {
-        if (data) {
-          setHistoryData(data as TelemetryPoint[])
-          const keys = extractKeys(data as TelemetryPoint[], metric)
+      .rpc('get_aggregated_telemetry', {
+        p_device_key: deviceKey,
+        p_hours: hours,
+        p_metric: metric,
+      })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('RPC error:', error)
+          setLoading(false)
+          return
+        }
+        if (data && data.length > 0) {
+          // Transform RPC rows into TelemetryPoint shape
+          const buckets = new Map<string, TelemetryPoint>()
+          for (const row of data as Array<{ bucket: string; key: string; avg_val: number; min_val: number; max_val: number }>) {
+            if (!buckets.has(row.bucket)) {
+              buckets.set(row.bucket, {
+                id: 0,
+                device_id: deviceKey,
+                recorded_at: row.bucket,
+                payload: {},
+                metadata: {},
+              })
+            }
+            const pt = buckets.get(row.bucket)!
+            ;(pt.payload as Record<string, number>)[row.key] = row.avg_val
+          }
+          const arr = Array.from(buckets.values()).sort(
+            (a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime()
+          )
+          setHistoryData(arr)
+          const keys = extractKeys(arr, metric)
           setSeriesKeys(keys)
           setVisibleLines(new Set(keys))
         }

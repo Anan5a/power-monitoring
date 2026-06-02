@@ -806,3 +806,71 @@ drop trigger if exists on_telemetry_computed_update on public.telemetry_live;
 create trigger on_telemetry_computed_update
     after insert on public.telemetry_live
     for each row execute function public.compute_telemetry_row();
+
+---------------------------------------------------------------
+-- RPC: get_aggregated_telemetry
+-- Time-bucket aggregation for chart long ranges
+-- Returns ~150-300 rows even for 30-day ranges
+---------------------------------------------------------------
+create or replace function public.get_aggregated_telemetry(
+    p_device_key text,
+    p_hours int,
+    p_metric text default 'power'
+)
+returns table (
+    bucket timestamptz,
+    key text,
+    avg_val float,
+    min_val float,
+    max_val float
+) language plpgsql security definer as $$
+declare
+    bucket_interval interval;
+    since timestamptz;
+    key_pattern text;
+begin
+    -- Auto-select bucket size based on range
+    bucket_interval := case
+        when p_hours <= 1 then '30 seconds'::interval
+        when p_hours <= 6 then '1 minute'::interval
+        when p_hours <= 24 then '5 minutes'::interval
+        when p_hours <= 168 then '15 minutes'::interval
+        else '1 hour'::interval
+    end;
+
+    since := now() - (p_hours || ' hours')::interval;
+
+    -- Match payload keys by metric type
+    key_pattern := case p_metric
+        when 'power' then 'ch%_P'
+        when 'voltage' then 'ch%_V'
+        when 'current' then 'ch%_I'
+        else 'ch%_P'
+    end;
+
+    return query
+    with buckets as (
+        select
+            date_trunc('epoch', recorded_at)::timestamptz
+                + (extract(epoch from recorded_at)::bigint / extract(epoch from bucket_interval)::bigint)
+                * bucket_interval as b,
+            key,
+            (payload->>key)::float as val
+        from public.telemetry_live,
+             lateral jsonb_object_keys(payload) as key
+        where device_id = p_device_key
+          and recorded_at >= since
+          and key like key_pattern
+    )
+    select
+        b as bucket,
+        key,
+        avg(val)::float as avg_val,
+        min(val)::float as min_val,
+        max(val)::float as max_val
+    from buckets
+    where val is not null
+    group by b, key
+    order by b, key;
+end;
+$$;
