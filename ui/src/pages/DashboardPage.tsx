@@ -131,7 +131,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Power history chart */}
-          <PowerHistoryChart deviceKey={selectedDevice.device_key} />
+          <PowerHistoryChart deviceKey={selectedDevice.device_key} deviceChannels={deviceChannels} />
         </div>
       )}
     </DashboardLayout>

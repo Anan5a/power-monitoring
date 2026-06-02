@@ -5,10 +5,11 @@ import {
   ResponsiveContainer, Scatter
 } from 'recharts'
 import { supabase } from '../lib/supabase'
-import type { TelemetryPoint } from '../lib/types'
+import type { TelemetryPoint, DeviceChannels, ChannelName } from '../lib/types'
 
 interface Props {
   deviceKey: string
+  deviceChannels?: DeviceChannels | null
 }
 
 type Range = '1h' | '6h' | '24h' | '7d' | '30d'
@@ -74,19 +75,24 @@ function extractKeys(data: TelemetryPoint[], metric: Metric): string[] {
   return payloadKeys.filter(k => METRIC_REGEX[metric].test(k))
 }
 
-function keyToLabel(k: string): string {
+function vcName(channelNames: ChannelName[] | undefined, idx: number): string {
+  return channelNames?.find(cn => cn.channel === idx)?.name ?? `VC${idx}`
+}
+
+function keyToLabel(k: string, channelNames?: ChannelName[]): string {
   if (k === 'ina226_p' || k === 'ina226_v' || k === 'ina226_i') return 'INA226'
-  if (/^ina3221_[pvi][0-2]$/.test(k)) {
-    const m = k.match(/^ina3221_([pvi])([0-2])$/)!
+  const ina = k.match(/^ina3221_([pvi])([0-2])$/)
+  if (ina) {
     const m2m: Record<string, string> = { p: 'P', v: 'V', i: 'I' }
-    return `VC${m[2]}${m2m[m[1]]}`
+    return `${vcName(channelNames, parseInt(ina[2]))} ${m2m[ina[1]]}`
   }
-  const m = k.match(/^ch(\d)_([PVI])$/i)
-  if (m) return `VC${m[1]}${m[2].toUpperCase()}`
+  const ch = k.match(/^ch(\d)_([PVI])$/i)
+  if (ch) return `${vcName(channelNames, parseInt(ch[1]))} ${ch[2].toUpperCase()}`
   return k
 }
 
-export default function PowerHistoryChart({ deviceKey }: Props) {
+export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) {
+  const channelNames = deviceChannels?.channel_names
   const [range, setRange] = useState<Range>('24h')
   const [metric, setMetric] = useState<Metric>('power')
   const [historyData, setHistoryData] = useState<TelemetryPoint[]>([])
@@ -330,7 +336,7 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
             <div key={p.dataKey} className="flex items-center justify-between gap-3 text-[12px] py-0.5">
               <div className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: p.color }} />
-                <span className="text-slate-300">{keyToLabel(p.dataKey ?? '')}</span>
+                <span className="text-slate-300">{keyToLabel(p.dataKey ?? '', channelNames)}</span>
               </div>
               <span className="text-slate-100 font-semibold font-mono">
                 {v.toFixed(metric === 'voltage' ? 2 : 1)} {unit}
@@ -417,7 +423,7 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
                   className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                   style={{ background: `linear-gradient(135deg, ${g.start}, ${g.end})` }}
                 />
-                <span style={active ? { color: g.start } : {}}>{keyToLabel(k)}</span>
+                <span style={active ? { color: g.start } : {}}>{keyToLabel(k, channelNames)}</span>
               </button>
             )
           })}
