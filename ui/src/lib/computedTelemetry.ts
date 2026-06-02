@@ -32,18 +32,20 @@ export function computeTelemetry(
       if (group.icon === 0) {
         pvPower += Math.max(0, p)
       } else if (group.icon === 1) {
-        if (p < 0) batteryChargingPower += Math.abs(p)
-        else batteryDischargingPower += p
+        if (p > 0) batteryChargingPower += p
+        else batteryDischargingPower += Math.abs(p)
       } else if (group.icon === 2) {
-        dcLoadPower += Math.max(0, p)
+        // Load: negative power = consuming (discharging the system)
+        dcLoadPower += p < 0 ? Math.abs(p) : 0
       } else {
-        dcLoadPower += Math.max(0, p)
+        // Generic (icon 3) or unknown: treat as load
+        dcLoadPower += p < 0 ? Math.abs(p) : 0
       }
     }
   }
 
-  const battery_power = batteryDischargingPower - batteryChargingPower
-  const inverter_power = batteryChargingPower + dcLoadPower - pvPower
+  const battery_power = batteryChargingPower - batteryDischargingPower
+  const inverter_power = pvPower + batteryDischargingPower - batteryChargingPower - dcLoadPower
 
   let system_status: ComputedValues['system_status'] = 'unknown'
   if (batteryChargingPower > 5) system_status = 'charging'

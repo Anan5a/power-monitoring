@@ -139,7 +139,7 @@ export default function QuickStatsRow({ latestReading, deviceChannels }: Props) 
           <div className="h-10 w-px bg-slate-200" />
 
           <DirectionalMetric
-            label={computed.inverter_power > 0 ? 'Inverter (out)' : 'Inverter (in)'}
+            label="Inverter"
             value={computed.inverter_power}
             unit="W"
           />

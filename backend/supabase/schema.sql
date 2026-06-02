@@ -688,18 +688,18 @@ begin
                         -- Solar: only count positive (generating)
                         pv_power_val := pv_power_val + greatest(ch_power, 0);
                     elsif grp_icon = 1 then
-                        -- Battery
-                        if ch_power < 0 then
-                            battery_charging := battery_charging + abs(ch_power);
+                        -- Battery: positive = charging, negative = discharging
+                        if ch_power > 0 then
+                            battery_charging := battery_charging + ch_power;
                         else
-                            battery_discharging := battery_discharging + ch_power;
+                            battery_discharging := battery_discharging + abs(ch_power);
                         end if;
                     elsif grp_icon = 2 then
-                        -- Load
-                        dc_load_val := dc_load_val + greatest(ch_power, 0);
+                        -- Load: negative power = consuming (discharging the system)
+                        dc_load_val := dc_load_val + case when ch_power < 0 then abs(ch_power) else 0 end;
                     else
                         -- Generic (icon 3) or unknown: treat as load
-                        dc_load_val := dc_load_val + greatest(ch_power, 0);
+                        dc_load_val := dc_load_val + case when ch_power < 0 then abs(ch_power) else 0 end;
                     end if;
 
                     -- Channel found — don't check other groups (first match wins)
@@ -726,10 +726,11 @@ begin
                   and bp_capacity > 0;
 
                 if bp_capacity is not null and bp_capacity > 0 then
-                    if ch_power < 0 then
-                        battery_charging := battery_charging + abs(ch_power);
+                    -- Fallback battery profile: positive = charging, negative = discharging
+                    if ch_power > 0 then
+                        battery_charging := battery_charging + ch_power;
                     else
-                        battery_discharging := battery_discharging + ch_power;
+                        battery_discharging := battery_discharging + abs(ch_power);
                     end if;
                     ch_in_any_group := true;
                 end if;
@@ -743,7 +744,7 @@ begin
     end loop;
 
     -- Compute inverter power
-    inv_power := battery_charging + dc_load_val - pv_power_val;
+    inv_power := pv_power_val + battery_discharging - battery_charging - dc_load_val;
 
     -- System status
     if battery_charging > 5 then
@@ -784,7 +785,7 @@ begin
     ) values (
         new.device_id, new.recorded_at,
         pv_power_val,
-        battery_discharging - battery_charging,
+        battery_charging - battery_discharging,
         battery_charging,
         battery_discharging,
         dc_load_val, unclassified_val, inv_power,

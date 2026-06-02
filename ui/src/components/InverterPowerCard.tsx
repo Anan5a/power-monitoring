@@ -14,27 +14,27 @@ const STATUS_COPY: Record<string, { label: string; tone: string }> = {
 }
 
 export default function InverterPowerCard({ inverterPower, systemStatus }: Props) {
-  const sourcing = inverterPower > 0.5
-  const surplus = inverterPower < -0.5
-  const balanced = !sourcing && !surplus
+  const active = inverterPower > 0.5
+  const deficit = inverterPower < -0.5
+  const balanced = !active && !deficit
 
-  const valueColor = sourcing
+  const valueColor = active
     ? 'text-emerald-600'
-    : surplus
-      ? 'text-cyan-600'
+    : deficit
+      ? 'text-red-500'
       : 'text-slate-400'
 
-  const bg = sourcing
+  const bg = active
     ? 'from-emerald-50/50'
-    : surplus
-      ? 'from-cyan-50/50'
+    : deficit
+      ? 'from-red-50/50'
       : 'from-slate-50/50'
 
   const displayValue = Math.abs(inverterPower) < 0.05 ? 0 : inverterPower
   const formatted = displayValue.toFixed(1)
 
-  const Arrow = sourcing ? ArrowUpIcon : surplus ? ArrowDownIcon : null
-  const arrowColor = sourcing ? 'text-emerald-500' : surplus ? 'text-cyan-500' : 'text-slate-300'
+  const Arrow = active ? ArrowUpIcon : deficit ? ArrowDownIcon : null
+  const arrowColor = active ? 'text-emerald-500' : deficit ? 'text-red-500' : 'text-slate-300'
 
   const statusInfo = STATUS_COPY[systemStatus] ?? STATUS_COPY.unknown
 
@@ -65,8 +65,8 @@ export default function InverterPowerCard({ inverterPower, systemStatus }: Props
 
       <div className="mt-3 flex items-center gap-2">
         <span className={`text-sm font-medium ${valueColor}`}>
-          {sourcing && 'Sourcing from battery'}
-          {surplus && 'Surplus to inverter'}
+          {active && 'Supplying inverter'}
+          {deficit && 'DC deficit'}
           {balanced && 'Idle'}
         </span>
       </div>
