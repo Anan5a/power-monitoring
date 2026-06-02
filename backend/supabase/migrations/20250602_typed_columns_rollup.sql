@@ -458,10 +458,15 @@ end;
 $$;
 
 -- Schedule rollup every minute
-select cron.unschedule('telemetry-rollup');
+do $$
+begin
+    perform cron.unschedule('telemetry-rollup');
+exception when undefined_object then null;
+end
+$$;
 select cron.schedule(
     'telemetry-rollup',
-    '* * * * *',  -- every minute
+    '* * * * *',
     'select public.rollup_telemetry_computed()'
 );
 
@@ -648,9 +653,14 @@ begin
 end;
 $$;
 
-select cron.unschedule('telemetry-maintenance');
+do $$
+begin
+    perform cron.unschedule('telemetry-maintenance');
+exception when undefined_object then null;
+end
+$$;
 select cron.schedule(
     'telemetry-maintenance',
-    '23 * * * *',  -- run at :23 to avoid overlap with rollup
+    '23 * * * *',
     'select public.archive_and_purge_telemetry()'
 );
