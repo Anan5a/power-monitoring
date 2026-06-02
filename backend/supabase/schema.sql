@@ -345,10 +345,12 @@ create policy "no_direct_insert" on public.telemetry_live
     with check (false);
 
 ---------------------------------------------------------------
--- Telemetry retention: adaptive, size-based (no daily aggregation)
--- Keeps raw telemetry until storage reaches 70% of 500MB free tier (~350MB)
--- Then deletes oldest rows in chunks until under 65% (~325MB)
+-- Telemetry retention: time-based strategy
+--   telemetry_live     -> purge after 48h (raw payload copied to computed)
+--   telemetry_computed -> keep 90 days (primary long-term store)
+--   telemetry_backup   -> daily aggregates for data older than 90 days
 -- Sensor calibration status: baseline noise collected per channel, updated during calibrate_baseline
+---------------------------------------------------------------
 create table public.sensor_calibration_status (
     id bigint generated always as identity primary key,
     device_key text unique not null references public.devices(device_key) on delete cascade,
@@ -365,44 +367,177 @@ drop publication if exists supabase_realtime;
 create publication supabase_realtime for table public.telemetry_live, public.devices, public.device_channels, public.sensor_calibration_status, public.relay_states;
 
 ---------------------------------------------------------------
+-- Backup table: daily aggregates of computed telemetry older than 90 days
+---------------------------------------------------------------
+create table public.telemetry_backup (
+    id bigint generated always as identity primary key,
+    device_key text not null,
+    day date not null,
+
+    pv_power_avg float not null default 0,
+    pv_power_min float not null default 0,
+    pv_power_max float not null default 0,
+
+    battery_power_avg float not null default 0,
+    battery_power_min float not null default 0,
+    battery_power_max float not null default 0,
+
+    battery_charging_power_avg float not null default 0,
+    battery_charging_power_max float not null default 0,
+
+    battery_discharging_power_avg float not null default 0,
+    battery_discharging_power_max float not null default 0,
+
+    dc_load_power_avg float not null default 0,
+    dc_load_power_max float not null default 0,
+
+    inverter_power_avg float not null default 0,
+    inverter_power_min float not null default 0,
+    inverter_power_max float not null default 0,
+
+    total_energy_wh_start float,
+    total_energy_wh_end float,
+    energy_wh_delta float,
+
+    min_soc_pct float,
+    max_soc_pct float,
+
+    sample_count int not null default 0,
+    created_at timestamptz not null default now(),
+
+    unique (device_key, day)
+);
+
+create index idx_telemetry_backup_device_day
+    on public.telemetry_backup (device_key, day desc);
+
+alter table public.telemetry_backup enable row level security;
+
+create policy "own_telemetry_backup" on public.telemetry_backup
+    for select to authenticated using (
+        exists (
+            select 1 from public.devices d
+            join public.profiles p on p.id = d.user_id
+            where d.device_key = telemetry_backup.device_key
+              and p.id = auth.uid()
+        )
+    );
+
+grant select on public.telemetry_backup to authenticated;
+
+---------------------------------------------------------------
 create or replace function public.archive_and_purge_telemetry()
 returns void language plpgsql security definer as $$
 declare
-    size_mb numeric;
-    cutoff_ts timestamptz;
-    target_mb numeric := 325;   -- 65%: delete until we reach this
-    threshold_mb numeric := 350; -- 70%: start pruning when above this
+    archived_rows int;
+    deleted_live int;
+    deleted_computed int;
 begin
-    -- Check total size of telemetry_live (includes TOAST and indexes)
-    select pg_total_relation_size('public.telemetry_live') / (1024 * 1024) into size_mb;
+    -- Step 1: Aggressively purge telemetry_live after 48 hours
+    delete from public.telemetry_live
+    where recorded_at < now() - interval '48 hours';
+    get diagnostics deleted_live = row_count;
 
-    if size_mb > threshold_mb then
-        -- Delete oldest rows until under target
-        while size_mb > target_mb loop
-            select recorded_at into cutoff_ts
-            from public.telemetry_live
-            order by recorded_at asc
-            limit 1;
+    -- Step 2: Archive computed data older than 90 days to daily aggregates
+    with old_data as (
+        select
+            device_key,
+            date_trunc('day', recorded_at)::date as day,
+            avg(pv_power) as pv_power_avg,
+            min(pv_power) as pv_power_min,
+            max(pv_power) as pv_power_max,
+            avg(battery_power) as battery_power_avg,
+            min(battery_power) as battery_power_min,
+            max(battery_power) as battery_power_max,
+            avg(battery_charging_power) as battery_charging_power_avg,
+            max(battery_charging_power) as battery_charging_power_max,
+            avg(battery_discharging_power) as battery_discharging_power_avg,
+            max(battery_discharging_power) as battery_discharging_power_max,
+            avg(dc_load_power) as dc_load_power_avg,
+            max(dc_load_power) as dc_load_power_max,
+            avg(inverter_power) as inverter_power_avg,
+            min(inverter_power) as inverter_power_min,
+            max(inverter_power) as inverter_power_max,
+            (array_agg(total_energy_wh order by recorded_at asc))[1] as total_energy_wh_start,
+            (array_agg(total_energy_wh order by recorded_at desc))[1] as total_energy_wh_end,
+            min(min_soc_pct) as min_soc_pct,
+            max(max_soc_pct) as max_soc_pct,
+            count(*) as sample_count
+        from public.telemetry_computed
+        where recorded_at < now() - interval '90 days'
+        group by device_key, date_trunc('day', recorded_at)::date
+    ),
+    upserted as (
+        insert into public.telemetry_backup (
+            device_key, day,
+            pv_power_avg, pv_power_min, pv_power_max,
+            battery_power_avg, battery_power_min, battery_power_max,
+            battery_charging_power_avg, battery_charging_power_max,
+            battery_discharging_power_avg, battery_discharging_power_max,
+            dc_load_power_avg, dc_load_power_max,
+            inverter_power_avg, inverter_power_min, inverter_power_max,
+            total_energy_wh_start, total_energy_wh_end, energy_wh_delta,
+            min_soc_pct, max_soc_pct,
+            sample_count
+        )
+        select
+            device_key, day,
+            pv_power_avg, pv_power_min, pv_power_max,
+            battery_power_avg, battery_power_min, battery_power_max,
+            battery_charging_power_avg, battery_charging_power_max,
+            battery_discharging_power_avg, battery_discharging_power_max,
+            dc_load_power_avg, dc_load_power_max,
+            inverter_power_avg, inverter_power_min, inverter_power_max,
+            total_energy_wh_start, total_energy_wh_end,
+            coalesce(total_energy_wh_end, 0) - coalesce(total_energy_wh_start, 0),
+            min_soc_pct, max_soc_pct,
+            sample_count
+        from old_data
+        on conflict (device_key, day) do update set
+            pv_power_avg = excluded.pv_power_avg,
+            pv_power_min = least(telemetry_backup.pv_power_min, excluded.pv_power_min),
+            pv_power_max = greatest(telemetry_backup.pv_power_max, excluded.pv_power_max),
+            battery_power_avg = excluded.battery_power_avg,
+            battery_power_min = least(telemetry_backup.battery_power_min, excluded.battery_power_min),
+            battery_power_max = greatest(telemetry_backup.battery_power_max, excluded.battery_power_max),
+            battery_charging_power_avg = excluded.battery_charging_power_avg,
+            battery_charging_power_max = greatest(telemetry_backup.battery_charging_power_max, excluded.battery_charging_power_max),
+            battery_discharging_power_avg = excluded.battery_discharging_power_avg,
+            battery_discharging_power_max = greatest(telemetry_backup.battery_discharging_power_max, excluded.battery_discharging_power_max),
+            dc_load_power_avg = excluded.dc_load_power_avg,
+            dc_load_power_max = greatest(telemetry_backup.dc_load_power_max, excluded.dc_load_power_max),
+            inverter_power_avg = excluded.inverter_power_avg,
+            inverter_power_min = least(telemetry_backup.inverter_power_min, excluded.inverter_power_min),
+            inverter_power_max = greatest(telemetry_backup.inverter_power_max, excluded.inverter_power_max),
+            total_energy_wh_start = coalesce(telemetry_backup.total_energy_wh_start, excluded.total_energy_wh_start),
+            total_energy_wh_end = excluded.total_energy_wh_end,
+            energy_wh_delta = excluded.total_energy_wh_end - coalesce(telemetry_backup.total_energy_wh_start, excluded.total_energy_wh_start),
+            min_soc_pct = least(telemetry_backup.min_soc_pct, excluded.min_soc_pct),
+            max_soc_pct = greatest(telemetry_backup.max_soc_pct, excluded.max_soc_pct),
+            sample_count = telemetry_backup.sample_count + excluded.sample_count,
+            created_at = now()
+        returning 1
+    )
+    select count(*) into archived_rows from upserted;
 
-            exit when cutoff_ts is null;
+    -- Step 3: Delete archived computed rows
+    delete from public.telemetry_computed
+    where recorded_at < now() - interval '90 days';
+    get diagnostics deleted_computed = row_count;
 
-            delete from public.telemetry_live
-            where recorded_at <= cutoff_ts;
-
-            select pg_total_relation_size('public.telemetry_live') / (1024 * 1024) into size_mb;
-        end loop;
-    end if;
-
-    -- Mark devices offline if no telemetry in last 24 hours
+    -- Step 4: Mark devices offline if no telemetry in last 24 hours
     update public.devices d
     set is_online = false
     where d.last_seen_at < current_timestamp - interval '1 day';
+
+    raise log 'telemetry retention: deleted_live=%, archived_computed=%, deleted_computed=%',
+        deleted_live, archived_rows, deleted_computed;
 end;
 $$;
 
 select cron.schedule(
     'telemetry-maintenance',
-    '0 * * * *',  -- every hour instead of once at midnight
+    '17 * * * *',
     'select public.archive_and_purge_telemetry()'
 );
 
@@ -810,7 +945,8 @@ create trigger on_telemetry_computed_update
 ---------------------------------------------------------------
 -- RPC: get_aggregated_telemetry
 -- Time-bucket aggregation for chart long ranges
--- Returns ~150-300 rows even for 30-day ranges
+-- Queries telemetry_computed.raw_payload (long-term store) since
+-- telemetry_live is ephemeral (purged after 48h).
 ---------------------------------------------------------------
 create or replace function public.get_aggregated_telemetry(
     p_device_key text,
@@ -840,7 +976,7 @@ begin
 
     since := now() - (p_hours || ' hours')::interval;
 
-    -- Match payload keys by metric type
+    -- Match payload keys by metric type in raw_payload
     key_pattern := case p_metric
         when 'power' then 'ch%_P'
         when 'voltage' then 'ch%_V'
@@ -855,10 +991,10 @@ begin
                 + (extract(epoch from recorded_at)::bigint / extract(epoch from bucket_interval)::bigint)
                 * bucket_interval as b,
             key,
-            (payload->>key)::float as val
-        from public.telemetry_live,
-             lateral jsonb_object_keys(payload) as key
-        where device_id = p_device_key
+            (raw_payload->>key)::float as val
+        from public.telemetry_computed,
+             lateral jsonb_object_keys(raw_payload) as key
+        where device_key = p_device_key
           and recorded_at >= since
           and key like key_pattern
     )
