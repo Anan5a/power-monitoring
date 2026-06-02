@@ -15,7 +15,9 @@ type Range = '1h' | '6h' | '24h' | '7d' | '30d'
 type Metric = 'power' | 'voltage' | 'current'
 
 const RANGE_HOURS: Record<Range, number> = { '1h': 1, '6h': 6, '24h': 24, '7d': 168, '30d': 720 }
-const RANGE_LIMITS: Record<Range, number> = { '1h': 500, '6h': 500, '24h': 200, '7d': 500, '30d': 500 }
+const RANGE_LIMITS: Record<Range, number> = { '1h': 1000, '6h': 5000, '24h': 20000, '7d': 50000, '30d': 50000 }
+// Downsample to ~1500 points max for smooth chart rendering
+const DOWNSAMPLE_TARGET = 1500
 
 const UNIT: Record<Metric, string> = { power: 'W', voltage: 'V', current: 'A' }
 
@@ -123,34 +125,46 @@ export default function PowerHistoryChart({ deviceKey }: Props) {
     setVisibleLines(new Set(keys))
   }, [metric, historyData])
 
-  const chartData = useMemo(() => historyData.map(pt => {
-    const rec: Record<string, unknown> = {
-      time: new Date(pt.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    }
+  // Downsample for smooth rendering on long ranges
+  const downsampledHistory = useMemo(() => {
+    if (historyData.length <= DOWNSAMPLE_TARGET) return historyData
+    const step = Math.ceil(historyData.length / DOWNSAMPLE_TARGET)
+    return historyData.filter((_, i) => i % step === 0)
+  }, [historyData])
+
+  const chartData = useMemo(() => downsampledHistory.map(pt => {
+    const d = new Date(pt.recorded_at)
+    const showDate = range !== '1h' && range !== '6h'
+    const time = showDate
+      ? d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    const rec: Record<string, unknown> = { time }
     for (const k of seriesKeys) {
       rec[k] = (pt.payload as Record<string, number>)[k] ?? null
     }
     return rec
-  }), [historyData, seriesKeys])
+  }), [downsampledHistory, seriesKeys, range])
 
   // Spike markers (only meaningful on power tab)
   const spikeData: Array<{ time: string; spike_y: number }> = useMemo(() => {
     if (metric !== 'power') return []
     const out: Array<{ time: string; spike_y: number }> = []
-    for (const pt of historyData) {
+    for (const pt of downsampledHistory) {
       const payload = pt.payload as Record<string, unknown>
       for (let i = 0; i < 3; i++) {
         if (payload[`ina3221_i${i}_spike`] === true) {
-          out.push({
-            time: new Date(pt.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            spike_y: 0,
-          })
+          const d = new Date(pt.recorded_at)
+          const showDate = range !== '1h' && range !== '6h'
+          const time = showDate
+            ? d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          out.push({ time, spike_y: 0 })
           break
         }
       }
     }
     return out
-  }, [historyData, metric])
+  }, [downsampledHistory, metric, range])
 
   const toggleLine = (key: string) => {
     const next = new Set(visibleLines)
