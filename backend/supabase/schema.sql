@@ -748,6 +748,9 @@ create table public.telemetry_computed (
     ina3221_v0 real,
     ina3221_v1 real,
     ina3221_v2 real,
+    ina3221_i0 real,
+    ina3221_i1 real,
+    ina3221_i2 real,
     -- INA226
     ina226_v real,
     ina226_i real,
@@ -970,6 +973,7 @@ begin
         total_energy_wh,
 
         ina3221_v0, ina3221_v1, ina3221_v2,
+        ina3221_i0, ina3221_i1, ina3221_i2,
         ina226_v, ina226_i, ina226_p,
         ads1115_0, ads1115_1, ads1115_2, ads1115_3,
         coulomb_mah0, coulomb_mah1, coulomb_mah2, coulomb_mah3,
@@ -994,16 +998,19 @@ begin
         case when max_soc isnull then null else max_soc end,
         total_energy,
 
-        (new.payload->'ina3221'->0->>'v')::real,
-        (new.payload->'ina3221'->1->>'v')::real,
-        (new.payload->'ina3221'->2->>'v')::real,
+        (new.payload->>'ina3221_v0')::real,
+        (new.payload->>'ina3221_v1')::real,
+        (new.payload->>'ina3221_v2')::real,
+        (new.payload->>'ina3221_i0')::real,
+        (new.payload->>'ina3221_i1')::real,
+        (new.payload->>'ina3221_i2')::real,
         (new.payload->>'ina226_v')::real,
         (new.payload->>'ina226_i')::real,
         (new.payload->>'ina226_p')::real,
-        (new.payload->>'ads1115_0')::real,
-        (new.payload->>'ads1115_1')::real,
-        (new.payload->>'ads1115_2')::real,
-        (new.payload->>'ads1115_3')::real,
+        (new.payload->'ads1115'->0)::real,
+        (new.payload->'ads1115'->1)::real,
+        (new.payload->'ads1115'->2)::real,
+        (new.payload->'ads1115'->3)::real,
         (new.payload->>'coulomb_mah0')::real,
         (new.payload->>'coulomb_mah1')::real,
         (new.payload->>'coulomb_mah2')::real,
@@ -1091,11 +1098,14 @@ begin
                 + (floor(extract(epoch from recorded_at)::bigint
                     / extract(epoch from bucket_interval)::bigint)
                 * extract(epoch from bucket_interval)::bigint
-                * interval '1 second' as b,
+                * interval '1 second') as b,
             ch0_p, ch0_v, ch0_i,
             ch1_p, ch1_v, ch1_i,
             ch2_p, ch2_v, ch2_i,
-            ch3_p, ch3_v, ch3_i
+            ch3_p, ch3_v, ch3_i,
+            ina3221_v0, ina3221_v1, ina3221_v2,
+            ina3221_i0, ina3221_i1, ina3221_i2,
+            ina226_v, ina226_i, ina226_p
         from public.telemetry_computed
         where device_key = p_device_key and recorded_at >= since
     )
@@ -1107,6 +1117,8 @@ begin
     from buckets where ch2_p is not null and p_metric = 'power' group by b
     union all select b, 'ch3_P', avg(ch3_p)::float, min(ch3_p)::float, max(ch3_p)::float
     from buckets where ch3_p is not null and p_metric = 'power' group by b
+    union all select b, 'ina226_p', avg(ina226_p)::float, min(ina226_p)::float, max(ina226_p)::float
+    from buckets where ina226_p is not null and p_metric = 'power' group by b
     union all select b, 'ch0_V', avg(ch0_v)::float, min(ch0_v)::float, max(ch0_v)::float
     from buckets where ch0_v is not null and p_metric = 'voltage' group by b
     union all select b, 'ch1_V', avg(ch1_v)::float, min(ch1_v)::float, max(ch1_v)::float
@@ -1115,6 +1127,14 @@ begin
     from buckets where ch2_v is not null and p_metric = 'voltage' group by b
     union all select b, 'ch3_V', avg(ch3_v)::float, min(ch3_v)::float, max(ch3_v)::float
     from buckets where ch3_v is not null and p_metric = 'voltage' group by b
+    union all select b, 'ina3221_v0', avg(ina3221_v0)::float, min(ina3221_v0)::float, max(ina3221_v0)::float
+    from buckets where ina3221_v0 is not null and p_metric = 'voltage' group by b
+    union all select b, 'ina3221_v1', avg(ina3221_v1)::float, min(ina3221_v1)::float, max(ina3221_v1)::float
+    from buckets where ina3221_v1 is not null and p_metric = 'voltage' group by b
+    union all select b, 'ina3221_v2', avg(ina3221_v2)::float, min(ina3221_v2)::float, max(ina3221_v2)::float
+    from buckets where ina3221_v2 is not null and p_metric = 'voltage' group by b
+    union all select b, 'ina226_v', avg(ina226_v)::float, min(ina226_v)::float, max(ina226_v)::float
+    from buckets where ina226_v is not null and p_metric = 'voltage' group by b
     union all select b, 'ch0_I', avg(ch0_i)::float, min(ch0_i)::float, max(ch0_i)::float
     from buckets where ch0_i is not null and p_metric = 'current' group by b
     union all select b, 'ch1_I', avg(ch1_i)::float, min(ch1_i)::float, max(ch1_i)::float
@@ -1123,6 +1143,14 @@ begin
     from buckets where ch2_i is not null and p_metric = 'current' group by b
     union all select b, 'ch3_I', avg(ch3_i)::float, min(ch3_i)::float, max(ch3_i)::float
     from buckets where ch3_i is not null and p_metric = 'current' group by b
+    union all select b, 'ina3221_i0', avg(ina3221_i0)::float, min(ina3221_i0)::float, max(ina3221_i0)::float
+    from buckets where ina3221_i0 is not null and p_metric = 'current' group by b
+    union all select b, 'ina3221_i1', avg(ina3221_i1)::float, min(ina3221_i1)::float, max(ina3221_i1)::float
+    from buckets where ina3221_i1 is not null and p_metric = 'current' group by b
+    union all select b, 'ina3221_i2', avg(ina3221_i2)::float, min(ina3221_i2)::float, max(ina3221_i2)::float
+    from buckets where ina3221_i2 is not null and p_metric = 'current' group by b
+    union all select b, 'ina226_i', avg(ina226_i)::float, min(ina226_i)::float, max(ina226_i)::float
+    from buckets where ina226_i is not null and p_metric = 'current' group by b
     order by bucket, key;
 end;
 $$;
