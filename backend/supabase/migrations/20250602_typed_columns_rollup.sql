@@ -508,7 +508,7 @@ begin
                 + (floor(extract(epoch from recorded_at)::bigint
                     / extract(epoch from bucket_interval)::bigint)
                 * extract(epoch from bucket_interval)::bigint
-                * interval '1 second' as b,
+                * interval '1 second') as b,
             ch0_p, ch0_v, ch0_i,
             ch1_p, ch1_v, ch1_i,
             ch2_p, ch2_v, ch2_i,
