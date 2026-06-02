@@ -72,14 +72,14 @@ export default function DashboardPage() {
     return <div className="flex items-center justify-center h-screen text-slate-500">Loading...</div>
   }
 
-  const header = (
+  const header = ({ onMenuClick }: { onMenuClick: () => void }) => (
     <HeaderBar
       devices={devices}
       selectedDeviceId={selectedDevice?.id ?? null}
       onSelectDevice={setSelectedDevice}
       isOnline={selectedDevice?.is_online ?? false}
       lastUpdated={latestReading ? new Date(latestReading.recorded_at) : null}
-      onMenuClick={() => undefined}
+      onMenuClick={onMenuClick}
     />
   )
 

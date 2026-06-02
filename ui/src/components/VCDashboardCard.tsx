@@ -14,6 +14,8 @@ export default function VCDashboardCard({
   socPct, batteryCapacity, online
 }: Props) {
   const hasBattery = batteryCapacity > 0
+  // HOTFIX: add offset until coulomb counter can be physically reset
+  const displayEnergyWh = hasBattery && energyWh !== null ? energyWh + 1300 : energyWh
   const socWarning = hasBattery && socPct !== null && socPct < 20
   const borderColor = socWarning ? 'border-l-yellow-400' : 'border-l-emerald-500'
 
@@ -52,11 +54,11 @@ export default function VCDashboardCard({
       </div>
 
       {/* Energy */}
-      {energyWh !== null && (
+      {displayEnergyWh !== null && (
         <div className="text-center mb-4">
           <span className="text-xs text-slate-400">Energy: </span>
           <span className="text-sm font-medium text-slate-700">
-            {energyWh >= 1000 ? `${(energyWh / 1000).toFixed(2)} kWh` : `${energyWh.toFixed(1)} Wh`}
+            {displayEnergyWh >= 1000 ? `${(displayEnergyWh / 1000).toFixed(2)} kWh` : `${displayEnergyWh.toFixed(1)} Wh`}
           </span>
         </div>
       )}

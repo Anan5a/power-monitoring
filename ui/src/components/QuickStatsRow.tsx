@@ -104,7 +104,8 @@ export default function QuickStatsRow({ latestReading, deviceChannels }: Props) 
   const batteryProfiles = deviceChannels?.battery_profiles ?? []
   const computed = computeTelemetry(payload, groups, batteryProfiles)
 
-  const totalPower = computed.pv_power + computed.battery_discharging_power + computed.dc_load_power
+  // Total load demand: everything the system is powering right now
+  const totalPower = Math.abs(computed.inverter_power) + computed.dc_load_power
 
   const status = STATUS_STYLES[computed.system_status]
 

@@ -6,7 +6,7 @@ export interface DashboardLayoutProps {
   currentPath: string
   onNavigate: (path: string) => void
   onSignOut: () => void
-  header: ReactNode
+  header: ReactNode | ((props: { onMenuClick: () => void }) => ReactNode)
   deviceName?: string
 }
 
@@ -19,6 +19,9 @@ export default function DashboardLayout({
   deviceName,
 }: DashboardLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const toggleSidebar = () => setSidebarOpen(prev => !prev)
+
+  const headerNode = typeof header === 'function' ? header({ onMenuClick: toggleSidebar }) : header
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -30,8 +33,8 @@ export default function DashboardLayout({
         onClose={() => setSidebarOpen(false)}
         deviceName={deviceName}
       />
-      <div className="md:ml-64 min-h-screen flex flex-col">
-        {header}
+      <div className={`min-h-screen flex flex-col transition-all duration-300 ${sidebarOpen ? 'md:ml-64' : ''}`}>
+        {headerNode}
         <main className="flex-1 p-4 md:p-6">
           {children}
         </main>

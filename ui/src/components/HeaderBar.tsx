@@ -44,7 +44,7 @@ export default function HeaderBar({
           type="button"
           aria-label="Open navigation"
           onClick={onMenuClick}
-          className="md:hidden inline-flex items-center justify-center w-9 h-9 rounded-lg text-slate-600 hover:bg-slate-100"
+          className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-slate-600 hover:bg-slate-100"
         >
           <Bars3Icon className="h-6 w-6" />
         </button>
