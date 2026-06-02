@@ -367,7 +367,7 @@ drop publication if exists supabase_realtime;
 create publication supabase_realtime for table public.telemetry_live, public.devices, public.device_channels, public.sensor_calibration_status, public.relay_states;
 
 ---------------------------------------------------------------
--- Backup table: daily aggregates of computed telemetry older than 90 days
+-- Backup table: daily aggregates of computed telemetry older than 15 days
 ---------------------------------------------------------------
 create table public.telemetry_backup (
     id bigint generated always as identity primary key,
@@ -426,19 +426,17 @@ create policy "own_telemetry_backup" on public.telemetry_backup
 grant select on public.telemetry_backup to authenticated;
 
 ---------------------------------------------------------------
+-- Retention: telemetry_live deleted by trigger (passthrough only)
+-- telemetry_computed: 0-48h raw 1/sec, then 2-sec rollup (via rollup_telemetry_computed)
+-- telemetry_computed >15d: archived to telemetry_backup (via this job)
+---------------------------------------------------------------
 create or replace function public.archive_and_purge_telemetry()
 returns void language plpgsql security definer as $$
 declare
     archived_rows int;
-    deleted_live int;
     deleted_computed int;
 begin
-    -- Step 1: Aggressively purge telemetry_live after 48 hours
-    delete from public.telemetry_live
-    where recorded_at < now() - interval '48 hours';
-    get diagnostics deleted_live = row_count;
-
-    -- Step 2: Archive computed data older than 90 days to daily aggregates
+    -- Step 1: Archive computed data older than 15 days to daily aggregates
     with old_data as (
         select
             device_key,
@@ -464,7 +462,7 @@ begin
             max(max_soc_pct) as max_soc_pct,
             count(*) as sample_count
         from public.telemetry_computed
-        where recorded_at < now() - interval '90 days'
+        where recorded_at < now() - interval '15 days'
         group by device_key, date_trunc('day', recorded_at)::date
     ),
     upserted as (
@@ -520,28 +518,28 @@ begin
     )
     select count(*) into archived_rows from upserted;
 
-    -- Step 3: Delete archived computed rows
+    -- Step 2: Delete archived computed rows
     delete from public.telemetry_computed
-    where recorded_at < now() - interval '90 days';
+    where recorded_at < now() - interval '15 days';
     get diagnostics deleted_computed = row_count;
 
-    -- Step 4: Mark devices offline if no telemetry in last 24 hours
+    -- Step 3: Mark devices offline if no telemetry in last 24 hours
     update public.devices d
     set is_online = false
     where d.last_seen_at < current_timestamp - interval '1 day';
 
-    raise log 'telemetry retention: deleted_live=%, archived_computed=%, deleted_computed=%',
-        deleted_live, archived_rows, deleted_computed;
+    raise log 'telemetry retention: archived_computed=%, deleted_computed=%',
+        archived_rows, deleted_computed;
 end;
 $$;
 
 select cron.schedule(
     'telemetry-maintenance',
-    '17 * * * *',
+    '23 * * * *',
     'select public.archive_and_purge_telemetry()'
 );
 
----------------------------------------------------------------
+    ---------------------------------------------------------------
 -- Seed data: power-monitor device profile
 ---------------------------------------------------------------
 insert into public.device_profiles (device_type, label, fields) values (
@@ -713,8 +711,10 @@ alter publication supabase_realtime add table public.energy_hourly;
 ---------------------------------------------------------------
 -- Telemetry Computed: trigger-computed enriched telemetry
 -- One row per telemetry insert (append-only, not upsert)
--- Keeps full history — telemetry_live can be purged without losing computed data
--- Never auto-deleted
+-- 0-48h: raw 1/sec typed columns
+-- 48h+: 2-sec rollup (via rollup_telemetry_computed cron job)
+-- >15 days: daily backup (via archive_and_purge_telemetry cron job)
+-- telemetry_live is a passthrough — deleted immediately by trigger
 ---------------------------------------------------------------
 
 create table public.telemetry_computed (
@@ -743,9 +743,60 @@ create table public.telemetry_computed (
     -- Energy
     total_energy_wh float not null default 0,
 
-    -- Raw payload + metadata copies
-    raw_payload jsonb not null default '{}'::jsonb,
-    raw_metadata jsonb not null default '{}'::jsonb,
+    -- Per-channel typed columns (replaces raw_payload JSONB)
+    -- INA3221 bus voltages
+    ina3221_v0 real,
+    ina3221_v1 real,
+    ina3221_v2 real,
+    -- INA226
+    ina226_v real,
+    ina226_i real,
+    ina226_p real,
+    -- ADS1115
+    ads1115_0 real,
+    ads1115_1 real,
+    ads1115_2 real,
+    ads1115_3 real,
+    -- Coulombs
+    coulomb_mah0 real,
+    coulomb_mah1 real,
+    coulomb_mah2 real,
+    coulomb_mah3 real,
+    -- Energy per channel
+    energy_wh0 real,
+    energy_wh1 real,
+    energy_wh2 real,
+    energy_wh3 real,
+    -- SoC per channel
+    soc_pct0 real,
+    soc_pct1 real,
+    soc_pct2 real,
+    soc_pct3 real,
+    -- Relay states
+    relay0 boolean,
+    relay1 boolean,
+    relay2 boolean,
+    relay3 boolean,
+    -- Virtual channels
+    ch0_v real,
+    ch0_i real,
+    ch0_p real,
+    ch1_v real,
+    ch1_i real,
+    ch1_p real,
+    ch2_v real,
+    ch2_i real,
+    ch2_p real,
+    ch3_v real,
+    ch3_i real,
+    ch3_p real,
+    -- Spike flags
+    ina3221_v0_spike boolean,
+    ina3221_v1_spike boolean,
+    ina3221_v2_spike boolean,
+    ina3221_i0_spike boolean,
+    ina3221_i1_spike boolean,
+    ina3221_i2_spike boolean,
 
     created_at timestamptz not null default now(),
 
@@ -908,6 +959,7 @@ begin
                   + coalesce((new.payload->>'energy_wh3')::float, 0);
 
     -- Insert computed row (append-only, no upsert)
+    -- telemetry_live row is deleted by trigger after this insert
     insert into public.telemetry_computed (
         device_key, recorded_at,
         pv_power, battery_power,
@@ -916,7 +968,20 @@ begin
         system_status,
         min_soc_pct, max_soc_pct,
         total_energy_wh,
-        raw_payload, raw_metadata
+
+        ina3221_v0, ina3221_v1, ina3221_v2,
+        ina226_v, ina226_i, ina226_p,
+        ads1115_0, ads1115_1, ads1115_2, ads1115_3,
+        coulomb_mah0, coulomb_mah1, coulomb_mah2, coulomb_mah3,
+        energy_wh0, energy_wh1, energy_wh2, energy_wh3,
+        soc_pct0, soc_pct1, soc_pct2, soc_pct3,
+        relay0, relay1, relay2, relay3,
+        ch0_v, ch0_i, ch0_p,
+        ch1_v, ch1_i, ch1_p,
+        ch2_v, ch2_i, ch2_p,
+        ch3_v, ch3_i, ch3_p,
+        ina3221_v0_spike, ina3221_v1_spike, ina3221_v2_spike,
+        ina3221_i0_spike, ina3221_i1_spike, ina3221_i2_spike
     ) values (
         new.device_id, new.recorded_at,
         pv_power_val,
@@ -928,9 +993,55 @@ begin
         case when min_soc isnull then null else min_soc end,
         case when max_soc isnull then null else max_soc end,
         total_energy,
-        new.payload,
-        coalesce(new.metadata, '{}'::jsonb)
+
+        (new.payload->'ina3221'->0->>'v')::real,
+        (new.payload->'ina3221'->1->>'v')::real,
+        (new.payload->'ina3221'->2->>'v')::real,
+        (new.payload->>'ina226_v')::real,
+        (new.payload->>'ina226_i')::real,
+        (new.payload->>'ina226_p')::real,
+        (new.payload->>'ads1115_0')::real,
+        (new.payload->>'ads1115_1')::real,
+        (new.payload->>'ads1115_2')::real,
+        (new.payload->>'ads1115_3')::real,
+        (new.payload->>'coulomb_mah0')::real,
+        (new.payload->>'coulomb_mah1')::real,
+        (new.payload->>'coulomb_mah2')::real,
+        (new.payload->>'coulomb_mah3')::real,
+        (new.payload->>'energy_wh0')::real,
+        (new.payload->>'energy_wh1')::real,
+        (new.payload->>'energy_wh2')::real,
+        (new.payload->>'energy_wh3')::real,
+        (new.payload->>'soc_pct0')::real,
+        (new.payload->>'soc_pct1')::real,
+        (new.payload->>'soc_pct2')::real,
+        (new.payload->>'soc_pct3')::real,
+        (new.payload->>'relay0')::boolean,
+        (new.payload->>'relay1')::boolean,
+        (new.payload->>'relay2')::boolean,
+        (new.payload->>'relay3')::boolean,
+        (new.payload->>'ch0_V')::real,
+        (new.payload->>'ch0_I')::real,
+        (new.payload->>'ch0_P')::real,
+        (new.payload->>'ch1_V')::real,
+        (new.payload->>'ch1_I')::real,
+        (new.payload->>'ch1_P')::real,
+        (new.payload->>'ch2_V')::real,
+        (new.payload->>'ch2_I')::real,
+        (new.payload->>'ch2_P')::real,
+        (new.payload->>'ch3_V')::real,
+        (new.payload->>'ch3_I')::real,
+        (new.payload->>'ch3_P')::real,
+        (new.payload->>'ina3221_v0_spike')::boolean,
+        (new.payload->>'ina3221_v1_spike')::boolean,
+        (new.payload->>'ina3221_v2_spike')::boolean,
+        (new.payload->>'ina3221_i0_spike')::boolean,
+        (new.payload->>'ina3221_i1_spike')::boolean,
+        (new.payload->>'ina3221_i2_spike')::boolean
     );
+
+    -- Delete telemetry_live immediately (passthrough only)
+    delete from public.telemetry_live where id = new.id;
 
     return new;
 end;
@@ -945,8 +1056,7 @@ create trigger on_telemetry_computed_update
 ---------------------------------------------------------------
 -- RPC: get_aggregated_telemetry
 -- Time-bucket aggregation for chart long ranges
--- Queries telemetry_computed.raw_payload (long-term store) since
--- telemetry_live is ephemeral (purged after 48h).
+-- Reads typed columns from telemetry_computed (no raw_payload)
 ---------------------------------------------------------------
 create or replace function public.get_aggregated_telemetry(
     p_device_key text,
@@ -963,9 +1073,7 @@ returns table (
 declare
     bucket_interval interval;
     since timestamptz;
-    key_pattern text;
 begin
-    -- Auto-select bucket size based on range
     bucket_interval := case
         when p_hours <= 1 then '30 seconds'::interval
         when p_hours <= 6 then '1 minute'::interval
@@ -976,37 +1084,45 @@ begin
 
     since := now() - (p_hours || ' hours')::interval;
 
-    -- Match payload keys by metric type in raw_payload
-    key_pattern := case p_metric
-        when 'power' then 'ch%_P'
-        when 'voltage' then 'ch%_V'
-        when 'current' then 'ch%_I'
-        else 'ch%_P'
-    end;
-
     return query
     with buckets as (
         select
             date_trunc('epoch', recorded_at)::timestamptz
-                + (extract(epoch from recorded_at)::bigint / extract(epoch from bucket_interval)::bigint)
-                * bucket_interval as b,
-            key,
-            (raw_payload->>key)::float as val
-        from public.telemetry_computed,
-             lateral jsonb_object_keys(raw_payload) as key
-        where device_key = p_device_key
-          and recorded_at >= since
-          and key like key_pattern
+                + (floor(extract(epoch from recorded_at)::bigint
+                    / extract(epoch from bucket_interval)::bigint)
+                * extract(epoch from bucket_interval)::bigint
+                * interval '1 second' as b,
+            ch0_p, ch0_v, ch0_i,
+            ch1_p, ch1_v, ch1_i,
+            ch2_p, ch2_v, ch2_i,
+            ch3_p, ch3_v, ch3_i
+        from public.telemetry_computed
+        where device_key = p_device_key and recorded_at >= since
     )
-    select
-        b as bucket,
-        key,
-        avg(val)::float as avg_val,
-        min(val)::float as min_val,
-        max(val)::float as max_val
-    from buckets
-    where val is not null
-    group by b, key
-    order by b, key;
+    select b as bucket, 'ch0_P'::text, avg(ch0_p)::float, min(ch0_p)::float, max(ch0_p)::float
+    from buckets where ch0_p is not null and p_metric = 'power' group by b
+    union all select b, 'ch1_P', avg(ch1_p)::float, min(ch1_p)::float, max(ch1_p)::float
+    from buckets where ch1_p is not null and p_metric = 'power' group by b
+    union all select b, 'ch2_P', avg(ch2_p)::float, min(ch2_p)::float, max(ch2_p)::float
+    from buckets where ch2_p is not null and p_metric = 'power' group by b
+    union all select b, 'ch3_P', avg(ch3_p)::float, min(ch3_p)::float, max(ch3_p)::float
+    from buckets where ch3_p is not null and p_metric = 'power' group by b
+    union all select b, 'ch0_V', avg(ch0_v)::float, min(ch0_v)::float, max(ch0_v)::float
+    from buckets where ch0_v is not null and p_metric = 'voltage' group by b
+    union all select b, 'ch1_V', avg(ch1_v)::float, min(ch1_v)::float, max(ch1_v)::float
+    from buckets where ch1_v is not null and p_metric = 'voltage' group by b
+    union all select b, 'ch2_V', avg(ch2_v)::float, min(ch2_v)::float, max(ch2_v)::float
+    from buckets where ch2_v is not null and p_metric = 'voltage' group by b
+    union all select b, 'ch3_V', avg(ch3_v)::float, min(ch3_v)::float, max(ch3_v)::float
+    from buckets where ch3_v is not null and p_metric = 'voltage' group by b
+    union all select b, 'ch0_I', avg(ch0_i)::float, min(ch0_i)::float, max(ch0_i)::float
+    from buckets where ch0_i is not null and p_metric = 'current' group by b
+    union all select b, 'ch1_I', avg(ch1_i)::float, min(ch1_i)::float, max(ch1_i)::float
+    from buckets where ch1_i is not null and p_metric = 'current' group by b
+    union all select b, 'ch2_I', avg(ch2_i)::float, min(ch2_i)::float, max(ch2_i)::float
+    from buckets where ch2_i is not null and p_metric = 'current' group by b
+    union all select b, 'ch3_I', avg(ch3_i)::float, min(ch3_i)::float, max(ch3_i)::float
+    from buckets where ch3_i is not null and p_metric = 'current' group by b
+    order by bucket, key;
 end;
 $$;
