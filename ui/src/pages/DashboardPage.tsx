@@ -7,7 +7,6 @@ import VCDashboardCard from '../components/VCDashboardCard'
 import PowerHistoryChart from '../components/PowerHistoryChart'
 import QuickStatsRow from '../components/QuickStatsRow'
 import RelaySwitchRow from '../components/RelaySwitchRow'
-import SensorControls from '../components/SensorControls'
 import DashboardLayout from '../components/DashboardLayout'
 import HeaderBar from '../components/HeaderBar'
 import InverterPowerCard from '../components/InverterPowerCard'
@@ -130,12 +129,6 @@ export default function DashboardPage() {
               />
             ))}
           </div>
-
-          {/* Sensor calibration controls */}
-          <SensorControls
-            deviceKey={selectedDevice.device_key}
-            deviceChannels={deviceChannels}
-          />
 
           {/* Power history chart */}
           <PowerHistoryChart deviceKey={selectedDevice.device_key} />
