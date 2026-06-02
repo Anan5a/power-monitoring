@@ -15,7 +15,7 @@ export default function VCDashboardCard({
 }: Props) {
   const hasBattery = batteryCapacity > 0
   // HOTFIX: add offset until coulomb counter can be physically reset
-  const displayEnergyWh = hasBattery && energyWh !== null ? energyWh + 1300 : energyWh
+  const displayEnergyWh = hasBattery && energyWh !== null ? energyWh + 1600 : energyWh
   const socWarning = hasBattery && socPct !== null && socPct < 20
   const borderColor = socWarning ? 'border-l-yellow-400' : 'border-l-emerald-500'
 
