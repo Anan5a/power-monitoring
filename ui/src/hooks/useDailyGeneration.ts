@@ -28,6 +28,7 @@ export function useDailyGeneration(deviceKey: string | null) {
     const today = new Date()
     today.setUTCHours(0, 0, 0, 0)
     const dateStr = today.toISOString().split('T')[0]
+    console.log('RPC call:', { p_device_key: deviceKey, p_date: dateStr })
 
     supabase
       .rpc('get_hourly_pv_generation', {
@@ -35,6 +36,7 @@ export function useDailyGeneration(deviceKey: string | null) {
         p_date: dateStr
       })
       .then((response) => {
+        console.log('RPC response:', response.data, response.error)
         if (!mounted.current) return
         setIsLoading(false)
         if (response.error || !response.data) {
