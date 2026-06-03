@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { SunIcon } from '@heroicons/react/24/outline'
-import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { useDailyGeneration } from '../hooks/useDailyGeneration'
 
 interface Props {
@@ -13,6 +13,7 @@ export default function DailyGenerationCard({ deviceKey }: Props) {
   const chartData = hourly.map(h => ({
     time: h.hour,
     kWh: h.value,
+    projected: h.projected ?? false,
   }))
 
   return (
@@ -47,38 +48,43 @@ export default function DailyGenerationCard({ deviceKey }: Props) {
         </motion.div>
       </AnimatePresence>
 
-      {/* Sparkline */}
+      {/* Bar chart */}
       {chartData.length > 0 && (
-        <div className="h-16">
+        <div className="h-32">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="gradGen" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.4} />
-                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.05} />
-                </linearGradient>
-              </defs>
+            <BarChart data={chartData} margin={{ top: 2, right: 0, left: -20, bottom: 0 }}>
+              <XAxis
+                dataKey="time"
+                tick={{ fontSize: 9, fill: '#94a3b8' }}
+                tickLine={false}
+                axisLine={false}
+                interval={2}
+              />
+              <YAxis hide />
               <Tooltip
                 formatter={(v: number) => [`${v.toFixed(3)} kWh`, 'Generation']}
                 labelFormatter={(l: string) => l}
                 contentStyle={{ fontSize: 11, padding: '2px 6px' }}
               />
-              <Area
-                type="monotone"
-                dataKey="kWh"
-                stroke="#f59e0b"
-                strokeWidth={1.5}
-                fill="url(#gradGen)"
-                dot={false}
-                connectNulls
-              />
-            </AreaChart>
+              <Bar dataKey="kWh" radius={[2, 2, 0, 0]}>
+                {chartData.map((entry, index) => (
+                  <Cell
+                    key={`cell-${index}`}
+                    fill={entry.projected ? '#fbbf24' : '#f59e0b'}
+                    opacity={entry.projected ? 0.6 : 1}
+                  />
+                ))}
+              </Bar>
+            </BarChart>
           </ResponsiveContainer>
         </div>
       )}
 
       {chartData.length > 0 && (
         <div className="text-[10px] text-slate-400 mt-1 text-right">
+          {chartData[chartData.length - 1]?.projected && (
+            <span className="text-amber-500 mr-1">● projected</span>
+          )}
           00:00 → {chartData[chartData.length - 1]?.time ?? 'now'}
         </div>
       )}

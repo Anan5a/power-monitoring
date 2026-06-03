@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 export interface HourlyBucket {
   hour: string
   value: number
+  projected?: boolean
 }
 
 export function useDailyGeneration(deviceKey: string | null) {
@@ -28,7 +29,6 @@ export function useDailyGeneration(deviceKey: string | null) {
     const today = new Date()
     today.setUTCHours(0, 0, 0, 0)
     const dateStr = today.toISOString().split('T')[0]
-    console.log('RPC call:', { p_device_key: deviceKey, p_date: dateStr })
 
     supabase
       .rpc('get_hourly_pv_generation', {
@@ -36,27 +36,34 @@ export function useDailyGeneration(deviceKey: string | null) {
         p_date: dateStr
       })
       .then((response) => {
-        console.log('RPC response:', response.data, response.error)
         if (!mounted.current) return
         setIsLoading(false)
-        if (response.error || !response.data) {
-          console.error('RPC error:', response.error)
-          return
-        }
+        if (response.error || !response.data) return
 
         const result: HourlyBucket[] = []
         let totalKwh = 0
         const now = new Date()
+        const currentHour = now.getUTCHours()
 
         for (let h = 0; h <= 23; h++) {
-          if (h <= now.getUTCHours()) {
+          if (h <= currentHour) {
             const key = `${h.toString().padStart(2, '0')}:00`
-            const row = response.data.find((r: { hour: string; kwh: number }) => {
+            const row = response.data.find((r: { hour: string; kwh: string }) => {
               const hour = new Date(r.hour).getUTCHours()
               return hour === h
             })
-            const kwh = row ? Number(row.kwh) : 0
-            result.push({ hour: key, value: kwh })
+
+            let kwh = row ? Number(row.kwh) : 0
+
+            // For current hour, project full hour kWh based on elapsed time
+            if (h === currentHour && row) {
+              const minuteOfHour = now.getUTCMinutes()
+              const elapsedRatio = minuteOfHour > 0 ? 60 / minuteOfHour : 1
+              kwh = kwh * elapsedRatio
+              result.push({ hour: key, value: Math.round(kwh * 100) / 100, projected: true })
+            } else {
+              result.push({ hour: key, value: Math.round(kwh * 100) / 100 })
+            }
             totalKwh += kwh
           }
         }
