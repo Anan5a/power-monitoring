@@ -36,7 +36,7 @@ export function useDailyGeneration(deviceKey: string | null) {
       .order('recorded_at', { ascending: true })
       .then((response) => {
         const rows = response.data
-        console.log('DailyGen rows:', rows?.length, response.error)
+        console.log('DailyGen rows:', rows?.length, 'error:', response.error)
         if (!mounted.current) return
         setIsLoading(false)
         if (response.error || !rows || rows.length === 0) {
@@ -44,14 +44,22 @@ export function useDailyGeneration(deviceKey: string | null) {
           return
         }
 
+        // Debug: check first row
+        if (rows[0]) {
+          console.log('First row:', rows[0])
+        }
+
         const buckets = new Map<string, number>()
+        let debugCount = 0
         for (const row of rows) {
           const dt = new Date(row.recorded_at)
           const hourKey = `${dt.getHours().toString().padStart(2, '0')}:00`
-          const pvPower = row.pv_power ?? 0
+          const pvPower = Number(row.pv_power) || 0  // explicit number conversion
           const wh = pvPower / 3600
           buckets.set(hourKey, (buckets.get(hourKey) ?? 0) + wh)
+          debugCount++
         }
+        console.log('Buckets debug:', Object.fromEntries(buckets), 'count:', debugCount)
 
         const result: HourlyBucket[] = []
         const now = new Date()
@@ -64,6 +72,7 @@ export function useDailyGeneration(deviceKey: string | null) {
             totalKwh += kwh
           }
         }
+        console.log('totalKwh:', totalKwh, 'now.getHours():', now.getHours())
         if (!mounted.current) return
         setHourly(result)
         setTotal(Math.round(totalKwh * 100) / 100)
