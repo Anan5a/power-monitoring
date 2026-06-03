@@ -97,9 +97,9 @@ function extractKeys(data: TelemetryPoint[], metric: Metric): string[] {
   // For power tab: if computed system columns exist, exclude raw ch*_P that overlap
   if (metric === 'power') {
     const hasSystemKeys = SYSTEM_POWER_KEYS.some(k => nonZeroKeys.includes(k))
-    const filtered = nonZeroKeys.filter(k => SYSTEM_POWER_KEYS.includes(k) || k === 'ina226_p')
-    console.log('[PowerHistoryChart] extractKeys power:', { allKeys: Array.from(allKeys), nonZeroKeys, hasSystemKeys, filtered })
-    if (hasSystemKeys) return filtered
+    if (hasSystemKeys) {
+      return nonZeroKeys.filter(k => SYSTEM_POWER_KEYS.includes(k) || k === 'ina226_p')
+    }
   }
 
   return nonZeroKeys
@@ -291,6 +291,8 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
     }
     return rec
   }), [downsampledHistory, seriesKeys, range, metric])
+
+  console.log('[chartData] seriesKeys:', seriesKeys, 'totalPoints:', downsampledHistory.length, 'first:', JSON.stringify(chartData[0]), 'last:', JSON.stringify(chartData[chartData.length-1]))
 
   // Spike markers (only meaningful on power tab)
   const spikeData: Array<{ time: string; spike_y: number }> = useMemo(() => {
