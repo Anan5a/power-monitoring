@@ -1,6 +1,7 @@
--- Compact get_aggregated_telemetry: one row per bucket (avoids PostgREST 1000-row limit)
--- Returns typed columns with frontend-compatible key casing
+-- Drop old function first (return type changed, cannot CREATE OR REPLACE)
+drop function if exists public.get_aggregated_telemetry(text, int, text);
 
+-- Compact get_aggregated_telemetry: one row per bucket (avoids PostgREST 1000-row limit)
 create or replace function public.get_aggregated_telemetry(
     p_device_key text,
     p_hours int,
@@ -34,41 +35,41 @@ begin
     return query
     select
         to_timestamp(
-            floor(extract(epoch from recorded_at)::bigint
+            floor(extract(epoch from t.recorded_at)::bigint
                 / extract(epoch from bucket_interval)::bigint)
             * extract(epoch from bucket_interval)::bigint
         )::timestamptz as b,
         -- Power
-        case when p_metric = 'power' then avg(ch0_p)::float end as "ch0_P",
-        case when p_metric = 'power' then avg(ch1_p)::float end as "ch1_P",
-        case when p_metric = 'power' then avg(ch2_p)::float end as "ch2_P",
-        case when p_metric = 'power' then avg(ch3_p)::float end as "ch3_P",
-        case when p_metric = 'power' then avg(ina226_p)::float end as ina226_p,
-        case when p_metric = 'power' then avg(pv_power)::float end as pv_power,
-        case when p_metric = 'power' then avg(battery_power)::float end as battery_power,
-        case when p_metric = 'power' then avg(inverter_power)::float end as inverter_power,
-        case when p_metric = 'power' then avg(dc_load_power)::float end as dc_load_power,
-        case when p_metric = 'power' then avg(soc_pct0)::float end as soc_pct0,
+        case when p_metric = 'power' then avg(t.ch0_p)::float end as "ch0_P",
+        case when p_metric = 'power' then avg(t.ch1_p)::float end as "ch1_P",
+        case when p_metric = 'power' then avg(t.ch2_p)::float end as "ch2_P",
+        case when p_metric = 'power' then avg(t.ch3_p)::float end as "ch3_P",
+        case when p_metric = 'power' then avg(t.ina226_p)::float end as ina226_p,
+        case when p_metric = 'power' then avg(t.pv_power)::float end as pv_power,
+        case when p_metric = 'power' then avg(t.battery_power)::float end as battery_power,
+        case when p_metric = 'power' then avg(t.inverter_power)::float end as inverter_power,
+        case when p_metric = 'power' then avg(t.dc_load_power)::float end as dc_load_power,
+        case when p_metric = 'power' then avg(t.soc_pct0)::float end as soc_pct0,
         -- Voltage
-        case when p_metric = 'voltage' then avg(ch0_v)::float end as "ch0_V",
-        case when p_metric = 'voltage' then avg(ch1_v)::float end as "ch1_V",
-        case when p_metric = 'voltage' then avg(ch2_v)::float end as "ch2_V",
-        case when p_metric = 'voltage' then avg(ch3_v)::float end as "ch3_V",
-        case when p_metric = 'voltage' then avg(ina3221_v0)::float end as ina3221_v0,
-        case when p_metric = 'voltage' then avg(ina3221_v1)::float end as ina3221_v1,
-        case when p_metric = 'voltage' then avg(ina3221_v2)::float end as ina3221_v2,
-        case when p_metric = 'voltage' then avg(ina226_v)::float end as ina226_v,
+        case when p_metric = 'voltage' then avg(t.ch0_v)::float end as "ch0_V",
+        case when p_metric = 'voltage' then avg(t.ch1_v)::float end as "ch1_V",
+        case when p_metric = 'voltage' then avg(t.ch2_v)::float end as "ch2_V",
+        case when p_metric = 'voltage' then avg(t.ch3_v)::float end as "ch3_V",
+        case when p_metric = 'voltage' then avg(t.ina3221_v0)::float end as ina3221_v0,
+        case when p_metric = 'voltage' then avg(t.ina3221_v1)::float end as ina3221_v1,
+        case when p_metric = 'voltage' then avg(t.ina3221_v2)::float end as ina3221_v2,
+        case when p_metric = 'voltage' then avg(t.ina226_v)::float end as ina226_v,
         -- Current
-        case when p_metric = 'current' then avg(ch0_i)::float end as "ch0_I",
-        case when p_metric = 'current' then avg(ch1_i)::float end as "ch1_I",
-        case when p_metric = 'current' then avg(ch2_i)::float end as "ch2_I",
-        case when p_metric = 'current' then avg(ch3_i)::float end as "ch3_I",
-        case when p_metric = 'current' then avg(ina3221_i0)::float end as ina3221_i0,
-        case when p_metric = 'current' then avg(ina3221_i1)::float end as ina3221_i1,
-        case when p_metric = 'current' then avg(ina3221_i2)::float end as ina3221_i2,
-        case when p_metric = 'current' then avg(ina226_i)::float end as ina226_i
-    from public.telemetry_computed
-    where device_key = p_device_key and recorded_at >= since
+        case when p_metric = 'current' then avg(t.ch0_i)::float end as "ch0_I",
+        case when p_metric = 'current' then avg(t.ch1_i)::float end as "ch1_I",
+        case when p_metric = 'current' then avg(t.ch2_i)::float end as "ch2_I",
+        case when p_metric = 'current' then avg(t.ch3_i)::float end as "ch3_I",
+        case when p_metric = 'current' then avg(t.ina3221_i0)::float end as ina3221_i0,
+        case when p_metric = 'current' then avg(t.ina3221_i1)::float end as ina3221_i1,
+        case when p_metric = 'current' then avg(t.ina3221_i2)::float end as ina3221_i2,
+        case when p_metric = 'current' then avg(t.ina226_i)::float end as ina226_i
+    from public.telemetry_computed t
+    where t.device_key = p_device_key and t.recorded_at >= since
     group by b
     order by b;
 end;
