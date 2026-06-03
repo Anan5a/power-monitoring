@@ -229,24 +229,23 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
           return
         }
         if (data && data.length > 0) {
-          // Transform RPC rows into TelemetryPoint shape
-          const buckets = new Map<string, TelemetryPoint>()
-          for (const row of data as Array<{ bucket: string; key: string; avg_val: number; min_val: number; max_val: number }>) {
-            if (!buckets.has(row.bucket)) {
-              buckets.set(row.bucket, {
-                id: 0,
-                device_id: deviceKey,
-                recorded_at: row.bucket,
-                payload: {},
-                metadata: {},
-              })
+          // Transform compact RPC rows into TelemetryPoint shape
+          const arr: TelemetryPoint[] = (data as Array<Record<string, unknown>>).map(row => {
+            const payload: Record<string, number> = {}
+            for (const [key, val] of Object.entries(row)) {
+              if (key === 'bucket') continue
+              if (val != null && typeof val === 'number') {
+                payload[key] = val
+              }
             }
-            const pt = buckets.get(row.bucket)!
-            ;(pt.payload as Record<string, number>)[row.key] = row.avg_val
-          }
-          const arr = Array.from(buckets.values()).sort(
-            (a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime()
-          )
+            return {
+              id: 0,
+              device_id: deviceKey,
+              recorded_at: row.bucket as string,
+              payload,
+              metadata: {},
+            }
+          })
           setHistoryData(arr)
           const keys = extractKeys(arr, metric)
           setSeriesKeys(keys)
