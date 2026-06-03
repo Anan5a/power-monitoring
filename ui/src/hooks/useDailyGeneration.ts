@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import type { ChannelGroup } from '../lib/types'
 
@@ -14,9 +14,14 @@ export function useDailyGeneration(
   const [total, setTotal] = useState(0)
   const [hourly, setHourly] = useState<HourlyBucket[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const mounted = useRef(true)
 
   useEffect(() => {
-    if (!deviceKey) { setTotal(0); setHourly([]); return }
+    return () => { mounted.current = false }
+  }, [])
+
+  useEffect(() => {
+    if (!deviceKey) { setTotal(0); setHourly([]); setIsLoading(false); return }
     setIsLoading(true)
 
     // Filter solar channels (icon = 0)
@@ -45,6 +50,7 @@ export function useDailyGeneration(
       .gte('recorded_at', startStr)
       .order('recorded_at', { ascending: true })
       .then(({ data: rows, error }) => {
+        if (!mounted.current) return
         setIsLoading(false)
         if (error || !rows) return
 
@@ -76,6 +82,7 @@ export function useDailyGeneration(
             totalKwh += kwh
           }
         }
+        if (!mounted.current) return
         setHourly(result)
         setTotal(Math.round(totalKwh * 100) / 100)
       })
