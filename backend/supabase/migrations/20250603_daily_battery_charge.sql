@@ -19,14 +19,13 @@ create table public.daily_battery_charge (
     full_charge_voltage float null,
     is_full_charge_day boolean not null default false,
     charge_wh float not null default 0,
-    last_recorded_at timestamptz null,   -- for computing dt between rows
+    last_recorded_at timestamptz null,
     computed_from text not null default 'battery_power',
     created_at timestamptz default now(),
     unique (device_id, date)
 );
 
 comment on table public.daily_battery_charge is 'Daily battery energy in/out with voltage-based SOC anchoring';
-comment on column public.daily_battery_charge.last_recorded_at is 'Previous telemetry timestamp, used to compute dt_hours between rows';
 
 create index idx_daily_battery_charge_device_date on daily_battery_charge (device_id, date desc);
 
@@ -43,77 +42,84 @@ create table public.battery_calibration (
 comment on table public.battery_calibration is 'Battery capacity and full-charge voltage threshold per device';
 
 -- Trigger: increment energy in/out as telemetry rows arrive
--- Does NOT do full recompute — just adds/subtracts from running totals
+-- Anchor charge from previous day's charge_wh when starting a new day
 create or replace function public.trg_on_telemetry_computed_insert()
 returns trigger language plpgsql security definer as $$
 declare
     dt_hours float;
-    v_delta float;
-    curr_charge float;
+    prev_charge float;
+    prev_last_ts timestamptz;
+    capacity float;
+    fcv float;
+    dev_id uuid;
 begin
-    -- Get capacity and full_charge_voltage for this device
-    select bc.nominal_capacity_wh, bc.full_charge_voltage
-    into v_delta, curr_charge
-    from battery_calibration bc
-    where bc.device_id = (select id from devices where device_key = NEW.device_key);
+    dev_id := (select id from devices where device_key = NEW.device_key);
 
-    -- Skip if no calibration
-    if v_delta is null or v_delta = 0 then
+    -- Get calibration
+    select nominal_capacity_wh, full_charge_voltage
+    into capacity, fcv
+    from battery_calibration
+    where device_id = dev_id;
+
+    if capacity is null or capacity = 0 then
         return new;
     end if;
 
-    -- Get previous row timestamp and charge_wh for this device+date
-    select d.last_recorded_at, d.charge_wh, d.full_charge_voltage
-    into dt_hours, curr_charge, v_delta
-    from daily_battery_charge d
-    join devices dev on dev.id = d.device_id
-    where dev.device_key = NEW.device_key
-      and d.date = current_date;
+    -- Get previous last_recorded_at and charge_wh for TODAY (if exists)
+    select last_recorded_at, charge_wh
+    into prev_last_ts, prev_charge
+    from daily_battery_charge
+    where device_id = dev_id and date = current_date;
 
-    -- Compute dt between this row and previous
-    if dt_hours is not null and NEW.recorded_at > dt_hours then
-        dt_hours := EXTRACT(EPOCH FROM (NEW.recorded_at - dt_hours)) / 3600;
-        -- Cap at 1 hour to avoid huge jumps on reconnect
-        dt_hours := least(dt_hours, 1.0);
+    -- If no row for today yet, seed from yesterday's charge_wh
+    if prev_last_ts is null then
+        select charge_wh into prev_charge
+        from daily_battery_charge
+        where device_id = dev_id and date < current_date
+        order by date desc limit 1;
+
+        prev_charge := coalesce(prev_charge, capacity * 0.5); -- fallback to 50% if no history
+        prev_last_ts := null; -- no dt possible for first row of new day
+    end if;
+
+    -- Compute dt from previous row
+    if prev_last_ts is not null then
+        dt_hours := EXTRACT(EPOCH FROM (NEW.recorded_at - prev_last_ts)) / 3600;
+        dt_hours := least(dt_hours, 1.0); -- cap at 1h to avoid reconnect spikes
     else
         dt_hours := 0;
     end if;
 
-    -- Upsert today's row (create if not exists)
+    -- Detect full-charge voltage
+    if NEW.ch1_v is not null and fcv is not null and NEW.ch1_v >= fcv then
+        prev_charge := capacity; -- voltage anchor: set to 100%
+    end if;
+
+    -- Upsert today's row
     insert into daily_battery_charge
-        (device_id, date, capacity_wh, energy_in_wh, energy_out_wh, last_voltage,
-         full_charge_voltage, is_full_charge_day, charge_wh, last_recorded_at, computed_from)
-    select
-        (select id from devices where device_key = NEW.device_key),
-        current_date,
-        v_delta,  -- capacity_wh
-        case when NEW.battery_power > 0 then NEW.battery_power * dt_hours else 0 end,
-        case when NEW.battery_power < 0 then abs(NEW.battery_power) * dt_hours else 0 end,
-        NEW.ch1_v,
-        (select full_charge_voltage from battery_calibration where device_id = (select id from devices where device_key = NEW.device_key)),
-        case when NEW.ch1_v >= (select full_charge_voltage from battery_calibration where device_id = (select id from devices where device_key = NEW.device_key)) then true else false end,
-        coalesce(curr_charge, 0) + case when NEW.battery_power > 0 then NEW.battery_power * dt_hours else -abs(NEW.battery_power) * dt_hours end,
-        NEW.recorded_at,
-        'battery_power'
+        (device_id, date, capacity_wh, energy_in_wh, energy_out_wh,
+         last_voltage, full_charge_voltage, is_full_charge_day,
+         charge_wh, last_recorded_at, computed_from)
+    values (dev_id, current_date, capacity,
+            case when NEW.battery_power > 0 then NEW.battery_power * dt_hours else 0 end,
+            case when NEW.battery_power < 0 then abs(NEW.battery_power) * dt_hours else 0 end,
+            NEW.ch1_v, fcv,
+            case when NEW.ch1_v is not null and fcv is not null and NEW.ch1_v >= fcv then true else false end,
+            case
+                when NEW.ch1_v is not null and fcv is not null and NEW.ch1_v >= fcv then capacity
+                else greatest(0, least(capacity, prev_charge + case when NEW.battery_power > 0 then NEW.battery_power * dt_hours else -abs(NEW.battery_power) * dt_hours end))
+            end,
+            NEW.recorded_at,
+            'battery_power')
     on conflict (device_id, date) do update set
         last_recorded_at = NEW.recorded_at,
         last_voltage = NEW.ch1_v,
         energy_in_wh = daily_battery_charge.energy_in_wh + case when NEW.battery_power > 0 then NEW.battery_power * dt_hours else 0 end,
         energy_out_wh = daily_battery_charge.energy_out_wh + case when NEW.battery_power < 0 then abs(NEW.battery_power) * dt_hours else 0 end,
-        is_full_charge_day = case
-            when daily_battery_charge.is_full_charge_day = true then true
-            when NEW.ch1_v >= (select full_charge_voltage from battery_calibration where device_id = (select id from devices where device_key = NEW.device_key)) then true
-            else false
-        end,
-        -- Recalculate charge_wh: anchor to full charge if voltage reached, else carry forward
+        is_full_charge_day = daily_battery_charge.is_full_charge_day or (NEW.ch1_v is not null and fcv is not null and NEW.ch1_v >= fcv),
         charge_wh = case
-            when NEW.ch1_v >= (select full_charge_voltage from battery_calibration where device_id = (select id from devices where device_key = NEW.device_key))
-                then (select nominal_capacity_wh from battery_calibration where device_id = (select id from devices where device_key = NEW.device_key))
-            else
-                greatest(0, least(
-                    (select nominal_capacity_wh from battery_calibration where device_id = (select id from devices where device_key = NEW.device_key)),
-                    daily_battery_charge.charge_wh + case when NEW.battery_power > 0 then NEW.battery_power * dt_hours else -abs(NEW.battery_power) * dt_hours end
-                ))
+            when NEW.ch1_v is not null and fcv is not null and NEW.ch1_v >= fcv then capacity
+            else greatest(0, least(capacity, daily_battery_charge.charge_wh + case when NEW.battery_power > 0 then NEW.battery_power * dt_hours else -abs(NEW.battery_power) * dt_hours end))
         end;
 
     return new;
@@ -176,7 +182,6 @@ begin
           and tc.battery_power is not null
         order by tc.recorded_at asc
     ) loop
-        -- Full recompute integration (simplified)
         if row_data.battery_power > 0 then
             energy_in := energy_in + row_data.battery_power;
         else
@@ -184,11 +189,9 @@ begin
         end if;
     end loop;
 
-    -- Simpler charge calc (just carry forward + net delta, skip dt integration for backfill)
     charge_wh := greatest(0, prev_charge + energy_in - energy_out);
     charge_wh := least(cal_row.nominal_capacity_wh, charge_wh);
 
-    -- If voltage crossed threshold, reset to full
     if max_v >= cal_row.full_charge_voltage then
         charge_wh := cal_row.nominal_capacity_wh;
     end if;
@@ -247,7 +250,6 @@ begin
     from daily_battery_charge
     where device_id = p_device_id and date = current_date;
 
-    -- Last 24h energy from telemetry (direct sum for display)
     with bounds as (
         select now() - (p_hours || ' hours')::interval as ts_start
     )
