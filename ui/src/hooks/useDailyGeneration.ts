@@ -26,14 +26,14 @@ export function useDailyGeneration(deviceKey: string | null) {
     }
     setIsLoading(true)
 
-    const today = new Date()
-    today.setUTCHours(0, 0, 0, 0)
-    const dateStr = today.toISOString().split('T')[0]
+    // Get local date string (YYYY-MM-DD in browser timezone)
+    const now = new Date()
+    const localDate = now.toLocaleDateString('en-CA')
 
     supabase
       .rpc('get_hourly_pv_generation', {
         p_device_key: deviceKey,
-        p_date: dateStr
+        p_date: localDate
       })
       .then((response) => {
         if (!mounted.current) return
@@ -42,22 +42,24 @@ export function useDailyGeneration(deviceKey: string | null) {
 
         const result: HourlyBucket[] = []
         let totalKwh = 0
-        const now = new Date()
-        const currentHour = now.getUTCHours()
+        const currentLocalHour = now.getHours()
 
         for (let h = 0; h <= 23; h++) {
-          if (h <= currentHour) {
+          if (h <= currentLocalHour) {
             const key = `${h.toString().padStart(2, '0')}:00`
+
+            // Find UTC bucket that corresponds to this local hour
             const row = response.data.find((r: { hour: string; kwh: string }) => {
-              const hour = new Date(r.hour).getUTCHours()
-              return hour === h
+              const utcDt = new Date(r.hour)
+              const localHour = utcDt.getHours()
+              return localHour === h
             })
 
             let kwh = row ? Number(row.kwh) : 0
 
             // For current hour, project full hour kWh based on elapsed time
-            if (h === currentHour && row) {
-              const minuteOfHour = now.getUTCMinutes()
+            if (h === currentLocalHour && row) {
+              const minuteOfHour = now.getMinutes()
               const elapsedRatio = minuteOfHour > 0 ? 60 / minuteOfHour : 1
               kwh = kwh * elapsedRatio
               result.push({ hour: key, value: Math.round(kwh * 100) / 100, projected: true })
