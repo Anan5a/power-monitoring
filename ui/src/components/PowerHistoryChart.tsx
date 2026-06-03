@@ -97,9 +97,9 @@ function extractKeys(data: TelemetryPoint[], metric: Metric): string[] {
   // For power tab: if computed system columns exist, exclude raw ch*_P that overlap
   if (metric === 'power') {
     const hasSystemKeys = SYSTEM_POWER_KEYS.some(k => nonZeroKeys.includes(k))
-    if (hasSystemKeys) {
-      return nonZeroKeys.filter(k => SYSTEM_POWER_KEYS.includes(k) || k === 'ina226_p')
-    }
+    const filtered = nonZeroKeys.filter(k => SYSTEM_POWER_KEYS.includes(k) || k === 'ina226_p')
+    console.log('[PowerHistoryChart] extractKeys power:', { allKeys: Array.from(allKeys), nonZeroKeys, hasSystemKeys, filtered })
+    if (hasSystemKeys) return filtered
   }
 
   return nonZeroKeys
