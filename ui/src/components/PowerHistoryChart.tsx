@@ -331,34 +331,13 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
 
   const visibleKeys = seriesKeys.filter(k => visibleLines.has(k))
 
-  // Build unique gradient defs for visible lines
-  const gradientDefs = visibleKeys.map((k, i) => {
-    const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
-    return (
-      <defs key={g.id + k}>
-        <linearGradient id={g.id + k} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="5%" stopColor={g.start} stopOpacity={0.4} />
-          <stop offset="95%" stopColor={g.end} stopOpacity={0.05} />
-        </linearGradient>
-      </defs>
-    )
-  })
-
-  // Build gradient fill defs for each area
-  const areaGradients = visibleKeys.map((k, i) => {
-    const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
-    const gradId = `area_fill_${k}`
-    return (
-      <defs key={`area_${k}`}>
-        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={g.start} stopOpacity={0.25} />
-          <stop offset="100%" stopColor={g.start} stopOpacity={0.02} />
-        </linearGradient>
-      </defs>
-    )
-  })
-
-  const allDefs = [...gradientDefs, ...areaGradients]
+  // Solis-style: stack power areas in fixed order so they layer predictably
+  const chartKeys = metric === 'power'
+    ? [...visibleKeys].sort((a, b) => {
+        const order = ['inverter_power', 'dc_load_power', 'battery_power', 'pv_power', 'ina226_p']
+        return order.indexOf(a) - order.indexOf(b)
+      })
+    : visibleKeys
 
   const metricLabel = { power: 'Power', voltage: 'Voltage', current: 'Current' }[metric]
   const unit = UNIT[metric]
@@ -509,7 +488,6 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
             ) : (
               <ResponsiveContainer width="100%" height={300}>
                 <AreaChart data={chartData} margin={{ top: 10, right: 16, left: -8, bottom: 0 }}>
-                  {allDefs}
                   <CartesianGrid
                     strokeDasharray="0"
                     stroke="#f1f5f9"
@@ -567,11 +545,10 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                       strokeDasharray="4 4"
                     />
                   )}
-                  {visibleKeys.map((k, i) => {
+                  {chartKeys.map((k, i) => {
                     const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
-                    const fillId = `area_fill_${k}`
 
-                    // PV Generation: line only, no area fill
+                    // PV Generation: line only, no area fill, not stacked
                     if (k === 'pv_power') {
                       return (
                         <Line
@@ -601,7 +578,9 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                         yAxisId={showDualAxis ? 'right' : 'left'}
                         stroke={g.start}
                         strokeWidth={2.5}
-                        fill={`url(#${fillId})`}
+                        fill={g.start}
+                        fillOpacity={0.35}
+                        stackId={metric === 'power' ? 'power' : undefined}
                         dot={false}
                         activeDot={{
                           r: 5,
