@@ -17,7 +17,12 @@ export function useDailyGeneration(deviceKey: string | null) {
   }, [])
 
   useEffect(() => {
-    if (!deviceKey) { setTotal(0); setHourly([]); setIsLoading(false); return }
+    if (!deviceKey) {
+      setTotal(0)
+      setHourly([])
+      setIsLoading(false)
+      return
+    }
     setIsLoading(true)
 
     const startOfDay = new Date()
@@ -29,10 +34,15 @@ export function useDailyGeneration(deviceKey: string | null) {
       .eq('device_key', deviceKey)
       .gte('recorded_at', startOfDay.toISOString())
       .order('recorded_at', { ascending: true })
-      .then(({ data: rows, error }) => {
+      .then((response) => {
+        const rows = response.data
+        console.log('DailyGen rows:', rows?.length, response.error)
         if (!mounted.current) return
         setIsLoading(false)
-        if (error || !rows) return
+        if (response.error || !rows || rows.length === 0) {
+          console.log('No data or error:', response.error)
+          return
+        }
 
         const buckets = new Map<string, number>()
         for (const row of rows) {
@@ -49,7 +59,7 @@ export function useDailyGeneration(deviceKey: string | null) {
         for (let h = 0; h <= 23; h++) {
           if (h <= now.getHours()) {
             const key = `${h.toString().padStart(2, '0')}:00`
-            const kwh = (buckets.get(key) ?? 0) / 1000
+            const kwh = buckets.get(key) ?? 0
             result.push({ hour: key, value: Math.round(kwh * 100) / 100 })
             totalKwh += kwh
           }
