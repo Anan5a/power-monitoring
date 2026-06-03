@@ -25,7 +25,7 @@ export function useDailyGeneration(deviceKey: string | null) {
     }
     setIsLoading(true)
 
-    // Use UTC to match database timestamps
+    // Use UTC midnight as start
     const startOfDay = new Date()
     startOfDay.setUTCHours(0, 0, 0, 0)
 
@@ -36,29 +36,41 @@ export function useDailyGeneration(deviceKey: string | null) {
       .gte('recorded_at', startOfDay.toISOString())
       .order('recorded_at', { ascending: true })
       .then((response) => {
-        const rows = response.data
         if (!mounted.current) return
         setIsLoading(false)
-        if (response.error || !rows || rows.length === 0) return
+        const rows = response.data
+        if (!rows || rows.length === 0) return
 
-        const buckets = new Map<string, number>()
+        // Group by hour
+        const hourBuckets = new Map<string, { sum: number; count: number }>()
         for (const row of rows) {
           const dt = new Date(row.recorded_at)
           const hourKey = `${dt.getUTCHours().toString().padStart(2, '0')}:00`
-          const pvPower = Number(row.pv_power) || 0
-          const wh = pvPower / 3600
-          buckets.set(hourKey, (buckets.get(hourKey) ?? 0) + wh)
+          if (!hourBuckets.has(hourKey)) {
+            hourBuckets.set(hourKey, { sum: 0, count: 0 })
+          }
+          const bucket = hourBuckets.get(hourKey)!
+          bucket.sum += Number(row.pv_power) || 0
+          bucket.count += 1
         }
 
+        // Build hourly kWh: avg_power_W * (count_per_hour / 3600) / 1000 = kWh
+        // Or simpler: (sum / count) * (count / 3600) / 1000 = sum / 3600 / 1000
+        // = sum / 3600000
         const result: HourlyBucket[] = []
         const now = new Date()
         let totalKwh = 0
         for (let h = 0; h <= 23; h++) {
           if (h <= now.getUTCHours()) {
             const key = `${h.toString().padStart(2, '0')}:00`
-            const kwh = buckets.get(key) ?? 0
-            result.push({ hour: key, value: Math.round(kwh * 100) / 100 })
-            totalKwh += kwh
+            const bucket = hourBuckets.get(key)
+            if (bucket) {
+              const kwh = bucket.sum / 3_600_000
+              result.push({ hour: key, value: Math.round(kwh * 100) / 100 })
+              totalKwh += kwh
+            } else {
+              result.push({ hour: key, value: 0 })
+            }
           }
         }
         if (!mounted.current) return
