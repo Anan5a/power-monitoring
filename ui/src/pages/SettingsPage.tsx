@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import type { Device, DeviceChannels, RelayRule, VirtualChannelConfig, BatteryConfig } from '../lib/types'
+import DashboardLayout from '../components/DashboardLayout'
+import HeaderBar from '../components/HeaderBar'
 
 const EMPTY_CHANNELS: DeviceChannels = {
   device_key: '',
@@ -10,12 +13,14 @@ const EMPTY_CHANNELS: DeviceChannels = {
 }
 
 export default function SettingsPage() {
+  const navigate = useNavigate()
   const [devices, setDevices] = useState<Device[]>([])
   const [selectedKey, setSelectedKey] = useState<string>('')
   const [deviceChannels, setDeviceChannels] = useState<DeviceChannels>(EMPTY_CHANNELS)
   const [activeTab, setActiveTab] = useState('network')
   const [message, setMessage] = useState('')
   const [loadingDevices, setLoadingDevices] = useState(true)
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
 
   // Command form states per tab
   const [wifi, setWifi] = useState({ ssid: '', pass: '', pin: '' })
@@ -29,7 +34,10 @@ export default function SettingsPage() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
       const { data } = await supabase.from('devices').select('*').order('device_name')
-      if (data) setDevices(data)
+      if (data) {
+        setDevices(data)
+        setSelectedDeviceId(data[0]?.id ?? null)
+      }
       setLoadingDevices(false)
     }
     load()
@@ -90,31 +98,49 @@ export default function SettingsPage() {
 
   const tabs = ['network', 'supabase', 'relays', 'batteries', 'calibration', 'sensors', 'virtual', 'groups', 'names', 'system']
 
+  function handleNavigate(path: string) { navigate(path) }
+  function handleSignOut() { supabase.auth.signOut(); navigate('/login') }
+
+  const selectedDevice = devices.find(d => d.device_key === selectedKey) ?? null
+
+  const header = ({ onMenuClick }: { onMenuClick: () => void }) => (
+    <HeaderBar
+      devices={devices}
+      selectedDeviceId={selectedDeviceId}
+      onSelectDevice={(d) => {
+        setSelectedDeviceId(d.id)
+        setSelectedKey(d.device_key)
+      }}
+      isOnline={selectedDevice?.is_online ?? false}
+      lastUpdated={null}
+      onMenuClick={onMenuClick}
+    />
+  )
+
   if (loadingDevices) {
-    return <div className="flex items-center justify-center h-screen text-gray-500">Loading...</div>
+    return <div className="flex items-center justify-center h-screen text-slate-500">Loading...</div>
   }
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      <header className="bg-white shadow-sm">
-        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-xl font-bold text-gray-800">Settings</h1>
-          <a href="/dashboard" className="text-blue-600 hover:underline text-sm">← Dashboard</a>
-        </div>
-      </header>
-
-      <main className="max-w-5xl mx-auto px-4 py-6">
+    <DashboardLayout
+      currentPath="/settings"
+      onNavigate={handleNavigate}
+      onSignOut={handleSignOut}
+      header={header}
+      deviceName={selectedDevice?.device_name}
+    >
+      <div className="space-y-6">
         {/* Device selector */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Device</label>
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
+          <label className="block text-sm font-medium text-slate-700 mb-2">Device</label>
           <select
             value={selectedKey}
             onChange={e => setSelectedKey(e.target.value)}
-            className="w-full max-w-xs rounded-md border border-gray-300 px-3 py-2 bg-white"
+            className="w-full max-w-xs rounded-xl border border-slate-200 px-3 py-2 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
           >
             <option value="">-- Choose a device --</option>
             {devices.map(d => (
-              <option key={d.id} value={d.device_key}>{d.device_name} ({d.device_key})</option>
+              <option key={d.id} value={d.device_key}>{d.device_name}</option>
             ))}
           </select>
         </div>
@@ -126,42 +152,44 @@ export default function SettingsPage() {
               {tabs.map(t => (
                 <button key={t}
                   onClick={() => setActiveTab(t)}
-                  className={`px-3 py-1.5 rounded text-sm font-medium capitalize ${
-                    activeTab === t ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium capitalize transition-colors ${
+                    activeTab === t
+                      ? 'bg-brand-600 text-white'
+                      : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
                   }`}
                 >{t}</button>
               ))}
             </div>
 
             {message && (
-              <div className="mb-4 p-3 rounded text-sm bg-blue-50 text-blue-700">{message}</div>
+              <div className="p-3 rounded-xl text-sm bg-blue-50 text-blue-700 border border-blue-100">{message}</div>
             )}
 
             {/* Network tab */}
             {activeTab === 'network' && (
-              <div className="bg-white rounded-lg shadow p-6 space-y-6">
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-6">
                 <div>
-                  <h3 className="font-semibold mb-3">WiFi</h3>
+                  <h3 className="font-semibold mb-3 text-slate-800">WiFi</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">SSID</label>
+                      <label className="block text-sm text-slate-600 mb-1">SSID</label>
                       <input value={wifi.ssid} onChange={e => setWifi(w => ({ ...w, ssid: e.target.value }))}
-                        className="w-full rounded border border-gray-300 px-3 py-2" placeholder="WiFi name" />
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="WiFi name" />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">Password</label>
+                      <label className="block text-sm text-slate-600 mb-1">Password</label>
                       <input type="password" value={wifi.pass} onChange={e => setWifi(w => ({ ...w, pass: e.target.value }))}
-                        className="w-full rounded border border-gray-300 px-3 py-2" placeholder="Password" />
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="Password" />
                     </div>
                   </div>
                   <div className="grid grid-cols-3 gap-4 mt-2">
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">BLE PIN</label>
+                      <label className="block text-sm text-slate-600 mb-1">BLE PIN</label>
                       <input type="password" value={blePin} onChange={e => setBlePin(e.target.value)}
-                        className="w-full rounded border border-gray-300 px-3 py-2" placeholder="123456" maxLength={8} />
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="123456" maxLength={8} />
                     </div>
                     <div className="flex items-end">
-                      <button onClick={() => saveWifi()} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
+                      <button onClick={() => saveWifi()} className="bg-brand-600 text-white px-4 py-2 rounded-xl hover:bg-brand-700 text-sm font-medium transition-colors">
                         Save WiFi
                       </button>
                     </div>
@@ -169,50 +197,50 @@ export default function SettingsPage() {
                 </div>
 
                 <div>
-                  <h3 className="font-semibold mb-3">MQTT</h3>
+                  <h3 className="font-semibold mb-3 text-slate-800">MQTT</h3>
                   <div className="grid grid-cols-3 gap-4">
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">Broker</label>
+                      <label className="block text-sm text-slate-600 mb-1">Broker</label>
                       <input value={mqtt.broker} onChange={e => setMqtt(m => ({ ...m, broker: e.target.value }))}
-                        className="w-full rounded border border-gray-300 px-3 py-2" placeholder="192.168.1.100" />
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="192.168.1.100" />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">Port</label>
+                      <label className="block text-sm text-slate-600 mb-1">Port</label>
                       <input value={mqtt.port} onChange={e => setMqtt(m => ({ ...m, port: e.target.value }))}
-                        className="w-full rounded border border-gray-300 px-3 py-2" placeholder="1883" />
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="1883" />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">Topic</label>
+                      <label className="block text-sm text-slate-600 mb-1">Topic</label>
                       <input value={mqtt.topic} onChange={e => setMqtt(m => ({ ...m, topic: e.target.value }))}
-                        className="w-full rounded border border-gray-300 px-3 py-2" placeholder="power-monitor/data" />
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="power-monitor/data" />
                     </div>
                   </div>
-                  <button onClick={saveMqtt} className="mt-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
+                  <button onClick={saveMqtt} className="mt-2 bg-brand-600 text-white px-4 py-2 rounded-xl hover:bg-brand-700 text-sm font-medium transition-colors">
                     Save MQTT
                   </button>
                 </div>
 
                 <div>
-                  <h3 className="font-semibold mb-3">HTTP Endpoint</h3>
+                  <h3 className="font-semibold mb-3 text-slate-800">HTTP Endpoint</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">URL</label>
+                      <label className="block text-sm text-slate-600 mb-1">URL</label>
                       <input value={http.url} onChange={e => setHttp(h => ({ ...h, url: e.target.value }))}
-                        className="w-full rounded border border-gray-300 px-3 py-2" placeholder="https://..." />
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="https://..." />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-600 mb-1">Token</label>
+                      <label className="block text-sm text-slate-600 mb-1">Token</label>
                       <input value={http.token} onChange={e => setHttp(h => ({ ...h, token: e.target.value }))}
-                        className="w-full rounded border border-gray-300 px-3 py-2" placeholder="Bearer token" />
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="Bearer token" />
                     </div>
                   </div>
                   <label className="flex items-center gap-2 mt-2">
                     <input type="checkbox" checked={http.enabled}
                       onChange={e => setHttp(h => ({ ...h, enabled: e.target.checked }))}
                       className="rounded" />
-                    <span className="text-sm">Enabled</span>
+                    <span className="text-sm text-slate-600">Enabled</span>
                   </label>
-                  <button onClick={saveHttp} className="mt-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
+                  <button onClick={saveHttp} className="mt-2 bg-brand-600 text-white px-4 py-2 rounded-xl hover:bg-brand-700 text-sm font-medium transition-colors">
                     Save HTTP
                   </button>
                 </div>
@@ -221,31 +249,31 @@ export default function SettingsPage() {
 
             {/* Supabase tab */}
             {activeTab === 'supabase' && (
-              <div className="bg-white rounded-lg shadow p-6 space-y-4">
-                <h3 className="font-semibold">Supabase Configuration</h3>
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-4">
+                <h3 className="font-semibold text-slate-800">Supabase Configuration</h3>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm text-gray-600 mb-1">URL</label>
+                    <label className="block text-sm text-slate-600 mb-1">URL</label>
                     <input value={supabaseCfg.url} onChange={e => setSupabaseCfg(c => ({ ...c, url: e.target.value }))}
-                      className="w-full rounded border border-gray-300 px-3 py-2" placeholder="https://..." />
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="https://..." />
                   </div>
                   <div>
-                    <label className="block text-sm text-gray-600 mb-1">Anon Key</label>
+                    <label className="block text-sm text-slate-600 mb-1">Anon Key</label>
                     <input value={supabaseCfg.anon_key} onChange={e => setSupabaseCfg(c => ({ ...c, anon_key: e.target.value }))}
-                      className="w-full rounded border border-gray-300 px-3 py-2" placeholder="eyJ..." />
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="eyJ..." />
                   </div>
                   <div>
-                    <label className="block text-sm text-gray-600 mb-1">API Key</label>
+                    <label className="block text-sm text-slate-600 mb-1">API Key</label>
                     <input value={supabaseCfg.api_key} onChange={e => setSupabaseCfg(c => ({ ...c, api_key: e.target.value }))}
-                      className="w-full rounded border border-gray-300 px-3 py-2" placeholder="eyJ..." />
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="eyJ..." />
                   </div>
                   <div>
-                    <label className="block text-sm text-gray-600 mb-1">Device Key</label>
+                    <label className="block text-sm text-slate-600 mb-1">Device Key</label>
                     <input value={supabaseCfg.device_key} onChange={e => setSupabaseCfg(c => ({ ...c, device_key: e.target.value }))}
-                      className="w-full rounded border border-gray-300 px-3 py-2" placeholder="my-device-1" />
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-400 text-sm" placeholder="my-device-1" />
                   </div>
                 </div>
-                <button onClick={saveSupabase} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
+                <button onClick={saveSupabase} className="bg-brand-600 text-white px-4 py-2 rounded-xl hover:bg-brand-700 text-sm font-medium transition-colors">
                   Save Supabase
                 </button>
               </div>
@@ -258,25 +286,25 @@ export default function SettingsPage() {
               } sendCommand={sendCommand} />
             )}
 
-            {/* Sensors tab — shunt, volt_ratio, resistor parameters */}
+            {/* Sensors tab */}
             {activeTab === 'sensors' && (
-              <div className="bg-white rounded-lg shadow p-6 space-y-6">
-                <h3 className="font-semibold">Sensor Parameters</h3>
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-6">
+                <h3 className="font-semibold text-slate-800">Sensor Parameters</h3>
 
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-3">Shunt Resistance (Ohms) — INA3221</h4>
-                  <p className="text-xs text-gray-500 mb-3">Per-channel shunt value for current measurement. Example: 0.0003 for 0.3mΩ.</p>
+                  <h4 className="text-sm font-medium text-slate-700 mb-3">Shunt Resistance (Ohms) — INA3221</h4>
+                  <p className="text-xs text-slate-500 mb-3">Per-channel shunt value for current measurement. Example: 0.0003 for 0.3mΩ.</p>
                   <div className="grid grid-cols-4 gap-3">
                     {[0,1,2].map(ch => (
                       <div key={ch}>
-                        <label className="text-xs text-gray-500">CH{ch} shunt (Ω)</label>
+                        <label className="text-xs text-slate-500">CH{ch} shunt (Ω)</label>
                         <input
                           id={`shunt-${ch}`}
                           type="number"
                           step="0.000001"
                           min="0"
                           placeholder="0.0003"
-                          className="w-full rounded border border-gray-300 px-2 py-1 mt-1"
+                          className="w-full rounded-xl border border-slate-200 px-2 py-1.5 mt-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                           defaultValue=""
                         />
                       </div>
@@ -290,26 +318,25 @@ export default function SettingsPage() {
                         sendCommand('set_shunt', { channel: ch, ohms: val })
                       })
                     }}
-                    className="mt-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm"
+                    className="mt-2 bg-brand-600 text-white px-4 py-2 rounded-xl hover:bg-brand-700 text-sm font-medium transition-colors"
                   >
                     Save Shunts
                   </button>
                 </div>
 
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-3">Voltage Divider Ratio — INA3221 Voltage</h4>
-                  <p className="text-xs text-gray-500 mb-3">R_high / R_low ratio for voltage channels. Set ratio directly, or set R_high + R_low below.</p>
+                  <h4 className="text-sm font-medium text-slate-700 mb-3">Voltage Divider Ratio — INA3221 Voltage</h4>
                   <div className="grid grid-cols-3 gap-3">
                     {[0,1,2].map(ch => (
                       <div key={ch}>
-                        <label className="text-xs text-gray-500">CH{ch} ratio</label>
+                        <label className="text-xs text-slate-500">CH{ch} ratio</label>
                         <input
                           id={`vratio-${ch}`}
                           type="number"
                           step="0.001"
                           min="0"
                           placeholder="3.5"
-                          className="w-full rounded border border-gray-300 px-2 py-1 mt-1"
+                          className="w-full rounded-xl border border-slate-200 px-2 py-1.5 mt-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                           defaultValue=""
                         />
                       </div>
@@ -323,39 +350,38 @@ export default function SettingsPage() {
                         sendCommand('set_volt_ratio', { channel: ch, ratio: val })
                       })
                     }}
-                    className="mt-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm"
+                    className="mt-2 bg-brand-600 text-white px-4 py-2 rounded-xl hover:bg-brand-700 text-sm font-medium transition-colors"
                   >
                     Save Ratios
                   </button>
                 </div>
 
                 <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-3">Voltage Divider Resistors — alternative to ratio</h4>
-                  <p className="text-xs text-gray-500 mb-3">R_high (top) and R_low (bottom) in Ohms. Ratio = (R_high + R_low) / R_low.</p>
+                  <h4 className="text-sm font-medium text-slate-700 mb-3">Voltage Divider Resistors — alternative to ratio</h4>
                   <div className="space-y-2">
                     {[0,1,2].map(ch => (
-                      <div key={ch} className="flex items-center gap-3 border rounded p-2">
-                        <span className="text-sm font-medium w-16">CH{ch}</span>
+                      <div key={ch} className="flex items-center gap-3 border border-slate-100 rounded-xl p-3">
+                        <span className="text-sm font-medium w-16 text-slate-700">CH{ch}</span>
                         <div className="flex items-center gap-1">
-                          <label className="text-xs text-gray-500">R_high (Ω)</label>
+                          <label className="text-xs text-slate-500">R_high (Ω)</label>
                           <input
                             id={`rhigh-${ch}`}
                             type="number"
                             step="1"
                             min="0"
                             placeholder="100000"
-                            className="w-32 rounded border border-gray-300 px-2 py-1"
+                            className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                           />
                         </div>
                         <div className="flex items-center gap-1">
-                          <label className="text-xs text-gray-500">R_low (Ω)</label>
+                          <label className="text-xs text-slate-500">R_low (Ω)</label>
                           <input
                             id={`rlow-${ch}`}
                             type="number"
                             step="1"
                             min="0"
                             placeholder="30000"
-                            className="w-32 rounded border border-gray-300 px-2 py-1"
+                            className="w-32 rounded-xl border border-slate-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                           />
                         </div>
                         <button
@@ -366,19 +392,13 @@ export default function SettingsPage() {
                             const r_low = parseFloat(rlInput.value) || 0
                             sendCommand('set_resistors', { channel: ch, r_high, r_low })
                           }}
-                          className="text-xs bg-blue-600 text-white px-3 py-1 rounded"
+                          className="text-xs bg-brand-600 text-white px-3 py-1.5 rounded-lg"
                         >
                           Save
                         </button>
                       </div>
                     ))}
                   </div>
-                  <p className="text-xs text-gray-400 mt-2">Setting resistors auto-computes volt_ratio. Set ratio OR resistors, not both.</p>
-                </div>
-
-                <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-3">ADS1115 PGA Gain</h4>
-                  <p className="text-xs text-gray-500 mb-3">Set the gain for ADS1115 readings (affects voltage range). Not yet exposed via command — configure via BLE/serial.</p>
                 </div>
               </div>
             )}
@@ -413,20 +433,20 @@ export default function SettingsPage() {
 
             {/* System tab */}
             {activeTab === 'system' && (
-              <div className="bg-white rounded-lg shadow p-6 space-y-4">
-                <h3 className="font-semibold">System</h3>
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-4">
+                <h3 className="font-semibold text-slate-800">System</h3>
                 <button onClick={() => sendCommand('reboot', {})}
-                  className="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600 text-sm mr-2">
+                  className="bg-amber-500 text-white px-4 py-2 rounded-xl hover:bg-amber-600 text-sm font-medium mr-2 transition-colors">
                   Reboot Device
                 </button>
                 <button onClick={() => {
                   if (confirm('Factory reset will erase ALL settings. Continue?'))
                     sendCommand('factory_reset', {})
                 }}
-                  className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-sm">
+                  className="bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 text-sm font-medium transition-colors">
                   Factory Reset
                 </button>
-                <p className="text-sm text-gray-500 mt-2">
+                <p className="text-sm text-slate-500 mt-2">
                   Commands are queued and applied within ~30 seconds. Factory reset erases all calibration, WiFi, and Supabase settings.
                 </p>
               </div>
@@ -440,8 +460,8 @@ export default function SettingsPage() {
             )}
           </>
         )}
-      </main>
-    </div>
+      </div>
+    </DashboardLayout>
   )
 }
 
@@ -470,25 +490,25 @@ function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannel
   const types = ['volt_offset_mv', 'volt_gain', 'curr_offset_ma', 'curr_gain']
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="font-semibold mb-4">Calibration (per channel)</h3>
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+      <h3 className="font-semibold mb-4 text-slate-800">Calibration (per channel)</h3>
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-left text-gray-600">
-            <th className="pb-2">VC</th>
-            <th className="pb-2">volt_offset_mv</th>
-            <th className="pb-2">volt_gain</th>
-            <th className="pb-2">curr_offset_ma</th>
-            <th className="pb-2">curr_gain</th>
-            <th className="pb-2">Invert</th>
+          <tr className="text-left text-slate-500 border-b border-slate-100">
+            <th className="pb-3">VC</th>
+            <th className="pb-3">volt_offset_mv</th>
+            <th className="pb-3">volt_gain</th>
+            <th className="pb-3">curr_offset_ma</th>
+            <th className="pb-3">curr_gain</th>
+            <th className="pb-3">Invert</th>
           </tr>
         </thead>
         <tbody>
           {[0,1,2].map(ch => (
-            <tr key={ch} className="border-t">
-              <td className="py-2 font-medium">CH{ch}</td>
+            <tr key={ch} className="border-t border-slate-50">
+              <td className="py-3 font-medium text-slate-700">CH{ch}</td>
               {types.map((type) => (
-                <td key={type} className="py-2 pr-2">
+                <td key={type} className="py-3 pr-2">
                   <input
                     value={vals[type === 'volt_offset_mv' ? 'volt_offset_mv' : type === 'volt_gain' ? 'volt_gain' : type === 'curr_offset_ma' ? 'curr_offset_ma' : 'curr_gain'][ch]}
                     onChange={e => setVals(v => ({
@@ -496,11 +516,11 @@ function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannel
                       [type === 'volt_offset_mv' ? 'volt_offset_mv' : type === 'volt_gain' ? 'volt_gain' : type === 'curr_offset_ma' ? 'curr_offset_ma' : 'curr_gain']:
                         v[type === 'volt_offset_mv' ? 'volt_offset_mv' : type === 'volt_gain' ? 'volt_gain' : type === 'curr_offset_ma' ? 'curr_offset_ma' : 'curr_gain'].map((x, i) => i === ch ? e.target.value : x)
                     }))}
-                    className="w-full rounded border border-gray-300 px-2 py-1"
+                    className="w-full rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                   />
                 </td>
               ))}
-              <td className="py-2">
+              <td className="py-3">
                 <input
                   type="checkbox"
                   checked={invertCurr[ch] ?? false}
@@ -508,7 +528,7 @@ function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannel
                   className="w-5 h-5"
                 />
               </td>
-              <td className="py-2">
+              <td className="py-3">
                 <button onClick={() => {
                   types.forEach((type, ti) => {
                     const key = type === 'volt_offset_mv' ? 'volt_offset_mv' : type === 'volt_gain' ? 'volt_gain' : type === 'curr_offset_ma' ? 'curr_offset_ma' : 'curr_gain'
@@ -516,16 +536,16 @@ function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannel
                   })
                   sendCommand?.('set_invert_curr', { channel: ch, invert: invertCurr[ch] })
                 }}
-                  className="text-xs bg-blue-600 text-white px-2 py-1 rounded">Save</button>
+                  className="text-xs bg-brand-600 text-white px-2 py-1.5 rounded-lg">Save</button>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
 
-      <div className="mt-6 pt-4 border-t">
-        <h4 className="text-sm font-medium text-gray-700 mb-2">Baseline Calibration</h4>
-        <p className="text-xs text-gray-500 mb-3">
+      <div className="mt-6 pt-4 border-t border-slate-100">
+        <h4 className="text-sm font-medium text-slate-700 mb-2">Baseline Calibration</h4>
+        <p className="text-xs text-slate-500 mb-3">
           Collect 16 samples per channel to establish a noise baseline for spike detection.
           Takes ~16 seconds. Device continues normal operation.
         </p>
@@ -536,7 +556,7 @@ function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannel
             setBaselineMsg('Baseline calibration started — check device serial for progress.')
             setTimeout(() => setBaselineMsg(''), 6000)
           }}
-          className="bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700"
+          className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm hover:bg-indigo-700 transition-colors"
         >
           Start Baseline Calibration
         </button>
@@ -561,7 +581,6 @@ function VirtualChannelsTab({ deviceChannels, onSave }: { deviceChannels: Device
     Array.from({ length: 4 }, () => ({ voltage_src: 0, voltage_idx: 0, current_src: 0, current_idx: 0 }))
   )
   useEffect(() => {
-    // Pre-populate from deviceChannels virtual_channels if present
     const vcData = (deviceChannels as unknown as { virtual_channels?: typeof vcs }).virtual_channels
     if (vcData && Array.isArray(vcData)) {
       setVcs(vcData.map((v: typeof vcs[0]) => ({
@@ -574,48 +593,48 @@ function VirtualChannelsTab({ deviceChannels, onSave }: { deviceChannels: Device
   }, [deviceChannels])
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="font-semibold mb-4">Virtual Channel Mapping</h3>
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+      <h3 className="font-semibold mb-4 text-slate-800">Virtual Channel Mapping</h3>
       <div className="space-y-4">
         {[0,1,2,3].map(ch => (
-          <div key={ch} className="border rounded p-3">
-            <div className="font-medium mb-2">VC{ch} (Virtual Channel)</div>
+          <div key={ch} className="border border-slate-100 rounded-xl p-4">
+            <div className="font-medium mb-2 text-slate-700">VC{ch} (Virtual Channel)</div>
             <div className="grid grid-cols-4 gap-3 text-sm">
               <div>
-                <span className="text-gray-500">V Source</span>
+                <span className="text-slate-500 text-xs">V Source</span>
                 <select value={vcs[ch].voltage_src} onChange={e => {
                   const next = [...vcs]; next[ch] = { ...next[ch], voltage_src: Number(e.target.value) }; setVcs(next)
-                }} className="w-full rounded border border-gray-300 px-2 py-1 mt-1">
+                }} className="w-full rounded-xl border border-slate-200 px-2 py-1.5 mt-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400">
                   {srcOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
               <div>
-                <span className="text-gray-500">V Index</span>
+                <span className="text-slate-500 text-xs">V Index</span>
                 <select value={vcs[ch].voltage_idx} onChange={e => {
                   const next = [...vcs]; next[ch] = { ...next[ch], voltage_idx: Number(e.target.value) }; setVcs(next)
-                }} className="w-full rounded border border-gray-300 px-2 py-1 mt-1">
+                }} className="w-full rounded-xl border border-slate-200 px-2 py-1.5 mt-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400">
                   {[0,1,2,3].map(i => <option key={i} value={i}>{i}</option>)}
                 </select>
               </div>
               <div>
-                <span className="text-gray-500">I Source</span>
+                <span className="text-slate-500 text-xs">I Source</span>
                 <select value={vcs[ch].current_src} onChange={e => {
                   const next = [...vcs]; next[ch] = { ...next[ch], current_src: Number(e.target.value) }; setVcs(next)
-                }} className="w-full rounded border border-gray-300 px-2 py-1 mt-1">
+                }} className="w-full rounded-xl border border-slate-200 px-2 py-1.5 mt-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400">
                   {currOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
               <div>
-                <span className="text-gray-500">I Index</span>
+                <span className="text-slate-500 text-xs">I Index</span>
                 <select value={vcs[ch].current_idx} onChange={e => {
                   const next = [...vcs]; next[ch] = { ...next[ch], current_idx: Number(e.target.value) }; setVcs(next)
-                }} className="w-full rounded border border-gray-300 px-2 py-1 mt-1">
+                }} className="w-full rounded-xl border border-slate-200 px-2 py-1.5 mt-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400">
                   {[0,1,2,3].map(i => <option key={i} value={i}>{i}</option>)}
                 </select>
               </div>
             </div>
             <button onClick={() => onSave(ch, vcs[ch])}
-              className="mt-2 text-xs bg-blue-600 text-white px-3 py-1 rounded">Save</button>
+              className="mt-2 text-xs bg-brand-600 text-white px-3 py-1.5 rounded-lg">Save</button>
           </div>
         ))}
       </div>
@@ -634,16 +653,16 @@ function ChannelNamesTab({ deviceChannels, onSave }: { deviceChannels: DeviceCha
   }, [names])
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="font-semibold mb-4">Channel Names</h3>
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+      <h3 className="font-semibold mb-4 text-slate-800">Channel Names</h3>
       <div className="space-y-3">
         {[0,1,2,3].map(ch => (
           <div key={ch} className="flex items-center gap-3">
-            <span className="w-16 text-sm text-gray-600">VC{ch}</span>
+            <span className="w-16 text-sm text-slate-600">VC{ch}</span>
             <input value={vals[ch]} onChange={e => setVals(v => v.map((x, i) => i === ch ? e.target.value : x))}
-              className="flex-1 rounded border border-gray-300 px-3 py-2" placeholder="e.g. Solar Panel" />
+              className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" placeholder="e.g. Solar Panel" />
             <button onClick={() => onSave(ch, vals[ch])}
-              className="text-xs bg-blue-600 text-white px-3 py-1 rounded">Save</button>
+              className="text-xs bg-brand-600 text-white px-3 py-1.5 rounded-lg">Save</button>
           </div>
         ))}
       </div>
@@ -663,34 +682,32 @@ function ChannelGroupsTab({ deviceChannels, onSave }: { deviceChannels: DeviceCh
   const icons = ['☀️', '🔋', '⚡', '📟']
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="font-semibold mb-4">Channel Groups</h3>
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+      <h3 className="font-semibold mb-4 text-slate-800">Channel Groups</h3>
       <div className="space-y-3">
         {[0,1,2,3].map(idx => (
-          <div key={idx} className="border rounded p-3">
+          <div key={idx} className="border border-slate-100 rounded-xl p-4">
             <div className="flex gap-2 mb-2">
               <input value={vals[idx].name} onChange={e => setVals(v => v.map((x, i) => i === idx ? { ...x, name: e.target.value } : x))}
-                className="flex-1 rounded border border-gray-300 px-2 py-1" placeholder="Group name" />
+                className="flex-1 rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" placeholder="Group name" />
               <select value={vals[idx].icon} onChange={e => setVals(v => v.map((x, i) => i === idx ? { ...x, icon: Number(e.target.value) } : x))}
-                className="rounded border border-gray-300 px-2 py-1">
+                className="rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400">
                 {icons.map((icon, i) => <option key={i} value={i}>{icon}</option>)}
               </select>
             </div>
             <div className="flex gap-2 items-center">
-              <span className="text-sm text-gray-500">VCs:</span>
+              <span className="text-sm text-slate-500">VCs:</span>
               {[0,1,2,3].map(ch => (
-                <label key={ch} className="flex items-center gap-1 text-sm">
+                <label key={ch} className="flex items-center gap-1 text-sm text-slate-600">
                   <input type="checkbox"
                     checked={(vals[idx].channel_mask & (1 << ch)) !== 0}
-                    onChange={e => setVals(v => v.map((x, i) => i === idx ? {
-                      ...x, channel_mask: e.target.checked ? x.channel_mask | (1 << ch) : x.channel_mask & ~(1 << ch)
-                    } : x))}
+                    onChange={e => setVals(v => v.map((x, i) => i === idx ? { ...x, channel_mask: e.target.checked ? x.channel_mask | (1 << ch) : x.channel_mask & ~(1 << ch) } : x))}
                   />
                   VC{ch}
                 </label>
               ))}
               <button onClick={() => onSave(idx, vals[idx])}
-                className="ml-auto text-xs bg-blue-600 text-white px-3 py-1 rounded">Save</button>
+                className="ml-auto text-xs bg-brand-600 text-white px-3 py-1.5 rounded-lg">Save</button>
             </div>
           </div>
         ))}
@@ -706,77 +723,77 @@ function BatteriesTab({ onSave, sendCommand }: { onSave: (ch: number, bat: Batte
   const chemistries = ['lead_acid', 'liion', 'lifepo4', 'lipol', 'nimh', 'agm', 'fla']
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="font-semibold mb-1">Battery Configuration (per VC)</h3>
-      <p className="text-sm text-gray-500 mb-4">Set capacity for VCs with a battery. Expanded view adds chemistry and voltage profile.</p>
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+      <h3 className="font-semibold mb-1 text-slate-800">Battery Configuration (per VC)</h3>
+      <p className="text-sm text-slate-500 mb-4">Set capacity for VCs with a battery. Expanded view adds chemistry and voltage profile.</p>
       <div className="space-y-3">
         {[0,1,2,3].map(ch => (
-          <div key={ch} className="border rounded p-3">
+          <div key={ch} className="border border-slate-100 rounded-xl p-4">
             <div className="flex items-center justify-between">
-              <span className="font-medium">VC{ch}</span>
+              <span className="font-medium text-slate-700">VC{ch}</span>
               <button onClick={() => setExpanded(expanded === ch ? null : ch)}
-                className="text-xs text-blue-600 hover:underline">
+                className="text-xs text-brand-600 hover:underline">
                 {expanded === ch ? '▲ less' : '▼ profile'}
               </button>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-2">
               <div>
-                <label className="text-sm text-gray-600">Capacity (mAh, 0=disabled)</label>
+                <label className="text-sm text-slate-600">Capacity (mAh, 0=disabled)</label>
                 <input value={vals[ch].capacity_mAh} onChange={e => setVals(v => v.map((x, i) => i === ch ? { ...x, capacity_mAh: e.target.value } : x))}
-                  className="w-full rounded border border-gray-300 px-2 py-1" placeholder="5000" />
+                  className="w-full rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" placeholder="5000" />
               </div>
               <div>
-                <label className="text-sm text-gray-600">Initial SoC (%)</label>
+                <label className="text-sm text-slate-600">Initial SoC (%)</label>
                 <input value={vals[ch].initial_soc_pct} onChange={e => setVals(v => v.map((x, i) => i === ch ? { ...x, initial_soc_pct: e.target.value } : x))}
-                  className="w-full rounded border border-gray-300 px-2 py-1" placeholder="100" />
+                  className="w-full rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" placeholder="100" />
               </div>
             </div>
             <button onClick={() => onSave(ch, {
               capacity_mAh: parseFloat(vals[ch].capacity_mAh) || 0,
               initial_soc_pct: parseFloat(vals[ch].initial_soc_pct) || 100,
-            })} className="mt-2 text-xs bg-blue-600 text-white px-3 py-1 rounded">Save Basic</button>
+            })} className="mt-2 text-xs bg-brand-600 text-white px-3 py-1.5 rounded-lg">Save Basic</button>
               <button onClick={() => sendCommand?.('reset_coulomb', { channel: ch })}
-                className="mt-2 ml-2 text-xs bg-orange-500 text-white px-3 py-1 rounded">Reset Coulomb</button>
+                className="mt-2 ml-2 text-xs bg-orange-500 text-white px-3 py-1.5 rounded-lg">Reset Coulomb</button>
 
             {expanded === ch && (
-              <div className="mt-3 pt-3 border-t space-y-2">
+              <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-xs text-gray-600">Profile Name</label>
+                    <label className="text-xs text-slate-600">Profile Name</label>
                     <input value={profiles[ch].name} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, name: e.target.value } : x))}
-                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="My 12V LiFePO4" />
+                      className="w-full rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" placeholder="My 12V LiFePO4" />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-600">Chemistry</label>
+                    <label className="text-xs text-slate-600">Chemistry</label>
                     <select value={profiles[ch].chemistry} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, chemistry: e.target.value } : x))}
-                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm">
+                      className="w-full rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400">
                       {chemistries.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
                   <div>
-                    <label className="text-xs text-gray-600">System Voltage (V)</label>
+                    <label className="text-xs text-slate-600">System Voltage (V)</label>
                     <input value={profiles[ch].system_voltage} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, system_voltage: e.target.value } : x))}
-                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="12.0" />
+                      className="w-full rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" placeholder="12.0" />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-600">Cell Count</label>
+                    <label className="text-xs text-slate-600">Cell Count</label>
                     <input value={profiles[ch].cell_count} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, cell_count: e.target.value } : x))}
-                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="4" />
+                      className="w-full rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" placeholder="4" />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-600">Full Voltage (V)</label>
+                    <label className="text-xs text-slate-600">Full Voltage (V)</label>
                     <input value={profiles[ch].full_voltage} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, full_voltage: e.target.value } : x))}
-                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="14.4" />
+                      className="w-full rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" placeholder="14.4" />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-600">Cutoff Voltage (V)</label>
+                    <label className="text-xs text-slate-600">Cutoff Voltage (V)</label>
                     <input value={profiles[ch].cutoff_voltage} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, cutoff_voltage: e.target.value } : x))}
-                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="10.0" />
+                      className="w-full rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" placeholder="10.0" />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-600">Float Voltage (V)</label>
+                    <label className="text-xs text-slate-600">Float Voltage (V)</label>
                     <input value={profiles[ch].float_voltage} onChange={e => setProfiles(p => p.map((x, i) => i === ch ? { ...x, float_voltage: e.target.value } : x))}
-                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm" placeholder="13.8" />
+                      className="w-full rounded-xl border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" placeholder="13.8" />
                   </div>
                 </div>
                 <button
@@ -792,11 +809,11 @@ function BatteriesTab({ onSave, sendCommand }: { onSave: (ch: number, bat: Batte
                     capacity_mAh: parseFloat(vals[ch].capacity_mAh) || 0,
                     initial_soc_pct: parseFloat(vals[ch].initial_soc_pct) || 100,
                   })}
-                  className="text-xs bg-indigo-600 text-white px-3 py-1 rounded"
+                  className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-lg"
                 >
                   Save Profile
                 </button>
-                <p className="text-xs text-gray-400">Profile includes chemistry, voltage thresholds, and cell count. Basic save only stores capacity + initial SoC.</p>
+                <p className="text-xs text-slate-400">Profile includes chemistry, voltage thresholds, and cell count. Basic save only stores capacity + initial SoC.</p>
               </div>
             )}
           </div>
@@ -841,55 +858,55 @@ function RelaysTab({ deviceKey, onSave }: { deviceKey: string; onSave: (idx: num
   }, [deviceKey])
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="font-semibold mb-4">Relay Rules</h3>
-      <p className="text-xs text-gray-500 mb-4">GPIO pin is set by the device firmware based on board type. Active High should match your relay board wiring (NO=high, NC=low).</p>
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+      <h3 className="font-semibold mb-4 text-slate-800">Relay Rules</h3>
+      <p className="text-xs text-slate-500 mb-4">GPIO pin is set by the device firmware based on board type. Active High should match your relay board wiring (NO=high, NC=low).</p>
       <div className="space-y-4">
         {[0,1,2,3].map(idx => (
-          <div key={idx} className="border rounded p-3">
-            <div className="font-medium mb-2">Relay {idx}</div>
+          <div key={idx} className="border border-slate-100 rounded-xl p-4">
+            <div className="font-medium mb-2 text-slate-700">Relay {idx}</div>
             <div className="grid grid-cols-4 gap-2 text-sm">
               <div>
-                <label className="text-xs text-gray-500">VC</label>
+                <label className="text-xs text-slate-500">VC</label>
                 <select value={relays[idx].channel} onChange={e => setRelays(r => r.map((x, i) => i === idx ? { ...x, channel: Number(e.target.value) } : x))}
-                  className="w-full rounded border border-gray-300 px-1 py-1">
+                  className="w-full rounded-xl border border-slate-200 px-1 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400">
                   {[0,1,2,3].map(c => <option key={c} value={c}>VC{c}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-xs text-gray-500">Overcurrent (A)</label>
+                <label className="text-xs text-slate-500">Overcurrent (A)</label>
                 <input value={relays[idx].overcurrent_A} onChange={e => setRelays(r => r.map((x, i) => i === idx ? { ...x, overcurrent_A: e.target.value } : x))}
-                  className="w-full rounded border border-gray-300 px-1 py-1" />
+                  className="w-full rounded-xl border border-slate-200 px-1 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" />
               </div>
               <div>
-                <label className="text-xs text-gray-500">Undervoltage (V)</label>
+                <label className="text-xs text-slate-500">Undervoltage (V)</label>
                 <input value={relays[idx].undervoltage_V} onChange={e => setRelays(r => r.map((x, i) => i === idx ? { ...x, undervoltage_V: e.target.value } : x))}
-                  className="w-full rounded border border-gray-300 px-1 py-1" />
+                  className="w-full rounded-xl border border-slate-200 px-1 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" />
               </div>
               <div>
-                <label className="text-xs text-gray-500">SoC Low (%)</label>
+                <label className="text-xs text-slate-500">SoC Low (%)</label>
                 <input value={relays[idx].soc_low_pct} onChange={e => setRelays(r => r.map((x, i) => i === idx ? { ...x, soc_low_pct: e.target.value } : x))}
-                  className="w-full rounded border border-gray-300 px-1 py-1" />
+                  className="w-full rounded-xl border border-slate-200 px-1 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" />
               </div>
               <div>
-                <label className="text-xs text-gray-500">SoC High (%)</label>
+                <label className="text-xs text-slate-500">SoC High (%)</label>
                 <input value={relays[idx].soc_high_pct} onChange={e => setRelays(r => r.map((x, i) => i === idx ? { ...x, soc_high_pct: e.target.value } : x))}
-                  className="w-full rounded border border-gray-300 px-1 py-1" />
+                  className="w-full rounded-xl border border-slate-200 px-1 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" />
               </div>
               <div>
-                <label className="text-xs text-gray-500">Trip delay (ms)</label>
+                <label className="text-xs text-slate-500">Trip delay (ms)</label>
                 <input value={relays[idx].trip_delay_ms} onChange={e => setRelays(r => r.map((x, i) => i === idx ? { ...x, trip_delay_ms: e.target.value } : x))}
-                  className="w-full rounded border border-gray-300 px-1 py-1" />
+                  className="w-full rounded-xl border border-slate-200 px-1 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400" />
               </div>
               <div>
-                <label className="text-xs text-gray-500">GPIO</label>
+                <label className="text-xs text-slate-500">GPIO</label>
                 <input value={relays[idx].gpio_pin} readOnly
-                  className="w-full rounded border border-gray-200 px-1 py-1 bg-gray-50 text-gray-500" />
+                  className="w-full rounded-xl border border-slate-200 px-1 py-1.5 bg-slate-50 text-slate-400" />
               </div>
               <div className="flex items-center gap-1 pt-4">
                 <input type="checkbox" checked={relays[idx].active_high}
                   onChange={e => setRelays(r => r.map((x, i) => i === idx ? { ...x, active_high: e.target.checked } : x))} />
-                <span className="text-xs">Active High</span>
+                <span className="text-xs text-slate-500">Active High</span>
               </div>
             </div>
             <button onClick={() => onSave(idx, {
@@ -902,7 +919,7 @@ function RelaysTab({ deviceKey, onSave }: { deviceKey: string; onSave: (idx: num
               reset_delay_ms: parseInt(relays[idx].reset_delay_ms) || 5000,
               active_high: relays[idx].active_high,
               enabled: relays[idx].enabled,
-            })} className="mt-2 text-xs bg-blue-600 text-white px-3 py-1 rounded">Save</button>
+            })} className="mt-2 text-xs bg-brand-600 text-white px-3 py-1.5 rounded-lg">Save</button>
           </div>
         ))}
       </div>
