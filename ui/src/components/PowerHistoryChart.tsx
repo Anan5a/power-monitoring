@@ -579,8 +579,7 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                         stroke={g.start}
                         strokeWidth={2.5}
                         fill={g.start}
-                        fillOpacity={0.35}
-                        stackId={metric === 'power' ? 'power' : undefined}
+                        fillOpacity={0.25}
                         dot={false}
                         activeDot={{
                           r: 5,
