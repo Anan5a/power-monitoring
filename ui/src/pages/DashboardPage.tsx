@@ -100,7 +100,7 @@ export default function DashboardPage() {
         <div className="space-y-6">
           {/* Top metrics row: DailyGenerationCard + InverterPowerCard */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <DailyGenerationCard deviceKey={selectedDevice.device_key} deviceChannels={deviceChannels} />
+            <DailyGenerationCard deviceKey={selectedDevice.device_key} />
             <InverterPowerCard
               inverterPower={computed.inverter_power}
               systemStatus={computed.system_status}

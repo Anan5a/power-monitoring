@@ -2,38 +2,18 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { SunIcon } from '@heroicons/react/24/outline'
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
 import { useDailyGeneration } from '../hooks/useDailyGeneration'
-import type { DeviceChannels } from '../lib/types'
 
 interface Props {
   deviceKey: string
-  deviceChannels?: DeviceChannels | null
 }
 
-export default function DailyGenerationCard({ deviceKey, deviceChannels }: Props) {
-  const { total, hourly, isLoading } = useDailyGeneration(
-    deviceKey,
-    deviceChannels?.channel_groups
-  )
-  const solarChannels = deviceChannels?.channel_groups?.filter(g => g.icon === 0) ?? []
-  const hasSolar = solarChannels.length > 0
+export default function DailyGenerationCard({ deviceKey }: Props) {
+  const { total, hourly, isLoading } = useDailyGeneration(deviceKey)
 
-  // Format hour labels for display (show only meaningful hours)
   const chartData = hourly.map(h => ({
     time: h.hour,
     kWh: h.value,
   }))
-
-  if (!hasSolar) {
-    return (
-      <div className="bg-gradient-to-br from-slate-50 to-white bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-        <div className="flex items-center gap-2 mb-3">
-          <SunIcon className="w-5 h-5 text-amber-400" />
-          <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Today's Generation</span>
-        </div>
-        <div className="text-slate-400 text-sm">No solar channels configured</div>
-      </div>
-    )
-  }
 
   return (
     <div className="bg-gradient-to-br from-amber-50/50 to-white bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
