@@ -39,6 +39,7 @@ export function useDailyGeneration(deviceKey: string | null) {
         if (!mounted.current) return
         setIsLoading(false)
         const rows = response.data
+        console.log('DailyGen rows:', rows?.length, 'range:', rows?.[0]?.recorded_at, '->', rows?.[rows?.length-1]?.recorded_at)
         if (!rows || rows.length === 0) return
 
         // Group by hour
