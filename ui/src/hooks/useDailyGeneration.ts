@@ -49,7 +49,7 @@ export function useDailyGeneration(deviceKey: string | null) {
         for (let h = 0; h <= 23; h++) {
           if (h <= now.getUTCHours()) {
             const key = `${h.toString().padStart(2, '0')}:00`
-            const row = response.data.find(r => {
+            const row = response.data.find((r: { hour: string; kwh: number }) => {
               const hour = new Date(r.hour).getUTCHours()
               return hour === h
             })
