@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Scatter
+  ResponsiveContainer, Scatter, Line
 } from 'recharts'
 import { supabase } from '../lib/supabase'
 import type { TelemetryPoint, DeviceChannels, ChannelName } from '../lib/types'
@@ -35,8 +35,9 @@ const SERIES_GRADIENTS: Record<string, { id: string; start: string; end: string 
   ch3_P:      { id: 'grad_ch3', start: '#84cc16', end: '#bef264' },
   pv_power:        { id: 'grad_pv', start: '#f59e0b', end: '#fcd34d' },
   battery_power:   { id: 'grad_bat', start: '#10b981', end: '#6ee7b7' },
-  inverter_power:  { id: 'grad_inv', start: '#6366f1', end: '#a5b4fc' },
-  dc_load_power:   { id: 'grad_dc', start: '#f43f5e', end: '#fda4af' },
+  inverter_power:  { id: 'grad_inv', start: '#3b82f6', end: '#93c5fd' },
+  dc_load_power:   { id: 'grad_dc', start: '#ef4444', end: '#fca5a5' },
+  soc_pct0:        { id: 'grad_soc', start: '#a855f7', end: '#d8b4fe' },
   // Voltage
   ina3221_v0: { id: 'grad_v0', start: '#0ea5e9', end: '#7dd3fc' },
   ina3221_v1: { id: 'grad_v1', start: '#10b981', end: '#6ee7b7' },
@@ -96,11 +97,8 @@ function extractKeys(data: TelemetryPoint[], metric: Metric): string[] {
   // For power tab: if computed system columns exist, exclude raw ch*_P that overlap
   if (metric === 'power') {
     const hasSystemKeys = SYSTEM_POWER_KEYS.some(k => nonZeroKeys.includes(k))
-    console.log('extractKeys debug:', { allKeys: Array.from(allKeys), nonZeroKeys, hasSystemKeys })
     if (hasSystemKeys) {
-      const filtered = nonZeroKeys.filter(k => SYSTEM_POWER_KEYS.includes(k) || k === 'ina226_p')
-      console.log('filtered to system keys:', filtered)
-      return filtered
+      return nonZeroKeys.filter(k => SYSTEM_POWER_KEYS.includes(k) || k === 'ina226_p')
     }
   }
 
@@ -113,10 +111,11 @@ function vcName(channelNames: ChannelName[] | undefined, idx: number): string {
 
 function keyToLabel(k: string, channelNames?: ChannelName[]): string {
   if (k === 'ina226_p' || k === 'ina226_v' || k === 'ina226_i') return 'INA226'
-  if (k === 'inverter_power') return 'Inverter'
-  if (k === 'pv_power') return 'PV Total'
+  if (k === 'inverter_power') return 'Inverter Output'
+  if (k === 'pv_power') return 'PV Generation'
   if (k === 'battery_power') return 'Battery'
   if (k === 'dc_load_power') return 'DC Load'
+  if (k === 'soc_pct0') return 'Battery SOC'
   const ina = k.match(/^ina3221_([pvi])([0-2])$/)
   if (ina) {
     const m2m: Record<string, string> = { p: 'P', v: 'V', i: 'I' }
@@ -280,10 +279,20 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
       : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     const rec: Record<string, unknown> = { time }
     for (const k of seriesKeys) {
-      rec[k] = (pt.payload as Record<string, number>)[k] ?? null
+      let val = (pt.payload as Record<string, number>)[k] ?? null
+      // Solis-style: show DC load consumption below the zero line
+      if (metric === 'power' && k === 'dc_load_power' && typeof val === 'number') {
+        val = -val
+      }
+      rec[k] = val
+    }
+    // Pull SOC for power view (rendered as secondary axis line)
+    if (metric === 'power') {
+      const soc0 = (pt.payload as Record<string, number>)['soc_pct0']
+      if (soc0 != null) rec['soc_pct0'] = soc0
     }
     return rec
-  }), [downsampledHistory, seriesKeys, range])
+  }), [downsampledHistory, seriesKeys, range, metric])
 
   // Spike markers (only meaningful on power tab)
   const spikeData: Array<{ time: string; spike_y: number }> = useMemo(() => {
@@ -379,7 +388,9 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                 <span className="text-slate-300">{keyToLabel(p.dataKey ?? '', channelNames)}</span>
               </div>
               <span className="text-slate-100 font-semibold font-mono">
-                {v.toFixed(metric === 'voltage' ? 2 : 1)} {unit}
+                {p.dataKey === 'soc_pct0'
+                  ? `${v.toFixed(0)} %`
+                  : `${Math.abs(v).toFixed(metric === 'voltage' ? 2 : 1)} ${unit}`}
               </span>
             </div>
           )
@@ -532,6 +543,18 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                       width={56}
                     />
                   )}
+                  {metric === 'power' && chartData.some(d => d.soc_pct0 != null) && (
+                    <YAxis
+                      yAxisId="soc"
+                      orientation="right"
+                      tick={{ fontSize: 11, fill: '#a855f7', fontFamily: 'inherit' }}
+                      axisLine={false}
+                      tickLine={false}
+                      unit=" %"
+                      domain={[0, 100]}
+                      width={48}
+                    />
+                  )}
                   <Tooltip
                     content={<CustomTooltip />}
                     cursor={{ stroke: '#94a3b8', strokeWidth: 1, strokeDasharray: '3 3' }}
@@ -559,6 +582,23 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                       />
                     )
                   })}
+                  {metric === 'power' && chartData.some(d => d.soc_pct0 != null) && (
+                    <Line
+                      yAxisId="soc"
+                      type="monotone"
+                      dataKey="soc_pct0"
+                      stroke="#a855f7"
+                      strokeWidth={2}
+                      dot={false}
+                      connectNulls
+                      activeDot={{
+                        r: 4,
+                        fill: '#a855f7',
+                        stroke: '#fff',
+                        strokeWidth: 2,
+                      }}
+                    />
+                  )}
                   {spikeData.length > 0 && (
                     <Scatter
                       yAxisId={showDualAxis ? 'right' : 'left'}
