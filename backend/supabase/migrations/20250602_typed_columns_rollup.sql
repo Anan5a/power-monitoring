@@ -451,15 +451,16 @@ begin
         ina3221_i0_spike, ina3221_i1_spike, ina3221_i2_spike
     from rolled_up
     on conflict (device_key, recorded_at) do nothing
-    returning 1;
-
-    get diagnostics rolled = row_count;
+)
+get diagnostics rolled = row_count;
 
     -- Delete the original 1-sec rows that were rolled up
     delete from public.telemetry_computed
-    where id in (
+    where recorded_at < cutoff
+      and id in (
         select id from public.telemetry_computed
         where recorded_at < cutoff
+        limit 10000
     );
     get diagnostics deleted = row_count;
 
