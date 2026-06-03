@@ -36,7 +36,7 @@ export default function DashboardPage() {
     fetchDeviceChannels(selectedDevice.device_key).then(setDeviceChannels)
   }, [selectedDevice])
 
-  const { latestReading } = useRealtime(selectedDevice?.device_key ?? null)
+  const { latestReading, isStale } = useRealtime(selectedDevice?.device_key ?? null)
 
   const payload = latestReading?.payload as Record<string, number> ?? null
   const computed: ComputedValues = payload
@@ -115,6 +115,7 @@ export default function DashboardPage() {
             latestReading={payload}
             deviceChannels={deviceChannels}
             relayOn={[false, false, false, false]}
+            isStale={isStale}
           />
 
           {/* VC cards */}
