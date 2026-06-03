@@ -106,11 +106,7 @@ export default function DashboardPage() {
               inverterPower={computed.inverter_power}
               systemStatus={computed.system_status}
             />
-            <BatteryChargeCard
-              deviceKey={selectedDevice.device_key}
-              socPct={payload?.soc_pct0 ?? null}
-              batteryCapacityWh={(deviceChannels?.battery_profiles?.[0]?.capacity_mAh ?? 0) / 1000}
-            />
+            <BatteryChargeCard deviceId={selectedDevice.id} />
           </div>
 
           {/* Relay switches */}

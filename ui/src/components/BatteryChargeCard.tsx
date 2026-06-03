@@ -3,17 +3,15 @@ import { Battery0Icon } from '@heroicons/react/24/outline'
 import { useBatteryCharge } from '../hooks/useBatteryCharge'
 
 interface Props {
-  deviceKey: string
-  socPct: number | null   // soc_pct0 from realtime
-  batteryCapacityWh: number
+  deviceId: string  // devices.id (uuid), not device_key
 }
 
-export default function BatteryChargeCard({ deviceKey, socPct, batteryCapacityWh }: Props) {
-  const { chargeWh, capacityWh, socAnchor, isLoading } = useBatteryCharge(
-    deviceKey,
-    socPct,
-    batteryCapacityWh
-  )
+export default function BatteryChargeCard({ deviceId }: Props) {
+  const {
+    chargeWh, capacityWh,
+    energyIn24h, energyOut24h,
+    isFullChargeToday, isLoading
+  } = useBatteryCharge(deviceId)
 
   const displayPct = capacityWh > 0 ? (chargeWh / capacityWh) * 100 : 0
   const barColor = displayPct > 50 ? 'bg-emerald-500' : displayPct > 20 ? 'bg-amber-400' : 'bg-red-500'
@@ -64,20 +62,20 @@ export default function BatteryChargeCard({ deviceKey, socPct, batteryCapacityWh
           </div>
           <div className="flex items-center justify-between mt-1.5">
             <span className="text-[10px] text-slate-400">
-              {displayPct.toFixed(1)}% (SOC anchor: {socAnchor.toFixed(1)}%)
+              {displayPct.toFixed(1)}%
+              {isFullChargeToday && <span className="ml-1 text-emerald-500">● full</span>}
             </span>
-            {socPct !== null && Math.abs(socPct - socAnchor) > 5 && (
-              <span className="text-[10px] text-amber-500">drift detected</span>
-            )}
+            <span className="text-[10px] text-emerald-500">
+              +{energyIn24h.toFixed(1)} / -{energyOut24h.toFixed(1)} Wh (24h)
+            </span>
           </div>
         </div>
       )}
 
-      {/* Energy flow note */}
-      {!isLoading && chargeWh > 0 && (
+      {!isLoading && (
         <div className="mt-3 pt-3 border-t border-slate-100">
           <span className="text-[10px] text-slate-400">
-            Computed from battery_power integration — reset SOC anchor to recalibrate
+            Trigger computes charge_wh from battery_power integration · voltage anchor at {29.2}V
           </span>
         </div>
       )}
