@@ -73,17 +73,32 @@ const METRIC_REGEX: Record<Metric, RegExp> = {
   current: /^ch\d_I$|ina226_i|^ina3221_i\d$/,
 }
 
+// For power tab, prefer computed system columns over raw channel powers
+const SYSTEM_POWER_KEYS = ['pv_power', 'battery_power', 'inverter_power', 'dc_load_power']
+
 function extractKeys(data: TelemetryPoint[], metric: Metric): string[] {
   if (data.length === 0) return []
   const payloadKeys = Object.keys(data[0].payload as Record<string, number>)
   const regexKeys = payloadKeys.filter(k => METRIC_REGEX[metric].test(k))
+
   // Filter out keys where all values are 0 or null (e.g. ch0_P on voltage-only channel)
-  return regexKeys.filter(k => {
+  const nonZeroKeys = regexKeys.filter(k => {
     return data.some(pt => {
       const v = (pt.payload as Record<string, number>)[k]
       return v != null && Math.abs(v) > 0.5
     })
   })
+
+  // For power tab: if computed system columns exist, exclude raw ch*_P that overlap
+  if (metric === 'power') {
+    const hasSystemKeys = SYSTEM_POWER_KEYS.some(k => nonZeroKeys.includes(k))
+    if (hasSystemKeys) {
+      // Only show system keys + INA226 (which is not covered by computed columns)
+      return nonZeroKeys.filter(k => SYSTEM_POWER_KEYS.includes(k) || k === 'ina226_p')
+    }
+  }
+
+  return nonZeroKeys
 }
 
 function vcName(channelNames: ChannelName[] | undefined, idx: number): string {
