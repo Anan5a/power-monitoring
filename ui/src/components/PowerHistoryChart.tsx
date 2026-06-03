@@ -570,6 +570,29 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                   {visibleKeys.map((k, i) => {
                     const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
                     const fillId = `area_fill_${k}`
+
+                    // PV Generation: line only, no area fill
+                    if (k === 'pv_power') {
+                      return (
+                        <Line
+                          key={k}
+                          type="monotone"
+                          dataKey={k}
+                          yAxisId={showDualAxis ? 'right' : 'left'}
+                          stroke={g.start}
+                          strokeWidth={2.5}
+                          dot={false}
+                          activeDot={{
+                            r: 5,
+                            fill: g.start,
+                            stroke: '#fff',
+                            strokeWidth: 2,
+                          }}
+                          connectNulls
+                        />
+                      )
+                    }
+
                     return (
                       <Area
                         key={k}
