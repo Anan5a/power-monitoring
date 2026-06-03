@@ -33,6 +33,10 @@ const SERIES_GRADIENTS: Record<string, { id: string; start: string; end: string 
   ch1_P:      { id: 'grad_ch1', start: '#ec4899', end: '#f9a8d4' },
   ch2_P:      { id: 'grad_ch2', start: '#f97316', end: '#fdba74' },
   ch3_P:      { id: 'grad_ch3', start: '#84cc16', end: '#bef264' },
+  pv_power:        { id: 'grad_pv', start: '#f59e0b', end: '#fcd34d' },
+  battery_power:   { id: 'grad_bat', start: '#10b981', end: '#6ee7b7' },
+  inverter_power:  { id: 'grad_inv', start: '#6366f1', end: '#a5b4fc' },
+  dc_load_power:   { id: 'grad_dc', start: '#f43f5e', end: '#fda4af' },
   // Voltage
   ina3221_v0: { id: 'grad_v0', start: '#0ea5e9', end: '#7dd3fc' },
   ina3221_v1: { id: 'grad_v1', start: '#10b981', end: '#6ee7b7' },
@@ -64,7 +68,7 @@ const FALLBACK_COLORS = [
 ]
 
 const METRIC_REGEX: Record<Metric, RegExp> = {
-  power: /^ch\d_P$|ina226_p|^ina3221_p\d$/,
+  power: /^ch\d_P$|ina226_p|^ina3221_p\d$|inverter_power|pv_power|battery_power|dc_load_power/,
   voltage: /^ch\d_V$|ina226_v|^ina3221_v\d$/,
   current: /^ch\d_I$|ina226_i|^ina3221_i\d$/,
 }
@@ -72,7 +76,14 @@ const METRIC_REGEX: Record<Metric, RegExp> = {
 function extractKeys(data: TelemetryPoint[], metric: Metric): string[] {
   if (data.length === 0) return []
   const payloadKeys = Object.keys(data[0].payload as Record<string, number>)
-  return payloadKeys.filter(k => METRIC_REGEX[metric].test(k))
+  const regexKeys = payloadKeys.filter(k => METRIC_REGEX[metric].test(k))
+  // Filter out keys where all values are 0 or null (e.g. ch0_P on voltage-only channel)
+  return regexKeys.filter(k => {
+    return data.some(pt => {
+      const v = (pt.payload as Record<string, number>)[k]
+      return v != null && Math.abs(v) > 0.5
+    })
+  })
 }
 
 function vcName(channelNames: ChannelName[] | undefined, idx: number): string {
@@ -81,6 +92,10 @@ function vcName(channelNames: ChannelName[] | undefined, idx: number): string {
 
 function keyToLabel(k: string, channelNames?: ChannelName[]): string {
   if (k === 'ina226_p' || k === 'ina226_v' || k === 'ina226_i') return 'INA226'
+  if (k === 'inverter_power') return 'Inverter'
+  if (k === 'pv_power') return 'PV Total'
+  if (k === 'battery_power') return 'Battery'
+  if (k === 'dc_load_power') return 'DC Load'
   const ina = k.match(/^ina3221_([pvi])([0-2])$/)
   if (ina) {
     const m2m: Record<string, string> = { p: 'P', v: 'V', i: 'I' }
@@ -145,6 +160,10 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                 ...(row.ina226_v != null && { 'ina226_v': row.ina226_v }),
                 ...(row.ina226_i != null && { 'ina226_i': row.ina226_i }),
                 ...(row.ina226_p != null && { 'ina226_p': row.ina226_p }),
+                ...(row.pv_power != null && { 'pv_power': row.pv_power }),
+                ...(row.battery_power != null && { 'battery_power': row.battery_power }),
+                ...(row.inverter_power != null && { 'inverter_power': row.inverter_power }),
+                ...(row.dc_load_power != null && { 'dc_load_power': row.dc_load_power }),
                 ...(row.ads1115_0 != null && { 'ads1115_0': row.ads1115_0 }),
                 ...(row.ads1115_1 != null && { 'ads1115_1': row.ads1115_1 }),
                 ...(row.ads1115_2 != null && { 'ads1115_2': row.ads1115_2 }),
