@@ -230,7 +230,7 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
         }
         if (data && data.length > 0) {
           // Transform compact RPC rows into TelemetryPoint shape
-          const arr: TelemetryPoint[] = (data as Array<Record<string, unknown>>).map((row, idx) => {
+          const arr: TelemetryPoint[] = (data as Array<Record<string, unknown>>).map((row) => {
             const payload: Record<string, number> = {}
             for (const [key, val] of Object.entries(row)) {
               if (key === 'bucket') continue
@@ -238,7 +238,6 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                 payload[key] = val
               }
             }
-            if (idx === 0) console.log('[RPC transform] first row payload keys:', Object.keys(payload), 'pv_power:', payload['pv_power'])
             return {
               id: 0,
               device_id: deviceKey,
@@ -291,8 +290,6 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
     }
     return rec
   }), [downsampledHistory, seriesKeys, range, metric])
-
-  console.log('[chartData] seriesKeys:', seriesKeys, 'totalPoints:', downsampledHistory.length, 'first:', JSON.stringify(chartData[0]), 'last:', JSON.stringify(chartData[chartData.length-1]))
 
   // Spike markers (only meaningful on power tab)
   const spikeData: Array<{ time: string; spike_y: number }> = useMemo(() => {
