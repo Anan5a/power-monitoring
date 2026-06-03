@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Scatter, Line
+  ResponsiveContainer, Scatter, Line, ReferenceLine
 } from 'recharts'
 import { supabase } from '../lib/supabase'
 import type { TelemetryPoint, DeviceChannels, ChannelName } from '../lib/types'
@@ -273,17 +273,15 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
 
   const chartData = useMemo(() => downsampledHistory.map(pt => {
     const d = new Date(pt.recorded_at)
-    const showDate = range !== '1h' && range !== '6h'
-    const time = showDate
-      ? d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    // For 24h view, show just time unless crossing midnight; for longer ranges show date+time
+    const time = range === '24h'
+      ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : range === '1h' || range === '6h'
+        ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     const rec: Record<string, unknown> = { time }
     for (const k of seriesKeys) {
       let val = (pt.payload as Record<string, number>)[k] ?? null
-      // Solis-style: show DC load consumption below the zero line
-      if (metric === 'power' && k === 'dc_load_power' && typeof val === 'number') {
-        val = -val
-      }
       rec[k] = val
     }
     // Pull SOC for power view (rendered as secondary axis line)
@@ -303,10 +301,11 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
       for (let i = 0; i < 3; i++) {
         if (payload[`ina3221_i${i}_spike`] === true) {
           const d = new Date(pt.recorded_at)
-          const showDate = range !== '1h' && range !== '6h'
-          const time = showDate
-            ? d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          const time = range === '24h'
+            ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : range === '1h' || range === '6h'
+              ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           out.push({ time, spike_y: 0 })
           break
         }
@@ -522,7 +521,7 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                     tick={{ fontSize: 11, fill: '#94a3b8', fontFamily: 'inherit' }}
                     axisLine={false}
                     tickLine={false}
-                    interval="preserveStartEnd"
+                    interval={chartData.length > 20 ? Math.ceil(chartData.length / 10) : 'preserveStartEnd'}
                   />
                   <YAxis
                     yAxisId="left"
@@ -559,6 +558,15 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                     content={<CustomTooltip />}
                     cursor={{ stroke: '#94a3b8', strokeWidth: 1, strokeDasharray: '3 3' }}
                   />
+                  {metric === 'power' && (
+                    <ReferenceLine
+                      yAxisId="left"
+                      y={0}
+                      stroke="#cbd5e1"
+                      strokeWidth={1}
+                      strokeDasharray="4 4"
+                    />
+                  )}
                   {visibleKeys.map((k, i) => {
                     const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
                     const fillId = `area_fill_${k}`
