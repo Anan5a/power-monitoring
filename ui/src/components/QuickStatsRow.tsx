@@ -7,6 +7,7 @@ interface Props {
   latestReading: Record<string, number> | null
   deviceChannels: DeviceChannels | null
   relayOn: boolean[]
+  isStale?: boolean
 }
 
 const STATUS_STYLES: Record<string, { dot: string; text: string; label: string }> = {
@@ -98,7 +99,7 @@ function DirectionalMetric({
   )
 }
 
-export default function QuickStatsRow({ latestReading, deviceChannels }: Props) {
+export default function QuickStatsRow({ latestReading, deviceChannels, isStale }: Props) {
   const payload = latestReading ?? {}
   const groups = deviceChannels?.channel_groups ?? []
   const batteryProfiles = deviceChannels?.battery_profiles ?? []
@@ -110,8 +111,8 @@ export default function QuickStatsRow({ latestReading, deviceChannels }: Props) 
   const status = STATUS_STYLES[computed.system_status]
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-6 py-4 mb-6">
-      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
+    <div className={`bg-white rounded-2xl shadow-sm border border-slate-100 px-6 py-4 mb-6 ${isStale ? 'opacity-60' : ''}`}>
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4 overflow-x-auto pb-1 -mx-1 px-1">
         <div className="flex items-center gap-4">
           <div className="flex flex-col leading-tight">
             <span className="text-[11px] uppercase tracking-wide text-slate-400 font-medium">Total Power</span>
@@ -177,6 +178,12 @@ export default function QuickStatsRow({ latestReading, deviceChannels }: Props) 
               </div>
             )
           })}
+
+          {isStale && (
+            <div className="mt-3 pt-3 border-t border-slate-100">
+              <span className="text-[10px] text-slate-400 italic">Data may be stale — realtime disconnected</span>
+            </div>
+          )}
 
           <div className="h-8 w-px bg-slate-200" />
 

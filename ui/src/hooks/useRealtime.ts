@@ -85,7 +85,18 @@ function computedToPayload(row: ComputedRow): Record<string, number> {
 export function useRealtime(deviceKey: string | null) {
   const [dataPoints, setDataPoints] = useState<TelemetryPoint[]>([])
   const [latestReading, setLatestReading] = useState<TelemetryPoint | null>(null)
+  const [isStale, setIsStale] = useState(false)
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
+  const staleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const scheduleStaleTimer = () => {
+    if (staleTimerRef.current) {
+      clearTimeout(staleTimerRef.current)
+    }
+    staleTimerRef.current = setTimeout(() => {
+      setIsStale(true)
+    }, 15000)
+  }
 
   useEffect(() => {
     if (!deviceKey) return
@@ -95,6 +106,7 @@ export function useRealtime(deviceKey: string | null) {
     }
     setLatestReading(null)
     setDataPoints([])
+    setIsStale(false)
 
     // telemetry_live deleted immediately by trigger — subscribe to telemetry_computed
     const channel = supabase
@@ -115,11 +127,19 @@ export function useRealtime(deviceKey: string | null) {
         }
         setDataPoints(prev => [...prev.slice(-HISTORY_LIMIT), point])
         setLatestReading(point)
+        setIsStale(false)
+        scheduleStaleTimer()
       })
       .subscribe()
 
     channelRef.current = channel
+    setIsStale(false)
+    scheduleStaleTimer()
     return () => {
+      if (staleTimerRef.current) {
+        clearTimeout(staleTimerRef.current)
+        staleTimerRef.current = null
+      }
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current)
         channelRef.current = null
@@ -127,5 +147,5 @@ export function useRealtime(deviceKey: string | null) {
     }
   }, [deviceKey])
 
-  return { dataPoints, latestReading }
+  return { dataPoints, latestReading, isStale }
 }
