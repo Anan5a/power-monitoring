@@ -330,9 +330,14 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
 
   const visibleKeys = seriesKeys.filter(k => visibleLines.has(k))
 
-  // DEBUG: log chart state on every render to diagnose missing pv_power
+  // DEBUG: find all null-pv_power indices in chartData
+  const nullPvIndices = chartData
+    .map((d, i) => ({ i, time: d.time, pv: (d as Record<string, unknown>).pv_power }))
+    .filter(x => x.pv == null)
   // eslint-disable-next-line no-console
-  console.log('Chart state:', { seriesKeys, visibleLines: Array.from(visibleLines), visibleKeys, chartDataLength: chartData.length, firstDataPoint: chartData[0] })
+  if (nullPvIndices.length > 0 && chartData.length > 0) {
+    console.log('Null pv_power points:', nullPvIndices.length, 'of', chartData.length, '— first 5:', nullPvIndices.slice(0, 5))
+  }
 
   // Solis-style: stack power areas in fixed order so they layer predictably
   const chartKeys = metric === 'power'
