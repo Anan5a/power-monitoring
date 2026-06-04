@@ -257,8 +257,8 @@ begin
         select now() - (p_hours || ' hours')::interval as ts_start
     )
     select
-        coalesce(sum(case when battery_power > 0 then abs(battery_power) end), 0),
-        coalesce(sum(case when battery_power < 0 then abs(battery_power) end), 0)
+        coalesce(sum(case when battery_power > 0 then abs(battery_power) * dt_hrs end), 0),
+        coalesce(sum(case when battery_power < 0 then abs(battery_power) * dt_hrs end), 0)
     into energy_in_24h, energy_out_24h
     from (
         select battery_power,
