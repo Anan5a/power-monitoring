@@ -547,7 +547,7 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                   {chartKeys.map((k, i) => {
                     const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
 
-                    // PV Generation: line only, no area fill, not stacked
+                    // PV Generation: thick dashed line so it doesn't vanish on top of battery area
                     if (k === 'pv_power') {
                       return (
                         <Line
@@ -556,10 +556,11 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                           dataKey={k}
                           yAxisId={showDualAxis ? 'right' : 'left'}
                           stroke={g.start}
-                          strokeWidth={2.5}
+                          strokeWidth={4}
+                          strokeDasharray="6 4"
                           dot={false}
                           activeDot={{
-                            r: 5,
+                            r: 6,
                             fill: g.start,
                             stroke: '#fff',
                             strokeWidth: 2,
