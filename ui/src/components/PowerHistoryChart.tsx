@@ -102,6 +102,31 @@ function extractKeys(data: TelemetryPoint[], metric: Metric): string[] {
     }
   }
 
+  // For voltage/current: if both virtual channel (chN_V/I) and raw INA3221 (ina3221_vN/iN)
+  // exist for the same channel, prefer the virtual channel to avoid duplicate legend entries.
+  if (metric === 'voltage' || metric === 'current') {
+    const result: string[] = []
+    const seenChannels = new Set<number>()
+    for (const k of nonZeroKeys) {
+      const ch = k.match(/^ch(\d)_[VI]$/i)
+      if (ch) {
+        seenChannels.add(parseInt(ch[1]))
+        result.push(k)
+      }
+    }
+    for (const k of nonZeroKeys) {
+      const ina = k.match(/^ina3221_[vi](\d)$/)
+      if (ina) {
+        if (!seenChannels.has(parseInt(ina[1]))) {
+          result.push(k)
+        }
+      }
+    }
+    const ina226Key = metric === 'voltage' ? 'ina226_v' : 'ina226_i'
+    if (nonZeroKeys.includes(ina226Key)) result.push(ina226Key)
+    return result
+  }
+
   return nonZeroKeys
 }
 
