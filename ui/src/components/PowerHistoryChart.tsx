@@ -556,21 +556,24 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                     // PV Generation: solid line with white halo so it doesn't vanish on area edges
                     if (k === 'pv_power') {
                       return (
-                        <g key={k}>
-                          {/* White halo for contrast against any area color */}
+                        <>
+                          {/* White halo layer — rendered first so it sits behind */}
                           <Line
+                            key={`${k}_halo`}
                             type="monotone"
                             dataKey={k}
                             yAxisId={showDualAxis ? 'right' : 'left'}
                             stroke="#ffffff"
                             strokeWidth={10}
-                            strokeOpacity={0.7}
+                            strokeOpacity={0.6}
                             dot={false}
                             activeDot={false}
                             connectNulls
                             isAnimationActive={false}
                           />
+                          {/* Main amber line on top */}
                           <Line
+                            key={k}
                             type="monotone"
                             dataKey={k}
                             yAxisId={showDualAxis ? 'right' : 'left'}
@@ -585,7 +588,7 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                             }}
                             connectNulls
                           />
-                        </g>
+                        </>
                       )
                     }
 
