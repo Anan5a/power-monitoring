@@ -330,14 +330,6 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
 
   const visibleKeys = seriesKeys.filter(k => visibleLines.has(k))
 
-  // DEBUG: find all null-pv_power indices in chartData
-  const nullPvIndices = chartData
-    .map((d, i) => ({ i, time: d.time, pv: (d as Record<string, unknown>).pv_power }))
-    .filter(x => x.pv == null)
-  // eslint-disable-next-line no-console
-  if (nullPvIndices.length > 0 && chartData.length > 0) {
-    console.log('Null pv_power points:', nullPvIndices.length, 'of', chartData.length, '— first 5:', nullPvIndices.slice(0, 5))
-  }
 
   // Solis-style: stack power areas in fixed order so they layer predictably
   const chartKeys = metric === 'power'
@@ -361,27 +353,25 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
   }
   const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: TooltipPayload[]; label?: string }) => {
     if (!active || !payload || payload.length === 0) return null
-    // DEBUG: log full tooltip payload to browser console
-    // eslint-disable-next-line no-console
-    console.log('Tooltip payload:', payload.map(p => ({ dataKey: p.dataKey, value: p.value, typeof: typeof p.value })))
-    // Log the full data point being hovered (p.payload is the chartData row)
+    // Recharts sometimes omits Line-series from payload when mixed with Area.
+    // Render directly from the hovered data point so all visible keys appear.
     const hoveredPoint = payload[0]?.payload as Record<string, unknown> | undefined
-    // eslint-disable-next-line no-console
-    console.log('Hovered point:', hoveredPoint ? { time: hoveredPoint.time, pv_power: hoveredPoint.pv_power, battery_power: hoveredPoint.battery_power, inverter_power: hoveredPoint.inverter_power, dc_load_power: hoveredPoint.dc_load_power } : null)
+    if (!hoveredPoint) return null
     return (
       <div className="bg-slate-800 rounded-xl shadow-lg px-3 py-2.5 min-w-[140px]">
         <div className="text-[11px] text-slate-400 mb-1.5 font-medium">{label}</div>
-        {payload.map(p => {
-          const v = typeof p.value === 'number' ? p.value : null
-          if (v === null) return null
+        {visibleKeys.map((k, i) => {
+          const v = hoveredPoint[k] as number | undefined
+          if (typeof v !== 'number') return null
+          const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
           return (
-            <div key={p.dataKey} className="flex items-center justify-between gap-3 text-[12px] py-0.5">
+            <div key={k} className="flex items-center justify-between gap-3 text-[12px] py-0.5">
               <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: p.color }} />
-                <span className="text-slate-300">{keyToLabel(p.dataKey ?? '', channelNames)}</span>
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: g.start }} />
+                <span className="text-slate-300">{keyToLabel(k, channelNames)}</span>
               </div>
               <span className="text-slate-100 font-semibold font-mono">
-                {p.dataKey === 'soc_pct0'
+                {k === 'soc_pct0'
                   ? `${v.toFixed(0)} %`
                   : `${Math.abs(v).toFixed(metric === 'voltage' ? 2 : 1)} ${unit}`}
               </span>
