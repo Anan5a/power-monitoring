@@ -198,7 +198,7 @@ begin
         (new.payload->>'ina3221_i0_spike')::boolean,
         (new.payload->>'ina3221_i1_spike')::boolean,
         (new.payload->>'ina3221_i2_spike')::boolean
-    );
+    ) ON CONFLICT DO NOTHING;
 
     -- Delete telemetry_live immediately (passthrough only)
     delete from public.telemetry_live where id = new.id;
