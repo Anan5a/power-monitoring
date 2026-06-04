@@ -553,26 +553,39 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                   {chartKeys.map((k, i) => {
                     const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
 
-                    // PV Generation: thick dashed line so it doesn't vanish on top of battery area
+                    // PV Generation: solid line with white halo so it doesn't vanish on area edges
                     if (k === 'pv_power') {
                       return (
-                        <Line
-                          key={k}
-                          type="monotone"
-                          dataKey={k}
-                          yAxisId={showDualAxis ? 'right' : 'left'}
-                          stroke={g.start}
-                          strokeWidth={4}
-                          strokeDasharray="6 4"
-                          dot={false}
-                          activeDot={{
-                            r: 6,
-                            fill: g.start,
-                            stroke: '#fff',
-                            strokeWidth: 2,
-                          }}
-                          connectNulls
-                        />
+                        <g key={k}>
+                          {/* White halo for contrast against any area color */}
+                          <Line
+                            type="monotone"
+                            dataKey={k}
+                            yAxisId={showDualAxis ? 'right' : 'left'}
+                            stroke="#ffffff"
+                            strokeWidth={10}
+                            strokeOpacity={0.7}
+                            dot={false}
+                            activeDot={false}
+                            connectNulls
+                            isAnimationActive={false}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey={k}
+                            yAxisId={showDualAxis ? 'right' : 'left'}
+                            stroke={g.start}
+                            strokeWidth={5}
+                            dot={false}
+                            activeDot={{
+                              r: 6,
+                              fill: g.start,
+                              stroke: '#fff',
+                              strokeWidth: 2,
+                            }}
+                            connectNulls
+                          />
+                        </g>
                       )
                     }
 
