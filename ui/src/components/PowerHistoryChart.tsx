@@ -135,7 +135,9 @@ function vcName(channelNames: ChannelName[] | undefined, idx: number): string {
 }
 
 function keyToLabel(k: string, channelNames?: ChannelName[]): string {
-  if (k === 'ina226_p' || k === 'ina226_v' || k === 'ina226_i') return 'INA226'
+  if (k === 'ina226_p') return 'INA226'
+  if (k === 'ina226_v') return 'INA226 V'
+  if (k === 'ina226_i') return 'Inverter I'
   if (k === 'inverter_power') return 'Inverter Output'
   if (k === 'pv_power') return 'PV Generation'
   if (k === 'battery_power') return 'Battery'
