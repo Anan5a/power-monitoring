@@ -355,6 +355,10 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
     // DEBUG: log full tooltip payload to browser console
     // eslint-disable-next-line no-console
     console.log('Tooltip payload:', payload.map(p => ({ dataKey: p.dataKey, value: p.value, typeof: typeof p.value })))
+    // eslint-disable-next-line no-console
+    console.log('seriesKeys:', seriesKeys)
+    // eslint-disable-next-line no-console
+    console.log('chartData sample (first 3):', chartData.slice(0, 3).map((d: Record<string, unknown>) => ({ time: d.time, pv_power: d.pv_power, battery_power: d.battery_power })))
     return (
       <div className="bg-slate-800 rounded-xl shadow-lg px-3 py-2.5 min-w-[140px]">
         <div className="text-[11px] text-slate-400 mb-1.5 font-medium">{label}</div>
