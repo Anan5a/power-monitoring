@@ -553,32 +553,37 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                   {chartKeys.map((k, i) => {
                     const g = SERIES_GRADIENTS[k] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
 
-                    // PV Generation: solid line with white halo so it doesn't vanish on area edges
+                    // PV Generation: render as Area with invisible fill so AreaChart always has
+                    // at least one native child. Halo + main stroke for visibility.
                     if (k === 'pv_power') {
                       return (
                         <>
-                          {/* White halo layer — rendered first so it sits behind */}
-                          <Line
+                          {/* White halo — wide stroke, no fill, no interaction */}
+                          <Area
                             key={`${k}_halo`}
                             type="monotone"
                             dataKey={k}
                             yAxisId={showDualAxis ? 'right' : 'left'}
                             stroke="#ffffff"
                             strokeWidth={10}
-                            strokeOpacity={0.6}
+                            strokeOpacity={0.7}
+                            fillOpacity={0}
+                            fill="none"
                             dot={false}
                             activeDot={false}
                             connectNulls
                             isAnimationActive={false}
                           />
-                          {/* Main amber line on top */}
-                          <Line
+                          {/* Main amber stroke — Area with invisible fill looks like a line */}
+                          <Area
                             key={k}
                             type="monotone"
                             dataKey={k}
                             yAxisId={showDualAxis ? 'right' : 'left'}
                             stroke={g.start}
                             strokeWidth={5}
+                            fillOpacity={0}
+                            fill="none"
                             dot={false}
                             activeDot={{
                               r: 6,
