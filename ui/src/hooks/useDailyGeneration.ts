@@ -55,36 +55,36 @@ export function useDailyGeneration(
     }
     setIsLoading(true)
 
-    let hours = 24
-    let days = 7
+    const now = new Date()
+    let startTime: Date
+    let endTime: Date
     let rangeLabel = ''
     let isDaily = false
 
     if (range === 'today') {
-      hours = 24
-      rangeLabel = 'Last 24 Hours'
+      startTime = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()))
+      endTime = now
+      rangeLabel = 'Today'
     } else if (range === 'yesterday') {
-      hours = 24
+      startTime = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate() - 1))
+      endTime = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999))
       rangeLabel = 'Yesterday'
     } else if (range === '7d') {
-      days = 7
+      startTime = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate() - 6))
+      endTime = now
       isDaily = true
       rangeLabel = 'Last 7 Days'
     } else if (range === '30d') {
-      days = 30
+      startTime = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate() - 29))
+      endTime = now
       isDaily = true
       rangeLabel = 'Last 30 Days'
     } else if (range === 'custom' && customStart && customEnd) {
-      const start = new Date(customStart + 'T00:00:00')
-      const end = new Date(customEnd + 'T23:59:59')
-      const diffMs = end.getTime() - start.getTime()
-      const diffHrs = Math.ceil(diffMs / 3600000)
-      const diffDays = Math.ceil(diffMs / 86400000)
-      if (diffHrs > 48) {
-        days = Math.max(1, diffDays)
+      startTime = new Date(customStart + 'T00:00:00')
+      endTime = new Date(customEnd + 'T23:59:59')
+      const diffMs = endTime.getTime() - startTime.getTime()
+      if (diffMs > 2 * 86400000) {
         isDaily = true
-      } else {
-        hours = Math.max(1, diffHrs)
       }
       rangeLabel = `${customStart} → ${customEnd}`
     } else {
@@ -94,7 +94,11 @@ export function useDailyGeneration(
 
     if (isDaily) {
       supabase
-        .rpc('get_daily_generation', { p_device_key: deviceKey, p_days: days })
+        .rpc('get_daily_generation', {
+          p_device_key: deviceKey,
+          p_start_time: startTime.toISOString(),
+          p_end_time: endTime.toISOString(),
+        })
         .then(({ data, error }) => {
           if (!mounted.current) return
           setIsLoading(false)
@@ -128,7 +132,11 @@ export function useDailyGeneration(
         })
     } else {
       supabase
-        .rpc('get_hourly_generation', { p_device_key: deviceKey, p_hours: hours })
+        .rpc('get_hourly_generation', {
+          p_device_key: deviceKey,
+          p_start_time: startTime.toISOString(),
+          p_end_time: endTime.toISOString(),
+        })
         .then(({ data, error }) => {
           if (!mounted.current) return
           setIsLoading(false)
