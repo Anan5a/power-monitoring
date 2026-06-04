@@ -1,7 +1,17 @@
--- Drop old function first (return type changed, cannot CREATE OR REPLACE)
+-- Definitive get_aggregated_telemetry: compact wide format
+-- This migration is the source of truth. It drops any existing version
+-- (old tall format or previous compact) and recreates only the wide format.
+--
+-- Problem it solves: multiple migration files defined get_aggregated_telemetry
+-- with the SAME signature (text, int, text) but DIFFERENT return types.
+-- PostgreSQL CREATE OR REPLACE cannot change return type, so old files
+-- that use CREATE OR REPLACE would fail or silently be skipped.
+-- This file explicitly drops first, then creates the correct version.
+
 drop function if exists public.get_aggregated_telemetry(text, int, text);
 
--- Compact get_aggregated_telemetry: one row per bucket (avoids PostgREST 1000-row limit)
+-- Compact wide-format: one row per bucket with all metric columns.
+-- coalesce(..., 0) prevents NULL from leaking into chart tooltips.
 create or replace function public.get_aggregated_telemetry(
     p_device_key text,
     p_hours int,
@@ -39,7 +49,7 @@ begin
                 / extract(epoch from bucket_interval)::bigint)
             * extract(epoch from bucket_interval)::bigint
         )::timestamptz as b,
-        -- Power (coalesce so NULL never leaks into chart data / tooltips)
+        -- Power
         coalesce(case when p_metric = 'power' then avg(t.ch0_p)::float end, 0) as "ch0_P",
         coalesce(case when p_metric = 'power' then avg(t.ch1_p)::float end, 0) as "ch1_P",
         coalesce(case when p_metric = 'power' then avg(t.ch2_p)::float end, 0) as "ch2_P",
