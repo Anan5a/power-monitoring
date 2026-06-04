@@ -15,6 +15,11 @@ export interface GenerationResult {
   rangeLabel: string
 }
 
+function fmtHour(ts: string): string {
+  const d = new Date(ts)
+  return `${String(d.getHours()).padStart(2, '0')}:00`
+}
+
 export function useDailyGeneration(
   deviceKey: string | null,
   range: DateRange = 'today',
@@ -37,105 +42,63 @@ export function useDailyGeneration(
     }
     setIsLoading(true)
 
-    // Determine date boundaries
     const now = new Date()
-    let startDate: Date
-    let endDate: Date
+    let hours = 24
     let rangeLabel = ''
 
     if (range === 'today') {
-      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      endDate = now
+      hours = now.getHours() + 1  // midnight through current hour
       rangeLabel = 'Today'
     } else if (range === 'yesterday') {
-      const yesterday = new Date(now)
-      yesterday.setDate(yesterday.getDate() - 1)
-      startDate = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate())
-      endDate = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 23, 59, 59)
+      hours = 24
       rangeLabel = 'Yesterday'
     } else if (range === '7d') {
-      startDate = new Date(now)
-      startDate.setDate(startDate.getDate() - 7)
-      endDate = now
+      hours = 24 * 7
       rangeLabel = 'Last 7 Days'
     } else if (range === '30d') {
-      startDate = new Date(now)
-      startDate.setDate(startDate.getDate() - 30)
-      endDate = now
+      hours = 24 * 30
       rangeLabel = 'Last 30 Days'
     } else if (range === 'custom' && customStart && customEnd) {
-      startDate = new Date(customStart + 'T00:00:00')
-      endDate = new Date(customEnd + 'T23:59:59')
+      const start = new Date(customStart + 'T00:00:00')
+      const end = new Date(customEnd + 'T23:59:59')
+      const diffMs = end.getTime() - start.getTime()
+      hours = Math.max(1, Math.ceil(diffMs / 3600000))
       rangeLabel = `${customStart} → ${customEnd}`
     } else {
       setIsLoading(false)
       return
     }
 
-    const startStr = startDate.toISOString()
-    const endStr = endDate.toISOString()
-
     supabase
-      .from('telemetry_computed')
-      .select('recorded_at, energy_wh1')
-      .eq('device_key', deviceKey)
-      .gte('recorded_at', startStr)
-      .lte('recorded_at', endStr)
-      .order('recorded_at', { ascending: true })
+      .rpc('get_hourly_generation', { p_device_key: deviceKey, p_hours: hours })
       .then(({ data, error }) => {
         if (!mounted.current) return
         setIsLoading(false)
-        if (error || !data || data.length === 0) {
-          if (!mounted.current) return
+        if (error || !Array.isArray(data) || data.length === 0) {
           setResult({ total: 0, hourly: [], rangeLabel })
           return
         }
 
-        // Group by hour buckets
-        const hourlyMap = new Map<string, { first: number; max: number }>()
+        let totalKwh = 0
+        const hourly: HourlyBucket[] = []
 
         for (const row of data) {
-          if (row.energy_wh1 == null) continue
-          const d = new Date(row.recorded_at)
-          const hourKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:00`
-
-          if (!hourlyMap.has(hourKey)) {
-            hourlyMap.set(hourKey, { first: row.energy_wh1, max: row.energy_wh1 })
-          } else {
-            const entry = hourlyMap.get(hourKey)!
-            entry.first = entry.first  // keep first
-            entry.max = Math.max(entry.max, row.energy_wh1)
-          }
+          const kwh = row.kwh ?? 0
+          const timeLabel = fmtHour(row.hour_start)
+          hourly.push({
+            hour: timeLabel,
+            value: Math.round(kwh * 100) / 100,
+            projected: row.is_partial ?? false,
+          })
+          totalKwh += kwh
         }
 
-        const nowLocal = new Date()
-        const isPartialHour = (hour: string) => {
-          const [dateStr, timeStr] = hour.split(' ')
-          const [y, m, d] = dateStr.split('-').map(Number)
-          const [h] = timeStr.split(':').map(Number)
-          const bucketEnd = new Date(y, m - 1, d, h + 1)
-          return bucketEnd > nowLocal
-        }
+        // get_hourly_generation returns newest first; reverse for chart
+        hourly.reverse()
 
-        const result: HourlyBucket[] = []
-        let totalKwh = 0
-
-        for (const [hourKey, entry] of hourlyMap) {
-          const delta = Math.max(0, entry.max - entry.first) / 1000
-          const timeStr = hourKey.split(' ')[1]
-          const hourLabel = timeStr
-
-          const partial = isPartialHour(hourKey)
-          result.push({ hour: hourLabel, value: Math.round(delta * 100) / 100, projected: partial })
-          totalKwh += delta
-        }
-
-        result.sort((a, b) => a.hour.localeCompare(b.hour))
-
-        if (!mounted.current) return
         setResult({
           total: Math.round(totalKwh * 100) / 100,
-          hourly: result,
+          hourly,
           rangeLabel,
         })
       })

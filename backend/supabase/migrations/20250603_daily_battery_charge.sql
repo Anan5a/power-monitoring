@@ -85,7 +85,10 @@ begin
     -- Compute dt from previous row
     if prev_last_ts is not null then
         dt_hours := EXTRACT(EPOCH FROM (NEW.recorded_at - prev_last_ts)) / 3600;
-        dt_hours := least(dt_hours, 1.0); -- cap at 1h to avoid reconnect spikes
+        -- Cap at 1 hour to avoid huge jumps on reconnect
+        if dt_hours > 1.0 then
+            dt_hours := 1.0;
+        end if;
     else
         dt_hours := 0;
     end if;
