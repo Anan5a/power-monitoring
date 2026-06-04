@@ -56,6 +56,7 @@ const SERIES_GRADIENTS: Record<string, { id: string; start: string; end: string 
   ch1_I:      { id: 'grad_ch1i', start: '#be185d', end: '#f9a8d4' },
   ch2_I:      { id: 'grad_ch2i', start: '#c2410c', end: '#fdba74' },
   ch3_I:      { id: 'grad_ch3i', start: '#4d7c0f', end: '#bef264' },
+  inverter_current: { id: 'grad_invi', start: '#0ea5e9', end: '#7dd3fc' },
 }
 
 // Fallback palette for unregistered keys
@@ -71,7 +72,7 @@ const FALLBACK_COLORS = [
 const METRIC_REGEX: Record<Metric, RegExp> = {
   power: /^ch\d_P$|ina226_p|^ina3221_p\d$|inverter_power|pv_power|battery_power|dc_load_power/,
   voltage: /^ch\d_V$|ina226_v|^ina3221_v\d$/,
-  current: /^ch\d_I$|ina226_i|^ina3221_i\d$/,
+  current: /^ch\d_I$|ina226_i|^ina3221_i\d$|inverter_current$/,
 }
 
 // For power tab, prefer computed system columns over raw channel powers
@@ -137,7 +138,8 @@ function vcName(channelNames: ChannelName[] | undefined, idx: number): string {
 function keyToLabel(k: string, channelNames?: ChannelName[]): string {
   if (k === 'ina226_p') return 'INA226'
   if (k === 'ina226_v') return 'INA226 V'
-  if (k === 'ina226_i') return 'Inverter I'
+  if (k === 'ina226_i') return 'INA226 I'
+  if (k === 'inverter_current') return 'Inverter I'
   if (k === 'inverter_power') return 'Inverter Output'
   if (k === 'pv_power') return 'PV Generation'
   if (k === 'battery_power') return 'Battery'
@@ -210,6 +212,7 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
                 ...(row.pv_power != null && { 'pv_power': row.pv_power }),
                 ...(row.battery_power != null && { 'battery_power': row.battery_power }),
                 ...(row.inverter_power != null && { 'inverter_power': row.inverter_power }),
+                ...(row.inverter_current != null && { 'inverter_current': row.inverter_current }),
                 ...(row.dc_load_power != null && { 'dc_load_power': row.dc_load_power }),
                 ...(row.ads1115_0 != null && { 'ads1115_0': row.ads1115_0 }),
                 ...(row.ads1115_1 != null && { 'ads1115_1': row.ads1115_1 }),

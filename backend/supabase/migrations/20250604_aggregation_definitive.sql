@@ -26,7 +26,8 @@ returns table (
     "ch0_V" float, "ch1_V" float, "ch2_V" float, "ch3_V" float,
     ina3221_v0 float, ina3221_v1 float, ina3221_v2 float, ina226_v float,
     "ch0_I" float, "ch1_I" float, "ch2_I" float, "ch3_I" float,
-    ina3221_i0 float, ina3221_i1 float, ina3221_i2 float, ina226_i float
+    ina3221_i0 float, ina3221_i1 float, ina3221_i2 float, ina226_i float,
+    inverter_current float
 ) language plpgsql security definer as $$
 declare
     bucket_interval interval;
@@ -77,7 +78,8 @@ begin
         coalesce(case when p_metric = 'current' then avg(t.ina3221_i0)::float end, 0) as ina3221_i0,
         coalesce(case when p_metric = 'current' then avg(t.ina3221_i1)::float end, 0) as ina3221_i1,
         coalesce(case when p_metric = 'current' then avg(t.ina3221_i2)::float end, 0) as ina3221_i2,
-        coalesce(case when p_metric = 'current' then avg(t.ina226_i)::float end, 0) as ina226_i
+        coalesce(case when p_metric = 'current' then avg(t.ina226_i)::float end, 0) as ina226_i,
+        coalesce(case when p_metric = 'current' then avg(t.inverter_current)::float end, 0) as inverter_current
     from public.telemetry_computed t
     where t.device_key = p_device_key and t.recorded_at >= since
     group by b

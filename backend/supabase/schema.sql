@@ -730,8 +730,9 @@ create table public.telemetry_computed (
     dc_load_power float not null default 0,
     unclassified_power float not null default 0,
 
-    -- Inverter net power
+    -- Inverter net power + current
     inverter_power float not null default 0,
+    inverter_current float not null default 0,
 
     -- System state
     system_status text not null default 'unknown',
@@ -834,13 +835,21 @@ create or replace function public.compute_telemetry_row()
 returns trigger language plpgsql security definer as $$
 declare
     cg_arr jsonb;
+    -- Power accumulators
     pv_power_val float := 0;
     battery_charging float := 0;
     battery_discharging float := 0;
     dc_load_val float := 0;
     unclassified_val float := 0;
+    -- Current accumulators (mirror power logic)
+    pv_current_val float := 0;
+    battery_charging_current float := 0;
+    battery_discharging_current float := 0;
+    dc_load_current_val float := 0;
+    unclassified_current_val float := 0;
     ch_idx int;
     ch_power float;
+    ch_current float;
     grp jsonb;
     grp_icon int;
     grp_mask int;
@@ -849,6 +858,7 @@ declare
     max_soc float;
     total_energy float;
     inv_power float;
+    inv_current float;
     sys_status text;
 begin
     -- Read channel_groups for this device
@@ -859,6 +869,7 @@ begin
     -- Iterate each channel (0-3)
     for ch_idx in 0..3 loop
         ch_power := coalesce((new.payload->>('ch' || ch_idx || '_P'))::float, 0);
+        ch_current := coalesce((new.payload->>('ch' || ch_idx || '_I'))::float, 0);
         ch_in_any_group := false;
 
         -- If we have channel_groups, use them for classification
@@ -876,19 +887,24 @@ begin
                     if grp_icon = 0 then
                         -- Solar: only count positive (generating)
                         pv_power_val := pv_power_val + greatest(ch_power, 0);
+                        pv_current_val := pv_current_val + greatest(ch_current, 0);
                     elsif grp_icon = 1 then
                         -- Battery: positive = charging, negative = discharging
                         if ch_power > 0 then
                             battery_charging := battery_charging + ch_power;
+                            battery_charging_current := battery_charging_current + ch_current;
                         else
                             battery_discharging := battery_discharging + abs(ch_power);
+                            battery_discharging_current := battery_discharging_current + abs(ch_current);
                         end if;
                     elsif grp_icon = 2 then
                         -- Load: negative power = consuming (discharging the system)
                         dc_load_val := dc_load_val + case when ch_power < 0 then abs(ch_power) else 0 end;
+                        dc_load_current_val := dc_load_current_val + case when ch_power < 0 then abs(ch_current) else 0 end;
                     else
                         -- Generic (icon 3) or unknown: treat as load
                         dc_load_val := dc_load_val + case when ch_power < 0 then abs(ch_power) else 0 end;
+                        dc_load_current_val := dc_load_current_val + case when ch_power < 0 then abs(ch_current) else 0 end;
                     end if;
 
                     -- Channel found — don't check other groups (first match wins)
@@ -918,8 +934,10 @@ begin
                     -- Fallback battery profile: positive = charging, negative = discharging
                     if ch_power > 0 then
                         battery_charging := battery_charging + ch_power;
+                        battery_charging_current := battery_charging_current + ch_current;
                     else
                         battery_discharging := battery_discharging + abs(ch_power);
+                        battery_discharging_current := battery_discharging_current + abs(ch_current);
                     end if;
                     ch_in_any_group := true;
                 end if;
@@ -929,11 +947,13 @@ begin
         -- Still not in any group — treat as unclassified
         if not ch_in_any_group then
             unclassified_val := unclassified_val + greatest(ch_power, 0);
+            unclassified_current_val := unclassified_current_val + greatest(ch_current, 0);
         end if;
     end loop;
 
-    -- Compute inverter power
+    -- Compute inverter power and current (Kirchhoff: PV + Bat_discharge - Bat_charge - DC_Load)
     inv_power := pv_power_val + battery_discharging - battery_charging - dc_load_val;
+    inv_current := pv_current_val + battery_discharging_current - battery_charging_current - dc_load_current_val;
 
     -- System status
     if battery_charging > 5 then
@@ -967,7 +987,7 @@ begin
         device_key, recorded_at,
         pv_power, battery_power,
         battery_charging_power, battery_discharging_power,
-        dc_load_power, unclassified_power, inverter_power,
+        dc_load_power, unclassified_power, inverter_power, inverter_current,
         system_status,
         min_soc_pct, max_soc_pct,
         total_energy_wh,
@@ -992,7 +1012,7 @@ begin
         battery_charging - battery_discharging,
         battery_charging,
         battery_discharging,
-        dc_load_val, unclassified_val, inv_power,
+        dc_load_val, unclassified_val, inv_power, inv_current,
         sys_status,
         case when min_soc isnull then null else min_soc end,
         case when max_soc isnull then null else max_soc end,
@@ -1054,6 +1074,7 @@ begin
         dc_load_power = EXCLUDED.dc_load_power,
         unclassified_power = EXCLUDED.unclassified_power,
         inverter_power = EXCLUDED.inverter_power,
+        inverter_current = EXCLUDED.inverter_current,
         system_status = EXCLUDED.system_status,
         min_soc_pct = EXCLUDED.min_soc_pct,
         max_soc_pct = EXCLUDED.max_soc_pct,
