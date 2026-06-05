@@ -20,8 +20,8 @@ create table public.devices (
     device_type text not null default 'generic',
     device_key text unique not null,
     device_api_key uuid unique not null default gen_random_uuid(),
-    ble_pin text,
     is_online boolean default false,
+    last_seen_at timestamptz,
     ble_pin text,
     updated_at timestamptz default now()
 );
@@ -834,6 +834,67 @@ create index idx_telemetry_computed_device_time
 alter publication supabase_realtime add table public.telemetry_computed;
 
 ---------------------------------------------------------------
+-- daily_battery_charge: daily energy flow tracking for battery
+-- Uses voltage-based full-charge detection to anchor SOC
+---------------------------------------------------------------
+
+create table public.daily_battery_charge (
+    id bigint generated always as identity primary key,
+    device_id uuid not null references devices(id) on delete cascade,
+    date date not null,
+    capacity_wh float not null default 0,
+    energy_in_wh float not null default 0,
+    energy_out_wh float not null default 0,
+    last_voltage float null,
+    full_charge_voltage float null,
+    is_full_charge_day boolean not null default false,
+    charge_wh float not null default 0,
+    last_recorded_at timestamptz null,
+    computed_from text not null default 'battery_power',
+    created_at timestamptz default now(),
+    unique (device_id, date)
+);
+
+create index idx_daily_battery_charge_device_date on daily_battery_charge (device_id, date desc);
+
+alter table public.daily_battery_charge enable row level security;
+
+create policy "own_daily_battery_charge" on public.daily_battery_charge
+    for all to authenticated using (
+        exists (
+            select 1 from public.devices d
+            join public.profiles p on p.id = d.user_id
+            where d.id = daily_battery_charge.device_id
+              and p.id = auth.uid()
+        )
+    );
+
+grant select, insert, update on public.daily_battery_charge to authenticated;
+
+-- battery_calibration: per-device battery capacity and voltage thresholds
+
+create table public.battery_calibration (
+    device_id uuid primary key references devices(id) on delete cascade,
+    full_charge_voltage float not null default 29.2,
+    nominal_capacity_wh float not null default 1000,
+    last_calibrated_at timestamptz default now()
+);
+
+alter table public.battery_calibration enable row level security;
+
+create policy "own_battery_calibration" on public.battery_calibration
+    for all to authenticated using (
+        exists (
+            select 1 from public.devices d
+            join public.profiles p on p.id = d.user_id
+            where d.id = battery_calibration.device_id
+              and p.id = auth.uid()
+        )
+    );
+
+grant select, insert, update on public.battery_calibration to authenticated;
+
+---------------------------------------------------------------
 -- Trigger function: compute telemetry values from raw payload
 -- Append-only: one computed row per telemetry_live insert
 -- Defensive: all lookups use coalesce to avoid NULL propagation
@@ -1148,10 +1209,254 @@ create trigger on_telemetry_computed_update
     for each row execute function public.compute_telemetry_row();
 
 ---------------------------------------------------------------
--- RPC: get_aggregated_telemetry
--- Time-bucket aggregation for chart long ranges
--- Reads typed columns from telemetry_computed (no raw_payload)
+-- Trigger: update daily_battery_charge on each telemetry_computed insert
+-- Checks battery voltage across ALL channels (not just ch1) against
+-- full_charge_voltage to anchor SoC = 100% when full charge detected.
 ---------------------------------------------------------------
+create or replace function public.trg_on_telemetry_computed_insert()
+returns trigger language plpgsql security definer as $$
+declare
+    dt_hours float;
+    prev_charge float;
+    prev_last_ts timestamptz;
+    capacity float;
+    fcv float;
+    dev_id uuid;
+begin
+    dev_id := (select id from devices where device_key = NEW.device_key);
+
+    -- Get calibration
+    select nominal_capacity_wh, full_charge_voltage
+    into capacity, fcv
+    from battery_calibration
+    where device_id = dev_id;
+
+    if capacity is null or capacity = 0 then
+        return new;
+    end if;
+
+    -- Get previous last_recorded_at and charge_wh for TODAY (if exists)
+    select last_recorded_at, charge_wh
+    into prev_last_ts, prev_charge
+    from daily_battery_charge
+    where device_id = dev_id and date = current_date;
+
+    -- If no row for today yet, seed from yesterday's charge_wh
+    if prev_last_ts is null then
+        select charge_wh into prev_charge
+        from daily_battery_charge
+        where device_id = dev_id and date < current_date
+        order by date desc limit 1;
+
+        prev_charge := coalesce(prev_charge, capacity * 0.5);
+        prev_last_ts := null;
+    end if;
+
+    -- Compute dt from previous row
+    if prev_last_ts is not null then
+        dt_hours := EXTRACT(EPOCH FROM (NEW.recorded_at - prev_last_ts)) / 3600;
+        if dt_hours > 1.0 then
+            dt_hours := 1.0;
+        end if;
+    else
+        dt_hours := 0;
+    end if;
+
+    -- Full-charge detection uses ch1_v (battery channel, fixed hardware mapping)
+    insert into daily_battery_charge
+        (device_id, date, capacity_wh, energy_in_wh, energy_out_wh,
+         last_voltage, full_charge_voltage, is_full_charge_day,
+         charge_wh, last_recorded_at, computed_from)
+    values (dev_id, current_date, capacity,
+            case when NEW.battery_power > 0 then NEW.battery_power * dt_hours else 0 end,
+            case when NEW.battery_power < 0 then abs(NEW.battery_power) * dt_hours else 0 end,
+            NEW.ch1_v, fcv,
+            case when NEW.ch1_v is not null and fcv is not null and NEW.ch1_v >= fcv then true else false end,
+            case
+                when NEW.ch1_v is not null and fcv is not null and NEW.ch1_v >= fcv then capacity
+                else greatest(0, least(capacity, prev_charge + case when NEW.battery_power > 0 then NEW.battery_power * dt_hours else -abs(NEW.battery_power) * dt_hours end))
+            end,
+            NEW.recorded_at,
+            'battery_power')
+    on conflict (device_id, date) do update set
+        last_recorded_at = NEW.recorded_at,
+        last_voltage = NEW.ch1_v,
+        energy_in_wh = daily_battery_charge.energy_in_wh + case when NEW.battery_power > 0 then NEW.battery_power * dt_hours else 0 end,
+        energy_out_wh = daily_battery_charge.energy_out_wh + case when NEW.battery_power < 0 then abs(NEW.battery_power) * dt_hours else 0 end,
+        is_full_charge_day = daily_battery_charge.is_full_charge_day or (NEW.ch1_v is not null and fcv is not null and NEW.ch1_v >= fcv),
+        charge_wh = case
+            when NEW.ch1_v is not null and fcv is not null and NEW.ch1_v >= fcv then capacity
+            else greatest(0, least(capacity, daily_battery_charge.charge_wh + case when NEW.battery_power > 0 then NEW.battery_power * dt_hours else -abs(NEW.battery_power) * dt_hours end))
+        end;
+
+    return new;
+end;
+$$;
+
+create trigger trg_telemetry_computed_charge
+after insert on telemetry_computed
+for each row execute function public.trg_on_telemetry_computed_insert();
+
+-- compute_daily_battery_charge: full recompute for a given day (backfill/recovery)
+create or replace function public.compute_daily_battery_charge(
+    p_device_id uuid,
+    p_date date default current_date
+) returns daily_battery_charge language plpgsql security definer as $$
+declare
+    start_dt timestamptz := p_date::timestamptz;
+    end_dt timestamptz := (p_date + 1)::timestamptz;
+    cal_row record;
+    energy_in float := 0;
+    energy_out float := 0;
+    max_v float;
+    charge_wh float := 0;
+    result_row daily_battery_charge%rowtype;
+    prev_charge float := 0;
+begin
+    select full_charge_voltage, nominal_capacity_wh into cal_row
+    from battery_calibration where device_id = p_device_id;
+
+    if cal_row.nominal_capacity_wh is null or cal_row.nominal_capacity_wh = 0 then
+        raise exception 'Battery calibration not found for device id: %', p_device_id;
+    end if;
+
+    select charge_wh into prev_charge
+    from daily_battery_charge
+    where device_id = p_device_id and date < p_date
+    order by date desc limit 1;
+
+    if prev_charge is null then
+        prev_charge := cal_row.nominal_capacity_wh * 0.5;
+    end if;
+
+    -- Full-charge detection uses ch1_v (battery channel, fixed hardware mapping)
+    select max(tc.ch1_v) into max_v
+    from telemetry_computed tc
+    join devices d on d.device_key = tc.device_key
+    where d.id = p_device_id
+      and tc.recorded_at >= start_dt and tc.recorded_at < end_dt;
+
+    for row_data in (
+        select recorded_at, battery_power,
+               lead(recorded_at) over (order by recorded_at) as next_ts
+        from telemetry_computed tc
+        join devices d on d.device_key = tc.device_key
+        where d.id = p_device_id
+          and tc.recorded_at >= start_dt and tc.recorded_at < end_dt
+          and tc.battery_power is not null
+        order by tc.recorded_at asc
+    ) loop
+        declare
+            dt_hours float;
+        begin
+            if row_data.next_ts is not null then
+                dt_hours := EXTRACT(EPOCH FROM (row_data.next_ts - row_data.recorded_at)) / 3600;
+                if dt_hours > 1.0 then dt_hours := 0; end if;
+            else
+                dt_hours := 0;
+            end if;
+            if row_data.battery_power > 0 then
+                energy_in := energy_in + row_data.battery_power * dt_hours;
+            else
+                energy_out := energy_out + abs(row_data.battery_power) * dt_hours;
+            end if;
+        end;
+    end loop;
+
+    charge_wh := greatest(0, prev_charge + energy_in - energy_out);
+    charge_wh := least(cal_row.nominal_capacity_wh, charge_wh);
+
+    if max_v >= cal_row.full_charge_voltage then
+        charge_wh := cal_row.nominal_capacity_wh;
+    end if;
+
+    insert into daily_battery_charge
+        (device_id, date, capacity_wh, energy_in_wh, energy_out_wh, last_voltage,
+         full_charge_voltage, is_full_charge_day, charge_wh, computed_from)
+    values (p_device_id, p_date, cal_row.nominal_capacity_wh, energy_in, energy_out,
+            null, cal_row.full_charge_voltage,
+            max_v >= cal_row.full_charge_voltage, charge_wh, 'battery_power')
+    on conflict (device_id, date) do update set
+        capacity_wh = cal_row.nominal_capacity_wh,
+        energy_in_wh = energy_in,
+        energy_out_wh = energy_out,
+        last_voltage = null,
+        full_charge_voltage = cal_row.full_charge_voltage,
+        is_full_charge_day = max_v >= cal_row.full_charge_voltage,
+        charge_wh = charge_wh,
+        computed_from = 'battery_power',
+        created_at = now();
+
+    select * into result_row
+    from daily_battery_charge
+    where device_id = p_device_id and date = p_date;
+
+    return result_row;
+end;
+$$;
+
+-- get_battery_charge: returns current battery state
+create or replace function public.get_battery_charge(
+    p_device_id uuid,
+    p_hours int default 24
+) returns table (
+    charge_wh float,
+    capacity_wh float,
+    energy_in_24h float,
+    energy_out_24h float,
+    soc_pct float,
+    is_full_charge_today boolean
+) language plpgsql security definer as $$
+declare
+    cal_row record;
+    last_row daily_battery_charge%rowtype;
+    device_key_val text;
+begin
+    select device_key into device_key_val
+    from devices where id = p_device_id;
+
+    select full_charge_voltage, nominal_capacity_wh into cal_row
+    from battery_calibration where device_id = p_device_id;
+
+    select * into last_row
+    from daily_battery_charge
+    where device_id = p_device_id and date = current_date;
+
+    with bounds as (
+        select now() - (p_hours || ' hours')::interval as ts_start
+    )
+    select
+        coalesce(sum(case when battery_power > 0 then abs(battery_power) * dt_hrs end), 0),
+        coalesce(sum(case when battery_power < 0 then abs(battery_power) * dt_hrs end), 0)
+    into energy_in_24h, energy_out_24h
+    from (
+        select battery_power,
+               lead(recorded_at) over (order by recorded_at) as next_ts,
+               EXTRACT(EPOCH FROM (lead(recorded_at) over (order by recorded_at) - recorded_at)) / 3600 as dt_hrs
+        from telemetry_computed
+        where device_key = device_key_val
+          and recorded_at >= (now() - (p_hours || ' hours')::interval)
+          and battery_power is not null
+    ) sub
+    where dt_hrs > 0 and dt_hrs < 2;
+
+    charge_wh := coalesce(last_row.charge_wh, cal_row.nominal_capacity_wh * 0.5);
+    capacity_wh := coalesce(cal_row.nominal_capacity_wh, 1000);
+    soc_pct := (charge_wh / nullif(capacity_wh, 0)) * 100;
+    is_full_charge_today := coalesce(last_row.is_full_charge_day, false);
+
+    return next;
+end;
+$$;
+
+grant execute on function public.trg_on_telemetry_computed_insert() to authenticated;
+grant execute on function public.compute_daily_battery_charge(uuid, date) to authenticated;
+grant execute on function public.get_battery_charge(uuid, int) to authenticated;
+
+---------------------------------------------------------------
+-- RPC: get_aggregated_telemetry (wide format, one row per bucket)
+drop function if exists public.get_aggregated_telemetry(text, int, text);
+
 create or replace function public.get_aggregated_telemetry(
     p_device_key text,
     p_hours int,
@@ -1159,10 +1464,15 @@ create or replace function public.get_aggregated_telemetry(
 )
 returns table (
     bucket timestamptz,
-    key text,
-    avg_val float,
-    min_val float,
-    max_val float
+    "ch0_P" float, "ch1_P" float, "ch2_P" float, "ch3_P" float,
+    ina226_p float,
+    pv_power float, battery_power float, inverter_power float, dc_load_power float,
+    soc_pct0 float,
+    "ch0_V" float, "ch1_V" float, "ch2_V" float, "ch3_V" float,
+    ina3221_v0 float, ina3221_v1 float, ina3221_v2 float, ina226_v float,
+    "ch0_I" float, "ch1_I" float, "ch2_I" float, "ch3_I" float,
+    ina3221_i0 float, ina3221_i1 float, ina3221_i2 float, ina226_i float,
+    inverter_current float
 ) language plpgsql security definer as $$
 declare
     bucket_interval interval;
@@ -1179,67 +1489,289 @@ begin
     since := now() - (p_hours || ' hours')::interval;
 
     return query
-    with buckets as (
-        select
-            to_timestamp(
-                floor(extract(epoch from recorded_at)::bigint
-                    / extract(epoch from bucket_interval)::bigint)
-                * extract(epoch from bucket_interval)::bigint
-            )::timestamptz as b,
-            ch0_p, ch0_v, ch0_i,
-            ch1_p, ch1_v, ch1_i,
-            ch2_p, ch2_v, ch2_i,
-            ch3_p, ch3_v, ch3_i,
-            ina3221_v0, ina3221_v1, ina3221_v2,
-            ina3221_i0, ina3221_i1, ina3221_i2,
-            ina226_v, ina226_i, ina226_p
-        from public.telemetry_computed
-        where device_key = p_device_key and recorded_at >= since
-    )
-    select * from (
-        select b as bucket, 'ch0_P'::text as key, avg(ch0_p)::float as avg_val, min(ch0_p)::float as min_val, max(ch0_p)::float as max_val
-        from buckets where ch0_p is not null and p_metric = 'power' group by b
-        union all select b, 'ch1_P', avg(ch1_p)::float, min(ch1_p)::float, max(ch1_p)::float
-        from buckets where ch1_p is not null and p_metric = 'power' group by b
-        union all select b, 'ch2_P', avg(ch2_p)::float, min(ch2_p)::float, max(ch2_p)::float
-        from buckets where ch2_p is not null and p_metric = 'power' group by b
-        union all select b, 'ch3_P', avg(ch3_p)::float, min(ch3_p)::float, max(ch3_p)::float
-        from buckets where ch3_p is not null and p_metric = 'power' group by b
-        union all select b, 'ina226_p', avg(ina226_p)::float, min(ina226_p)::float, max(ina226_p)::float
-        from buckets where ina226_p is not null and p_metric = 'power' group by b
-        union all select b, 'ch0_V', avg(ch0_v)::float, min(ch0_v)::float, max(ch0_v)::float
-        from buckets where ch0_v is not null and p_metric = 'voltage' group by b
-        union all select b, 'ch1_V', avg(ch1_v)::float, min(ch1_v)::float, max(ch1_v)::float
-        from buckets where ch1_v is not null and p_metric = 'voltage' group by b
-        union all select b, 'ch2_V', avg(ch2_v)::float, min(ch2_v)::float, max(ch2_v)::float
-        from buckets where ch2_v is not null and p_metric = 'voltage' group by b
-        union all select b, 'ch3_V', avg(ch3_v)::float, min(ch3_v)::float, max(ch3_v)::float
-        from buckets where ch3_v is not null and p_metric = 'voltage' group by b
-        union all select b, 'ina3221_v0', avg(ina3221_v0)::float, min(ina3221_v0)::float, max(ina3221_v0)::float
-        from buckets where ina3221_v0 is not null and p_metric = 'voltage' group by b
-        union all select b, 'ina3221_v1', avg(ina3221_v1)::float, min(ina3221_v1)::float, max(ina3221_v1)::float
-        from buckets where ina3221_v1 is not null and p_metric = 'voltage' group by b
-        union all select b, 'ina3221_v2', avg(ina3221_v2)::float, min(ina3221_v2)::float, max(ina3221_v2)::float
-        from buckets where ina3221_v2 is not null and p_metric = 'voltage' group by b
-        union all select b, 'ina226_v', avg(ina226_v)::float, min(ina226_v)::float, max(ina226_v)::float
-        from buckets where ina226_v is not null and p_metric = 'voltage' group by b
-        union all select b, 'ch0_I', avg(ch0_i)::float, min(ch0_i)::float, max(ch0_i)::float
-        from buckets where ch0_i is not null and p_metric = 'current' group by b
-        union all select b, 'ch1_I', avg(ch1_i)::float, min(ch1_i)::float, max(ch1_i)::float
-        from buckets where ch1_i is not null and p_metric = 'current' group by b
-        union all select b, 'ch2_I', avg(ch2_i)::float, min(ch2_i)::float, max(ch2_i)::float
-        from buckets where ch2_i is not null and p_metric = 'current' group by b
-        union all select b, 'ch3_I', avg(ch3_i)::float, min(ch3_i)::float, max(ch3_i)::float
-        from buckets where ch3_i is not null and p_metric = 'current' group by b
-        union all select b, 'ina3221_i0', avg(ina3221_i0)::float, min(ina3221_i0)::float, max(ina3221_i0)::float
-        from buckets where ina3221_i0 is not null and p_metric = 'current' group by b
-        union all select b, 'ina3221_i1', avg(ina3221_i1)::float, min(ina3221_i1)::float, max(ina3221_i1)::float
-        from buckets where ina3221_i1 is not null and p_metric = 'current' group by b
-        union all select b, 'ina3221_i2', avg(ina3221_i2)::float, min(ina3221_i2)::float, max(ina3221_i2)::float
-        from buckets where ina3221_i2 is not null and p_metric = 'current' group by b
-        union all select b, 'ina226_i', avg(ina226_i)::float, min(ina226_i)::float, max(ina226_i)::float
-        from buckets where ina226_i is not null and p_metric = 'current' group by b
-    ) sub
-    order by bucket, key;
+    select
+        to_timestamp(
+            floor(extract(epoch from t.recorded_at)::bigint
+                / extract(epoch from bucket_interval)::bigint)
+            * extract(epoch from bucket_interval)::bigint
+        )::timestamptz as b,
+        -- Power
+        coalesce(case when p_metric = 'power' then avg(t.ch0_p)::float end, 0) as "ch0_P",
+        coalesce(case when p_metric = 'power' then avg(t.ch1_p)::float end, 0) as "ch1_P",
+        coalesce(case when p_metric = 'power' then avg(t.ch2_p)::float end, 0) as "ch2_P",
+        coalesce(case when p_metric = 'power' then avg(t.ch3_p)::float end, 0) as "ch3_P",
+        coalesce(case when p_metric = 'power' then avg(t.ina226_p)::float end, 0) as ina226_p,
+        coalesce(case when p_metric = 'power' then avg(t.pv_power)::float end, 0) as pv_power,
+        coalesce(case when p_metric = 'power' then avg(t.battery_power)::float end, 0) as battery_power,
+        coalesce(case when p_metric = 'power' then avg(t.inverter_power)::float end, 0) as inverter_power,
+        coalesce(case when p_metric = 'power' then avg(t.dc_load_power)::float end, 0) as dc_load_power,
+        coalesce(case when p_metric = 'power' then avg(t.soc_pct0)::float end, 0) as soc_pct0,
+        -- Voltage
+        coalesce(case when p_metric = 'voltage' then avg(t.ch0_v)::float end, 0) as "ch0_V",
+        coalesce(case when p_metric = 'voltage' then avg(t.ch1_v)::float end, 0) as "ch1_V",
+        coalesce(case when p_metric = 'voltage' then avg(t.ch2_v)::float end, 0) as "ch2_V",
+        coalesce(case when p_metric = 'voltage' then avg(t.ch3_v)::float end, 0) as "ch3_V",
+        coalesce(case when p_metric = 'voltage' then avg(t.ina3221_v0)::float end, 0) as ina3221_v0,
+        coalesce(case when p_metric = 'voltage' then avg(t.ina3221_v1)::float end, 0) as ina3221_v1,
+        coalesce(case when p_metric = 'voltage' then avg(t.ina3221_v2)::float end, 0) as ina3221_v2,
+        coalesce(case when p_metric = 'voltage' then avg(t.ina226_v)::float end, 0) as ina226_v,
+        -- Current
+        coalesce(case when p_metric = 'current' then avg(t.ch0_i)::float end, 0) as "ch0_I",
+        coalesce(case when p_metric = 'current' then avg(t.ch1_i)::float end, 0) as "ch1_I",
+        coalesce(case when p_metric = 'current' then avg(t.ch2_i)::float end, 0) as "ch2_I",
+        coalesce(case when p_metric = 'current' then avg(t.ch3_i)::float end, 0) as "ch3_I",
+        coalesce(case when p_metric = 'current' then avg(t.ina3221_i0)::float end, 0) as ina3221_i0,
+        coalesce(case when p_metric = 'current' then avg(t.ina3221_i1)::float end, 0) as ina3221_i1,
+        coalesce(case when p_metric = 'current' then avg(t.ina3221_i2)::float end, 0) as ina3221_i2,
+        coalesce(case when p_metric = 'current' then avg(t.ina226_i)::float end, 0) as ina226_i,
+        coalesce(case when p_metric = 'current' then avg(t.inverter_current)::float end, 0) as inverter_current
+    from public.telemetry_computed t
+    where t.device_key = p_device_key and t.recorded_at >= since
+    group by b
+    order by b;
 end;
 $$;
+
+grant execute on function public.get_aggregated_telemetry(text, int, text) to authenticated;
+
+---------------------------------------------------------------
+-- RPC: get_hourly_pv_generation
+-- Returns hourly kWh for a device on a given date
+---------------------------------------------------------------
+create or replace function public.get_hourly_pv_generation(
+    p_device_key text,
+    p_date date default current_date
+)
+returns table (
+    hour timestamptz,
+    kwh numeric
+) language sql security definer as $$
+    select
+        date_trunc('hour', recorded_at) as hour,
+        (sum(pv_power) / count(*) / 3600.0 / 1000)::numeric(10,4) as kwh
+    from telemetry_computed
+    where device_key = p_device_key
+      and recorded_at >= p_date
+      and recorded_at < p_date + interval '1 day'
+    group by date_trunc('hour', recorded_at)
+    order by hour
+$$;
+
+grant execute on function public.get_hourly_pv_generation(text, date) to authenticated;
+
+---------------------------------------------------------------
+-- RPC: get_hourly_generation / get_daily_generation
+-- Uses energy_wh1 delta for accuracy
+---------------------------------------------------------------
+create or replace function public.get_hourly_generation(
+    p_device_key text,
+    p_start_time timestamptz,
+    p_end_time timestamptz
+)
+returns table (
+    hour_start timestamptz,
+    kwh float,
+    is_partial boolean
+) language sql security definer as $$
+    with hourly as (
+        select
+            date_trunc('hour', recorded_at) as hr,
+            (array_agg(energy_wh1 order by recorded_at asc))[1] as first_val,
+            (array_agg(energy_wh1 order by recorded_at desc))[1] as last_val
+        from public.telemetry_computed
+        where device_key = p_device_key
+          and recorded_at >= p_start_time
+          and recorded_at <= p_end_time
+          and energy_wh1 is not null
+        group by date_trunc('hour', recorded_at)
+    )
+    select
+        hr as hour_start,
+        coalesce(greatest(0, last_val - first_val), 0) / 1000.0 as kwh,
+        (hr = date_trunc('hour', p_end_time)) as is_partial
+    from hourly
+    order by hr desc;
+$$;
+
+grant execute on function public.get_hourly_generation(text, timestamptz, timestamptz) to authenticated;
+
+create or replace function public.get_daily_generation(
+    p_device_key text,
+    p_start_time timestamptz,
+    p_end_time timestamptz
+)
+returns table (
+    day date,
+    kwh float,
+    is_partial boolean
+) language sql security definer as $$
+    with daily as (
+        select
+            date_trunc('day', recorded_at)::date as d,
+            (array_agg(energy_wh1 order by recorded_at asc))[1] as first_val,
+            (array_agg(energy_wh1 order by recorded_at desc))[1] as last_val
+        from public.telemetry_computed
+        where device_key = p_device_key
+          and recorded_at >= p_start_time
+          and recorded_at <= p_end_time
+          and energy_wh1 is not null
+        group by date_trunc('day', recorded_at)::date
+    )
+    select
+        d as day,
+        coalesce(greatest(0, last_val - first_val), 0) / 1000.0 as kwh,
+        (d = current_date) as is_partial
+    from daily
+    order by d desc;
+$$;
+
+grant execute on function public.get_daily_generation(text, timestamptz, timestamptz) to authenticated;
+
+---------------------------------------------------------------
+-- rollup_telemetry_computed: 1-sec rows -> 2-sec buckets for data >48h old
+-- Runs every minute via cron
+---------------------------------------------------------------
+create or replace function public.rollup_telemetry_computed()
+returns void language plpgsql security definer as $$
+declare
+    bucket_size_sec int := 2;
+    raw_window interval := interval '48 hours';
+    cutoff timestamptz := now() - raw_window - (bucket_size_sec || ' seconds')::interval;
+    rolled int;
+    deleted int;
+begin
+    with rolled_up as (
+        select
+            device_key,
+            (date_trunc('second', recorded_at)::timestamptz
+                + (floor(extract(epoch from recorded_at)::bigint / bucket_size_sec) * bucket_size_sec)::bigint * interval '1 second') as bucket_ts,
+
+            avg(pv_power) as pv_power,
+            avg(battery_power) as battery_power,
+            avg(battery_charging_power) as battery_charging_power,
+            max(battery_charging_power) as battery_charging_power_max,
+            avg(battery_discharging_power) as battery_discharging_power,
+            max(battery_discharging_power) as battery_discharging_power_max,
+            avg(dc_load_power) as dc_load_power,
+            avg(unclassified_power) as unclassified_power,
+            avg(inverter_power) as inverter_power,
+            (array_agg(total_energy_wh order by recorded_at desc))[1] as total_energy_wh,
+            min(min_soc_pct) as min_soc_pct,
+            max(max_soc_pct) as max_soc_pct,
+
+            avg(ch0_v) as ch0_v, avg(ch0_i) as ch0_i, avg(ch0_p) as ch0_p,
+            avg(ch1_v) as ch1_v, avg(ch1_i) as ch1_i, avg(ch1_p) as ch1_p,
+            avg(ch2_v) as ch2_v, avg(ch2_i) as ch2_i, avg(ch2_p) as ch2_p,
+            avg(ch3_v) as ch3_v, avg(ch3_i) as ch3_i, avg(ch3_p) as ch3_p,
+
+            (array_agg(energy_wh0 order by recorded_at desc))[1] as energy_wh0,
+            (array_agg(energy_wh1 order by recorded_at desc))[1] as energy_wh1,
+            (array_agg(energy_wh2 order by recorded_at desc))[1] as energy_wh2,
+            (array_agg(energy_wh3 order by recorded_at desc))[1] as energy_wh3,
+            (array_agg(soc_pct0 order by recorded_at desc))[1] as soc_pct0,
+            (array_agg(soc_pct1 order by recorded_at desc))[1] as soc_pct1,
+            (array_agg(soc_pct2 order by recorded_at desc))[1] as soc_pct2,
+            (array_agg(soc_pct3 order by recorded_at desc))[1] as soc_pct3,
+            (array_agg(coulomb_mah0 order by recorded_at desc))[1] as coulomb_mah0,
+            (array_agg(coulomb_mah1 order by recorded_at desc))[1] as coulomb_mah1,
+            (array_agg(coulomb_mah2 order by recorded_at desc))[1] as coulomb_mah2,
+            (array_agg(coulomb_mah3 order by recorded_at desc))[1] as coulomb_mah3,
+
+            avg(ina3221_v0) as ina3221_v0, avg(ina3221_v1) as ina3221_v1, avg(ina3221_v2) as ina3221_v2,
+            avg(ina3221_i0) as ina3221_i0, avg(ina3221_i1) as ina3221_i1, avg(ina3221_i2) as ina3221_i2,
+            avg(ina226_v) as ina226_v, avg(ina226_i) as ina226_i, avg(ina226_p) as ina226_p,
+            avg(ads1115_0) as ads1115_0, avg(ads1115_1) as ads1115_1, avg(ads1115_2) as ads1115_2, avg(ads1115_3) as ads1115_3,
+
+            bool_or(ina3221_v0_spike) as ina3221_v0_spike,
+            bool_or(ina3221_v1_spike) as ina3221_v1_spike,
+            bool_or(ina3221_v2_spike) as ina3221_v2_spike,
+            bool_or(ina3221_i0_spike) as ina3221_i0_spike,
+            bool_or(ina3221_i1_spike) as ina3221_i1_spike,
+            bool_or(ina3221_i2_spike) as ina3221_i2_spike,
+
+            count(*) as sample_count
+        from public.telemetry_computed
+        where recorded_at < cutoff
+        group by
+            device_key,
+            date_trunc('second', recorded_at)::timestamptz
+                + (floor(extract(epoch from recorded_at)::bigint / bucket_size_sec) * bucket_size_sec)::bigint * interval '1 second'
+    )
+    , upserted as (
+        insert into public.telemetry_computed (
+        device_key, recorded_at,
+        pv_power, battery_power,
+        battery_charging_power, battery_discharging_power,
+        dc_load_power, unclassified_power, inverter_power,
+        system_status, min_soc_pct, max_soc_pct, total_energy_wh,
+        ch0_v, ch0_i, ch0_p,
+        ch1_v, ch1_i, ch1_p,
+        ch2_v, ch2_i, ch2_p,
+        ch3_v, ch3_i, ch3_p,
+        energy_wh0, energy_wh1, energy_wh2, energy_wh3,
+        soc_pct0, soc_pct1, soc_pct2, soc_pct3,
+        coulomb_mah0, coulomb_mah1, coulomb_mah2, coulomb_mah3,
+        ina3221_v0, ina3221_v1, ina3221_v2,
+        ina3221_i0, ina3221_i1, ina3221_i2,
+        ina226_v, ina226_i, ina226_p,
+        ads1115_0, ads1115_1, ads1115_2, ads1115_3,
+        ina3221_v0_spike, ina3221_v1_spike, ina3221_v2_spike,
+        ina3221_i0_spike, ina3221_i1_spike, ina3221_i2_spike
+    )
+    select
+        device_key, bucket_ts,
+        pv_power, battery_power,
+        battery_charging_power, battery_discharging_power,
+        dc_load_power, unclassified_power, inverter_power,
+        case
+            when battery_charging_power > 5 then 'charging'
+            when battery_discharging_power > 5 then 'discharging'
+            when abs(inverter_power) <= 5 then 'balanced'
+            else 'unknown'
+        end,
+        min_soc_pct, max_soc_pct, total_energy_wh,
+        ch0_v, ch0_i, ch0_p,
+        ch1_v, ch1_i, ch1_p,
+        ch2_v, ch2_i, ch2_p,
+        ch3_v, ch3_i, ch3_p,
+        energy_wh0, energy_wh1, energy_wh2, energy_wh3,
+        soc_pct0, soc_pct1, soc_pct2, soc_pct3,
+        coulomb_mah0, coulomb_mah1, coulomb_mah2, coulomb_mah3,
+        ina3221_v0, ina3221_v1, ina3221_v2,
+        ina3221_i0, ina3221_i1, ina3221_i2,
+        ina226_v, ina226_i, ina226_p,
+        ads1115_0, ads1115_1, ads1115_2, ads1115_3,
+        ina3221_v0_spike, ina3221_v1_spike, ina3221_v2_spike,
+        ina3221_i0_spike, ina3221_i1_spike, ina3221_i2_spike
+    from rolled_up
+    on conflict (device_key, recorded_at) do nothing
+    returning 1
+    )
+    select count(*) into rolled from upserted;
+
+    -- Delete old 1-sec rows in batches
+    delete from public.telemetry_computed
+    where recorded_at < cutoff
+      and id in (
+        select id from public.telemetry_computed
+        where recorded_at < cutoff
+        limit 10000
+    );
+    get diagnostics deleted = row_count;
+
+    raise log 'rollup: inserted=% rolled rows, deleted=% original rows', rolled, deleted;
+end;
+$$;
+
+-- Schedule rollup every minute
+do $$
+begin
+    perform cron.unschedule('telemetry-rollup');
+exception when others then null;
+end
+$$;
+select cron.schedule(
+    'telemetry-rollup',
+    '* * * * *',
+    'select public.rollup_telemetry_computed()'
+);
