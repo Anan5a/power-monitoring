@@ -305,6 +305,8 @@ create or replace function public.insert_telemetry(
     p_metadata jsonb default '{}',
     p_recorded_at bigint default null
 ) returns void language plpgsql security definer as $$
+declare
+    ts timestamptz;
 begin
     -- Verify device_key AND device_api_key both match the same device
     if not exists (
@@ -315,16 +317,21 @@ begin
         raise exception 'Invalid device_key or device_api_key';
     end if;
 
+    -- Validate timestamp: reject >1hr in future or before 2024
+    if p_recorded_at is not null then
+        ts := to_timestamp(p_recorded_at)::timestamptz;
+        if ts > now() + interval '1 hour' then
+            raise exception 'Timestamp too far in future: %', ts;
+        end if;
+        if ts < '2024-01-01'::timestamptz then
+            raise exception 'Timestamp too old: %', ts;
+        end if;
+    else
+        ts := now();
+    end if;
+
     insert into public.telemetry_live (device_id, payload, metadata, recorded_at)
-    values (
-        p_device_key,
-        p_payload,
-        p_metadata,
-        case
-            when p_recorded_at is not null then to_timestamp(p_recorded_at)::timestamptz
-            else now()
-        end
-    );
+    values (p_device_key, p_payload, p_metadata, ts);
 end;
 $$;
 

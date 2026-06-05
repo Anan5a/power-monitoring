@@ -886,7 +886,7 @@ void publish_data_supabase(const SensorData& data) {
     }
 
     uint32_t ms = g_batch_last_ms;
-    time_t epoch_s = (epoch_time > 0) ? epoch_time + ms / 1000 : time(nullptr);
+    time_t epoch_s = (epoch_time > 0) ? epoch_time : time(nullptr);
 
     uint8_t to_send = (g_batch_count >= BATCH_DRAIN_THRESHOLD)
         ? min<uint8_t>(g_batch_count, BATCH_DRAIN_MAX)

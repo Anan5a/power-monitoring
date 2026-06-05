@@ -41,10 +41,16 @@ export function useDailyGeneration(
     isDaily: false,
   })
   const [isLoading, setIsLoading] = useState(false)
+  const [pollTick, setPollTick] = useState(0)
   const mounted = useRef(true)
 
   useEffect(() => {
     return () => { mounted.current = false }
+  }, [])
+
+  useEffect(() => {
+    const id = setInterval(() => setPollTick(t => t + 1), 20000)
+    return () => clearInterval(id)
   }, [])
 
   useEffect(() => {
@@ -169,7 +175,7 @@ export function useDailyGeneration(
           })
         })
     }
-  }, [deviceKey, range, customStart, customEnd])
+  }, [deviceKey, range, customStart, customEnd, pollTick])
 
   return { ...result, isLoading }
 }

@@ -163,6 +163,12 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
   const [seriesKeys, setSeriesKeys] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [visibleLines, setVisibleLines] = useState<Set<string>>(new Set())
+  const [pollTick, setPollTick] = useState(0)
+
+  useEffect(() => {
+    const id = setInterval(() => setPollTick(t => t + 1), 15000)
+    return () => clearInterval(id)
+  }, [])
 
   useEffect(() => {
     if (!deviceKey) return
@@ -283,7 +289,7 @@ export default function PowerHistoryChart({ deviceKey, deviceChannels }: Props) 
         }
         setLoading(false)
       })
-  }, [deviceKey, range, metric])
+  }, [deviceKey, range, metric, pollTick])
 
   // Re-extract visible keys when metric changes (so empty filter from old metric doesn't persist)
   useEffect(() => {

@@ -30,7 +30,7 @@ export function computeTelemetry(
       if ((group.channel_mask & (1 << ch)) === 0) continue
       const p = payload[`ch${ch}_P`] ?? 0
       if (group.icon === 0) {
-        pvPower += Math.max(0, p)
+        pvPower += p > 5 ? p : 0
       } else if (group.icon === 1) {
         if (p > 0) batteryChargingPower += p
         else batteryDischargingPower += Math.abs(p)
