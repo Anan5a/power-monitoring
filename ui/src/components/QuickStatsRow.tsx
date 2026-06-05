@@ -111,8 +111,8 @@ export default function QuickStatsRow({ latestReading, deviceChannels, isStale }
   const status = STATUS_STYLES[computed.system_status]
 
   return (
-    <div className={`bg-white rounded-2xl shadow-sm border border-slate-100 px-6 py-4 mb-6 h-[120px] overflow-hidden ${isStale ? 'opacity-60' : ''}`}>
-      <div className="flex flex-nowrap items-center justify-between gap-x-6 gap-y-4 overflow-x-auto pb-1 -mx-1 px-1">
+    <div className={`bg-white rounded-2xl shadow-sm border border-slate-100 px-6 mb-6 h-[120px] overflow-hidden flex items-center ${isStale ? 'opacity-60' : ''}`}>
+      <div className="flex flex-nowrap items-center justify-between gap-x-6 gap-y-4 overflow-x-auto w-full -mx-1 px-1">
         <div className="flex items-center gap-4">
           <div className="flex flex-col leading-tight">
             <span className="text-[11px] uppercase tracking-wide text-slate-400 font-medium">Total Power</span>
