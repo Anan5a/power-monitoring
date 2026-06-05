@@ -36,7 +36,9 @@ export default function DashboardLayout({
       <div className={`min-h-screen flex flex-col transition-all duration-300 ${sidebarOpen ? 'md:ml-64' : ''}`}>
         {headerNode}
         <main className="flex-1 p-4 md:p-6">
-          {children}
+          <div className="max-w-7xl mx-auto">
+            {children}
+          </div>
         </main>
       </div>
     </div>
