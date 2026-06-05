@@ -112,7 +112,7 @@ export default function QuickStatsRow({ latestReading, deviceChannels, isStale }
 
   return (
     <div className={`bg-white rounded-2xl shadow-sm border border-slate-100 px-6 mb-6 h-[120px] overflow-hidden flex items-center ${isStale ? 'opacity-60' : ''}`}>
-      <div className="flex flex-nowrap items-center justify-between gap-x-6 gap-y-4 overflow-x-auto w-full -mx-1 px-1">
+      <div className="flex flex-nowrap items-center justify-between w-full -mx-1 px-1 overflow-hidden">
         <div className="flex items-center gap-4">
           <div className="flex flex-col leading-tight">
             <span className="text-[11px] uppercase tracking-wide text-slate-400 font-medium">Total Power</span>
@@ -155,7 +155,7 @@ export default function QuickStatsRow({ latestReading, deviceChannels, isStale }
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-4">
+        <div className="flex flex-nowrap items-center gap-4 shrink-0">
           {batteryProfiles.map((bp, idx) => {
             if (!bp.capacity_mAh || bp.capacity_mAh === 0) return null
             const socKey = `soc_pct${idx}`
