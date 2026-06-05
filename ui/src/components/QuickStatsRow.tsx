@@ -187,8 +187,8 @@ export default function QuickStatsRow({ latestReading, deviceChannels, isStale }
 
           <div className="h-8 w-px bg-slate-200" />
 
-          <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-50">
-            <span className={`w-2 h-2 rounded-full ${status.dot} ${computed.system_status !== 'unknown' && computed.system_status !== 'balanced' ? 'animate-pulse' : ''}`} />
+          <div className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-slate-50">
+            <span className={`w-3 h-3 rounded-full ${status.dot} ${computed.system_status !== 'unknown' && computed.system_status !== 'balanced' ? 'animate-pulse' : ''}`} />
             <span className={`text-xs font-semibold ${status.text}`}>{status.label}</span>
           </div>
         </div>
