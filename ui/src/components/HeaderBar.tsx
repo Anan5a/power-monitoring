@@ -7,7 +7,7 @@ export interface HeaderBarProps {
   selectedDeviceId: string | null
   onSelectDevice: (device: Device) => void
   isOnline: boolean
-  lastUpdated: Date | null
+  lastUpdated?: Date | null
   onMenuClick: () => void
 }
 
