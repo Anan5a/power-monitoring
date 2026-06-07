@@ -24,6 +24,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', path: '/dashboard', Icon: SunIcon },
+  { label: 'Dashboard (Legacy)', path: '/dashboard/legacy', Icon: SunIcon },
   { label: 'Channels', path: '/channels', Icon: BoltIcon },
   { label: 'Settings', path: '/settings', Icon: Cog6ToothIcon },
   { label: 'Admin', path: '/admin', Icon: ShieldCheckIcon },
