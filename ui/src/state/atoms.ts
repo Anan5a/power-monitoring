@@ -18,6 +18,17 @@ export const nowAtom = atomWithReducer<number, void>(
 
 export const latestAtom = atom<TelemetryPoint | null>(null)
 
+// Ring buffer of recent points, capped at 200. Service writes via appendBufferAtom.
+export const liveBufferAtomPrimitive = atom<TelemetryPoint[]>([])
+export const appendBufferAtom = atom(
+  null,
+  (get, set, point: TelemetryPoint) => {
+    const next = [...get(liveBufferAtomPrimitive), point]
+    if (next.length > 200) next.splice(0, next.length - 200)
+    set(liveBufferAtomPrimitive, next)
+  },
+)
+
 // Bumped to invalidate history loadables
 export const refreshTriggerAtom = atom(0)
 
@@ -34,3 +45,13 @@ export const relayStatesAtomFamily = atomFamily((_deviceKey: string) =>
 // --- Layout ---
 
 export const layoutAtom = atom<LayoutDoc | null>(null)
+
+// --- Chart zoom + drilldown ---
+
+export interface ZoomRange { start: number; end: number }
+export const zoomRangeAtom = atom<ZoomRange | null>(null)
+
+export interface BreadcrumbEntry { rangeLabel: string; tStart: number; tEnd: number; fromRange: string }
+export const drilldownBreadcrumbAtom = atom<BreadcrumbEntry[]>([])
+
+export const hoveredPointAtom = atom<{ time: string; values: Record<string, number> } | null>(null)
