@@ -1,8 +1,7 @@
-import { supabase } from '../../lib/supabase'
 import type { HistoryRange, HistoryMetric } from '../history'
 import type { TelemetryPoint, ChannelName } from '../../lib/types'
 import { refreshTriggerAtom } from '../atoms'
-import type { Getter, Setter } from 'jotai'
+import type { Setter } from 'jotai'
 
 export interface SeriesSelection {
   keys: string[]
@@ -84,7 +83,7 @@ export function keyToLabel(k: string, channelNames?: ChannelName[]): string {
 
 export function suggestDrilldown(
   fromRange: HistoryRange,
-  bucketMs: number,
+  _bucketMs: number,
 ): HistoryRange {
   if (fromRange === '24h') return '1h'
   if (fromRange === '7d') return '1h'
