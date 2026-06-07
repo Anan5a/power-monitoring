@@ -124,3 +124,45 @@ export interface DeviceChannels {
   channel_calibration?: ChannelCalibration
   virtual_channels?: VirtualChannelConfig[]
 }
+
+// --- Layout / widget registry (added 2026-06-07 redesign) ---
+
+export type WidgetType =
+  | 'quickstats'
+  | 'relays'
+  | 'inverter'
+  | 'generation'
+  | 'battery'
+  | 'vc0'
+  | 'vc1'
+  | 'vc2'
+  | 'vc3'
+  | 'history'
+  | 'spacer'
+  | 'placeholder'
+
+export interface GridArea {
+  col: number      // 1-based start column
+  row: number      // 1-based start row
+  colSpan: number  // 1-12
+  rowSpan: number
+}
+
+export interface LayoutEntry {
+  id: string           // unique per instance
+  type: WidgetType
+  gridArea: GridArea
+  props?: Record<string, unknown>
+}
+
+export interface LayoutDoc {
+  version: 1
+  entries: LayoutEntry[]
+}
+
+export interface WidgetDef<P = Record<string, unknown>> {
+  type: WidgetType
+  label: string
+  defaultSize: { colSpan: number; rowSpan: number }
+  defaultProps?: P
+}
