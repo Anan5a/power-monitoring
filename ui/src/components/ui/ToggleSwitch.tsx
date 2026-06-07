@@ -1,4 +1,3 @@
-import { motion } from 'framer-motion'
 import type { ReactNode } from 'react'
 
 export type ToggleSize = 'sm' | 'md'
@@ -54,12 +53,9 @@ export default function ToggleSwitch({
       <span
         className={`relative inline-flex items-center rounded-full transition-colors duration-200 ease-in-out ${track} ${trackColor}`}
       >
-        <motion.span
-          layout
-          className={`inline-block ${thumb} bg-white rounded-full shadow`}
-          animate={{ x: checked ? translate : 0 }}
-          transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-          style={{ marginLeft: 2 }}
+        <span
+          className={`inline-block ${thumb} bg-white rounded-full shadow transition-transform duration-200 ease-in-out`}
+          style={{ marginLeft: 2, transform: `translateX(${checked ? translate : 0}px)` }}
         />
       </span>
     </button>

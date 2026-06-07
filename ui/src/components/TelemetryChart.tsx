@@ -1,4 +1,6 @@
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { useEffect, useRef } from 'react'
+import uPlot from 'uplot'
+import 'uplot/dist/uPlot.min.css'
 import type { TelemetryPoint } from '../lib/types'
 
 interface Props {
@@ -8,34 +10,42 @@ interface Props {
 }
 
 export default function TelemetryChart({ data, dataKey, color = 'blue' }: Props) {
-  const chartData = data.map(point => ({
-    time: new Date(point.recorded_at).toLocaleTimeString(),
-    value: point.payload?.[dataKey] ?? 0,
-  }))
+  const containerRef = useRef<HTMLDivElement>(null)
+  const plotRef = useRef<uPlot | null>(null)
+
+  useEffect(() => {
+    if (!containerRef.current || data.length === 0) return
+
+    const timestamps = data.map(p => new Date(p.recorded_at).getTime() / 1000)
+    const values = data.map(p => (p.payload?.[dataKey] as number) ?? 0)
+
+    const container = containerRef.current
+    const width = container.clientWidth || 400
+
+    const opts: uPlot.Options = {
+      width,
+      height: 200,
+      series: [
+        {},
+        { stroke: color, width: 2 },
+      ],
+      axes: [
+        {},
+        { stroke: '#94a3b8', font: '10px sans-serif' },
+      ],
+      cursor: { show: true },
+    }
+
+    const plot = new uPlot(opts, [timestamps, values], container)
+    plotRef.current = plot
+
+    return () => {
+      plot.destroy()
+      plotRef.current = null
+    }
+  }, [data, dataKey, color])
 
   return (
-    <ResponsiveContainer width="100%" height={200}>
-      <LineChart data={chartData}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-        <XAxis
-          dataKey="time"
-          tick={{ fontSize: 10 }}
-          interval="preserveStartEnd"
-        />
-        <YAxis tick={{ fontSize: 10 }} width={40} />
-        <Tooltip
-          formatter={(value) => [typeof value === 'number' ? value.toFixed(4) : value, dataKey]}
-          labelFormatter={(label) => `Time: ${label}`}
-        />
-        <Line
-          type="monotone"
-          dataKey="value"
-          stroke={color}
-          strokeWidth={2}
-          dot={false}
-          isAnimationActive={false}
-        />
-      </LineChart>
-    </ResponsiveContainer>
+    <div ref={containerRef} className="w-full" />
   )
 }

@@ -1,4 +1,3 @@
-import { motion, AnimatePresence } from 'framer-motion'
 import {
   SunIcon,
   BoltIcon,
@@ -90,30 +89,19 @@ export default function Sidebar({
   return (
     <>
       {/* Mobile overlay drawer */}
-      <AnimatePresence>
-        {isOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="fixed inset-0 z-30 bg-black/50 md:hidden"
-              onClick={onClose}
-            />
-            <motion.aside
-              key="mobile-drawer"
-              initial={{ x: '-100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '-100%' }}
-              transition={{ type: 'tween', duration: 0.25, ease: 'easeInOut' }}
-              className="fixed inset-y-0 left-0 z-40 w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-slate-100 flex flex-col md:hidden"
-            >
-              {navContent}
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
+      {isOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-30 bg-black/50 md:hidden transition-opacity duration-200"
+            onClick={onClose}
+          />
+          <aside
+            className="fixed inset-y-0 left-0 z-40 w-64 bg-gradient-to-b from-slate-900 to-slate-800 text-slate-100 flex flex-col md:hidden transition-transform duration-300 translate-x-0"
+          >
+            {navContent}
+          </aside>
+        </>
+      )}
 
       {/* Desktop sidebar — collapsible */}
       <aside
