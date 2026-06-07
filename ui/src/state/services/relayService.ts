@@ -1,4 +1,4 @@
-import type { Store } from 'jotai'
+import type { Store } from 'jotai/vanilla/store'
 import { supabase } from '../../lib/supabase'
 import { relayStatesAtomFamily } from '../atoms'
 import type { RelayState } from '../../lib/types'

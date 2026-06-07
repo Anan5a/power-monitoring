@@ -1,4 +1,4 @@
-import type { Store } from 'jotai'
+import type { Store } from 'jotai/vanilla/store'
 import { fetchDeviceChannels } from '../../lib/supabase'
 import { deviceChannelsAtomFamily } from '../atoms'
 import type { DeviceChannels } from '../../lib/types'
