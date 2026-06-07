@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useAtomValue } from 'jotai'
 import { supabase, fetchDeviceChannels } from '../lib/supabase'
-import { useRealtime } from '../hooks/useRealtime'
+import { latestAtom } from '../state/atoms'
 import type { Device, DeviceChannels } from '../lib/types'
 import DashboardLayout from '../components/DashboardLayout'
 import HeaderBar from '../components/HeaderBar'
@@ -312,7 +313,7 @@ export default function ChannelsPage() {
     return () => { supabase.removeChannel(relayChannel) }
   }, [selectedDevice])
 
-  const { latestReading } = useRealtime(selectedDevice?.device_key ?? null)
+  const latestReading = useAtomValue(latestAtom)
   const payload = latestReading?.payload as Record<string, number> | null
 
   const toggleRelay = async (idx: number) => {

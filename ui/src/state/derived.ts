@@ -1,16 +1,10 @@
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai/utils'
-import { latestAtom, nowAtom } from './atoms'
+import { latestAtom, nowAtom, liveBufferAtomPrimitive } from './atoms'
 import { computeTelemetry, type ComputedValues } from '../lib/computedTelemetry'
 import type { ChannelGroup, BatteryProfile } from '../lib/types'
 
-const LIVE_BUFFER_LIMIT = 200
-
-export const liveBufferAtom = atom((get) => {
-  const latest = get(latestAtom)
-  if (!latest) return []
-  return [latest] // future: extend when service writes to a buffer atom
-})
+export const liveBufferAtom = atom((get) => get(liveBufferAtomPrimitive))
 
 export const computedTelemetryAtom = atom<ComputedValues>((get) => {
   const latest = get(latestAtom)

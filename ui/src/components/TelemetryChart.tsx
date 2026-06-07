@@ -24,7 +24,7 @@ export default function TelemetryChart({ data, dataKey, color = 'blue' }: Props)
         />
         <YAxis tick={{ fontSize: 10 }} width={40} />
         <Tooltip
-          formatter={(value: number) => [value.toFixed(4), dataKey]}
+          formatter={(value) => [typeof value === 'number' ? value.toFixed(4) : value, dataKey]}
           labelFormatter={(label) => `Time: ${label}`}
         />
         <Line

@@ -19,6 +19,8 @@
 // Blynk disabled — uncomment above and set BLYNK_AUTH_TOKEN to enable
 #include <HTTPClient.h>
 #include <time.h>
+#include <stdlib.h>     // setenv
+#include <esp_sntp.h>
 
 static WiFiClient wifiClient;
 static PubSubClient mqtt(wifiClient);
@@ -254,28 +256,43 @@ static bool sntp_started = false;
 
 static void start_sntp() {
     if (sntp_started) return;
+    // Pin C runtime TZ to UTC so getLocalTime/mktime round-trip is a no-op.
+    // Without this, newlib's default TZ (EST5EDT on ESP32 Arduino) leaks
+    // into the SNTP→epoch conversion and drifts the clock.
+    setenv("TZ", "UTC0", 1);
+    tzset();
     configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
     sntp_started = true;
 }
 
 static bool sync_time() {
     start_sntp();
-    struct tm ti = {};
-    if (getLocalTime(&ti, 10000)) {
-        epoch_time = mktime(&ti);
-        char buf[32];
-        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &ti);
-        Serial.print("NTP time: "); Serial.println(buf);
-        return true;
-    } else {
-        Serial.println("NTP sync failed, will retry");
+    // Prefer time() (set directly by SNTP to UTC epoch) over mktime(getLocalTime)
+    // to avoid a double-conversion when newlib's TZ is non-UTC.
+    time_t t = time(nullptr);
+    if (t < 1700000000) {
+        Serial.println("NTP sync failed (time() not set), will retry");
         return false;
     }
+    epoch_time = t;
+    log_set_epoch(t);   // keep data logger clock in sync
+    struct tm ti = {};
+    gmtime_r(&t, &ti);
+    char buf[32];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S UTC", &ti);
+    Serial.print("NTP time: "); Serial.println(buf);
+    return true;
 }
 
 bool try_sync_epoch_time() {
-    if (epoch_time > 0) return true;
-    return sync_time();
+    // Re-sync hourly so drift / failed first-sync recovers automatically.
+    static unsigned long last_sync_ms = 0;
+    if (epoch_time > 0 && millis() - last_sync_ms < 3600UL * 1000) return true;
+    if (sync_time()) {
+        last_sync_ms = millis();
+        return true;
+    }
+    return epoch_time > 0;
 }
 
 static void connect_wifi() {
@@ -886,7 +903,12 @@ void publish_data_supabase(const SensorData& data) {
     }
 
     uint32_t ms = g_batch_last_ms;
-    time_t epoch_s = (epoch_time > 0) ? epoch_time : time(nullptr);
+    // Prefer time() (set by SNTP to true UTC epoch) over epoch_time so a stale
+    // epoch doesn't leak into the payload when re-sync is pending.
+    time_t t_now = time(nullptr);
+    time_t epoch_s = (t_now > 1700000000) ? t_now
+                     : (epoch_time > 0) ? epoch_time
+                     : t_now;
 
     uint8_t to_send = (g_batch_count >= BATCH_DRAIN_THRESHOLD)
         ? min<uint8_t>(g_batch_count, BATCH_DRAIN_MAX)

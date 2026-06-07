@@ -13,10 +13,12 @@
   "dependencies": {
     "@heroicons/react": "^2.2.0",
     "@supabase/supabase-js": "^2.39.0",
+    "framer-motion": "^12.40.0",
     "jotai": "^2.20.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.0",
+    "recharts": "^3.8.1",
     "uplot": "^1.6.32"
   },
   "devDependencies": {
