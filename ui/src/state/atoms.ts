@@ -1,6 +1,6 @@
 import { atom } from 'jotai'
 import { atomFamily, atomWithReducer } from 'jotai/utils'
-import type { TelemetryPoint, DeviceChannels, RelayState, LayoutDoc } from '../lib/types'
+import type { TelemetryPoint, DeviceChannels, RelayState, LayoutDoc, Device } from '../lib/types'
 
 // --- Connection / time ---
 
@@ -55,3 +55,7 @@ export interface BreadcrumbEntry { rangeLabel: string; tStart: number; tEnd: num
 export const drilldownBreadcrumbAtom = atom<BreadcrumbEntry[]>([])
 
 export const hoveredPointAtom = atom<{ time: string; values: Record<string, number> } | null>(null)
+
+// --- Selected device (global, so widgets can read it) ---
+
+export const selectedDeviceAtom = atom<Device | null>(null)

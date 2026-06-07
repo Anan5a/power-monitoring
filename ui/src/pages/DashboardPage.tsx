@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useStore } from 'jotai'
+import { useAtom, useStore } from 'jotai'
+import { selectedDeviceAtom } from '../state/atoms'
 import { supabase } from '../lib/supabase'
 import { loadChannels } from '../state/services/channelsService'
 import { loadLayout } from '../state/services/layoutService'
@@ -13,7 +14,7 @@ export default function DashboardPage() {
   const navigate = useNavigate()
   const store = useStore()
   const [devices, setDevices] = useState<Device[]>([])
-  const [selectedDevice, setSelectedDevice] = useState<Device | null>(null)
+  const [selectedDevice, setSelectedDevice] = useAtom(selectedDeviceAtom)
   const [userId, setUserId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
