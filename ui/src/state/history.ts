@@ -48,7 +48,10 @@ export const historyAtomFamily = atomFamily((k: HistoryKey) =>
       p_hours: hours,
       p_metric: k.metric,
     })
-    if (error) throw error
+    if (error) {
+      console.error('get_aggregated_telemetry failed', error)
+      return []
+    }
     return (data ?? []).map((row: any): TelemetryPoint => {
       const payload: Record<string, number> = {}
       for (const [key, val] of Object.entries(row)) {
