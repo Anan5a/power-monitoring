@@ -9,6 +9,7 @@ import ProvisioningPage from './pages/ProvisioningPage'
 import ResetPasswordPage from './pages/ResetPasswordPage'
 import SettingsPage from './pages/SettingsPage'
 import ChannelsPage from './pages/ChannelsPage'
+import { useNowTicker } from './state/nowTicker'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
@@ -28,6 +29,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  useNowTicker()
   return (
     <BrowserRouter>
       <Routes>
@@ -35,6 +37,7 @@ export default function App() {
         <Route path="/provision" element={<ProvisioningPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+        <Route path="/dashboard/legacy" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
         <Route path="/channels" element={<ProtectedRoute><ChannelsPage /></ProtectedRoute>} />
