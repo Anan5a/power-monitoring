@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useAtomValue } from 'jotai'
 import { Bars3Icon } from '@heroicons/react/24/outline'
+import { connectionStateAtom, nowAtom } from '../state/atoms'
+import { secondsAgoAtom } from '../state/derived'
 import type { Device } from '../lib/types'
 
 export interface HeaderBarProps {
@@ -7,7 +9,6 @@ export interface HeaderBarProps {
   selectedDeviceId: string | null
   onSelectDevice: (device: Device) => void
   isOnline: boolean
-  lastUpdated?: Date | null
   onMenuClick: () => void
 }
 
@@ -19,75 +20,38 @@ function formatSecondsAgo(seconds: number): string {
 }
 
 export default function HeaderBar({
-  devices,
-  selectedDeviceId,
-  onSelectDevice,
-  isOnline,
-  lastUpdated,
-  onMenuClick,
+  devices, selectedDeviceId, onSelectDevice, isOnline, onMenuClick,
 }: HeaderBarProps) {
-  const [now, setNow] = useState<Date>(() => new Date())
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000)
-    return () => clearInterval(id)
-  }, [])
-
-  const secondsAgo = lastUpdated
-    ? Math.max(0, Math.floor((now.getTime() - lastUpdated.getTime()) / 1000))
-    : null
+  const now = useAtomValue(nowAtom)
+  const secondsAgo = useAtomValue(secondsAgoAtom)
+  const conn = useAtomValue(connectionStateAtom)
+  const isLive = isOnline && conn === 'live'
 
   return (
     <header className="sticky top-0 z-20 bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between gap-4">
       <div className="flex items-center gap-3 min-w-0">
-        <button
-          type="button"
-          aria-label="Open navigation"
-          onClick={onMenuClick}
-          className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-slate-600 hover:bg-slate-100"
-        >
+        <button type="button" aria-label="Open navigation" onClick={onMenuClick}
+          className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-slate-600 hover:bg-slate-200">
           <Bars3Icon className="h-6 w-6" />
         </button>
-
-        <select
-          value={selectedDeviceId ?? ''}
-          onChange={e => {
-            const found = devices.find(d => d.id === e.target.value)
-            if (found) onSelectDevice(found)
-          }}
-          className="rounded-lg border border-slate-200 bg-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-400 max-w-[14rem] truncate"
-        >
-          {devices.length === 0 ? (
-            <option value="">No devices</option>
-          ) : (
-            <>
-              <option value="">-- Choose a device --</option>
-              {devices.map(d => (
-                <option key={d.id} value={d.id}>{d.device_name}</option>
-              ))}
-            </>
+        <select value={selectedDeviceId ?? ''}
+          onChange={e => { const f = devices.find(d => d.id === e.target.value); if (f) onSelectDevice(f) }}
+          className="rounded-lg border border-slate-200 bg-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-400 max-w-[14rem] truncate">
+          {devices.length === 0 ? <option value="">No devices</option> : (
+            <><option value="">-- Choose a device --</option>
+            {devices.map(d => <option key={d.id} value={d.id}>{d.device_name}</option>)}</>
           )}
         </select>
       </div>
-
       <div className="flex items-center gap-4 text-xs text-slate-500">
-        <span className="font-mono hidden sm:inline">{now.toLocaleTimeString()}</span>
+        <span className="font-mono hidden sm:inline">{new Date(now).toLocaleTimeString()}</span>
         <div className="flex items-center gap-2">
-          <span
-            className={`inline-block w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}
-            aria-hidden
-          />
-          <span className="text-slate-700 font-medium">
-            {isOnline ? 'Online' : 'Offline'}
-          </span>
+          <span className={`inline-block w-2 h-2 rounded-full ${isLive ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} aria-hidden />
+          <span className="text-slate-700 font-medium">{isLive ? 'Online' : conn === 'stale' ? 'Stale' : 'Offline'}</span>
         </div>
         <span className="hidden md:inline">
           Last update:{' '}
-          {secondsAgo === null ? (
-            <span className="text-slate-400">--</span>
-          ) : (
-            <span className="text-slate-700">{formatSecondsAgo(secondsAgo)}</span>
-          )}
+          {secondsAgo === null ? <span className="text-slate-400">--</span> : <span className="text-slate-700">{formatSecondsAgo(secondsAgo)}</span>}
         </span>
       </div>
     </header>

@@ -71,7 +71,6 @@ export default function AdminPage() {
         navigate('/dashboard')
       }}
       isOnline={false}
-      lastUpdated={null}
       onMenuClick={onMenuClick}
     />
   )

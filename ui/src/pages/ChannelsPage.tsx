@@ -337,7 +337,6 @@ export default function ChannelsPage() {
       selectedDeviceId={selectedDevice?.id ?? null}
       onSelectDevice={setSelectedDevice}
       isOnline={selectedDevice?.is_online ?? false}
-      lastUpdated={latestReading ? new Date(latestReading.recorded_at) : null}
       onMenuClick={onMenuClick}
     />
   )

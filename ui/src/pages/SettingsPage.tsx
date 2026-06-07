@@ -112,7 +112,6 @@ export default function SettingsPage() {
         setSelectedKey(d.device_key)
       }}
       isOnline={selectedDevice?.is_online ?? false}
-      lastUpdated={null}
       onMenuClick={onMenuClick}
     />
   )
