@@ -3,6 +3,7 @@ import { createStore } from 'jotai'
 import {
   latestAtom,
   nowAtom,
+  appendBufferAtom,
 } from '../atoms'
 import {
   liveBufferAtom,
@@ -27,10 +28,10 @@ describe('liveBufferAtom', () => {
     expect(store.get(liveBufferAtom)).toEqual([])
   })
 
-  it('contains the latest when set', () => {
+  it('contains a point when appended via appendBufferAtom', () => {
     const store = createStore()
     const pt = makePoint(0, { ch0_P: 10 })
-    store.set(latestAtom, pt)
+    store.set(appendBufferAtom, pt)
     expect(store.get(liveBufferAtom)).toEqual([pt])
   })
 })
