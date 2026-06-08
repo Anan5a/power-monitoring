@@ -1,5 +1,5 @@
 import type { HistoryRange, HistoryMetric } from '../history'
-import type { TelemetryPoint, ChannelName } from '../../lib/types'
+import type { TelemetryPoint, ChannelName, ChannelGroup } from '../../lib/types'
 import { refreshTriggerAtom } from '../atoms'
 import type { Setter } from 'jotai'
 
@@ -69,17 +69,59 @@ export function extractKeys(data: TelemetryPoint[], metric: HistoryMetric): stri
 
 // --- keyToLabel (moved from PowerHistoryChart) ---
 
-function vcName(channelNames: ChannelName[] | undefined, idx: number): string {
+function vcName(
+  channelNames: ChannelName[] | undefined,
+  idx: number,
+  groupLabelByChannel?: Map<number, string>,
+): string {
+  // Priority:
+  //   1. Explicit group label from channel_groups (mapped to ch index)
+  //   2. Real channel name from device_channels.channel_names
+  //   3. Fallback: VC{idx}
+  if (groupLabelByChannel?.has(idx)) {
+    return groupLabelByChannel.get(idx)!
+  }
   const override = channelNames?.find(cn => cn.channel === idx)?.name
-  // If the DB has a placeholder-looking name (raw column name), use VC{idx}.
-  // Matches strings like 'ch0_V', 'ch1_P', 'ch0_v', 'ch0 V', etc.
+  // Treat placeholder-looking names (raw column names) as missing.
   if (override && !/^ch\d+\s*[_ ]?\s*(?:V|P|I|v|p|i)$/i.test(override.trim())) {
     return override
   }
   return `VC${idx}`
 }
 
-export function keyToLabel(k: string, channelNames?: ChannelName[]): string {
+// Build a map of channel index → friendly label from channel_groups.
+// The first channel in a group gets the bare name; subsequent ones get a
+// numeric suffix. If a channel belongs to multiple groups, the first one wins.
+const GROUP_ICON_LABELS: Record<number, string> = {
+  0: 'PV',
+  1: 'Battery',
+  2: 'DC Load',
+  3: 'Load',
+}
+
+export function buildChannelLabelMap(channelGroups: ChannelGroup[] | undefined | null): Map<number, string> {
+  const map = new Map<number, string>()
+  if (!channelGroups) return map
+  for (const group of channelGroups) {
+    const baseLabel = GROUP_ICON_LABELS[group.icon] ?? `Group ${group.name ?? group.icon}`
+    const memberChannels: number[] = []
+    for (let ch = 0; ch < 4; ch++) {
+      if (group.channel_mask & (1 << ch)) memberChannels.push(ch)
+    }
+    memberChannels.forEach((ch, i) => {
+      if (!map.has(ch)) {
+        map.set(ch, memberChannels.length > 1 ? `${baseLabel} ${i + 1}` : baseLabel)
+      }
+    })
+  }
+  return map
+}
+
+export function keyToLabel(
+  k: string,
+  channelNames?: ChannelName[],
+  groupLabelByChannel?: Map<number, string>,
+): string {
   if (k === 'ina226_p') return 'INA226'
   if (k === 'ina226_v') return 'INA226 V'
   if (k === 'ina226_i') return 'INA226 I'
@@ -92,10 +134,10 @@ export function keyToLabel(k: string, channelNames?: ChannelName[]): string {
   const ina = k.match(/^ina3221_([pvi])(\d)$/)
   if (ina) {
     const m2m: Record<string, string> = { p: 'P', v: 'V', i: 'I' }
-    return `${vcName(channelNames, parseInt(ina[2]))} ${m2m[ina[1]]}`
+    return `${vcName(channelNames, parseInt(ina[2]), groupLabelByChannel)} ${m2m[ina[1]]}`
   }
   const ch = k.match(/^ch(\d)_([pvi])$/)
-  if (ch) return `${vcName(channelNames, parseInt(ch[1]))} ${ch[2].toUpperCase()}`
+  if (ch) return `${vcName(channelNames, parseInt(ch[1]), groupLabelByChannel)} ${ch[2].toUpperCase()}`
   return k
 }
 

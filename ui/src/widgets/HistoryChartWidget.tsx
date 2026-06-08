@@ -23,7 +23,7 @@ import {
   type HistoryRange,
   type HistoryMetric,
 } from '../state/history'
-import { extractKeys, keyToLabel, suggestDrilldown, bucketToWindow } from '../state/services/historyService'
+import { extractKeys, keyToLabel, suggestDrilldown, bucketToWindow, buildChannelLabelMap } from '../state/services/historyService'
 import {
   zoomRangeAtom,
   drilldownBreadcrumbAtom,
@@ -154,6 +154,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
   useEffect(() => { setHoveredRef.current = setHovered })
   const hoverSyncPlugin = useMemo(() => makeHoverSyncPlugin(setHoveredRef), [])
   const channels = useAtomValue(deviceChannelsAtomFamily(deviceKey))
+  const channelLabelMap = useMemo(() => buildChannelLabelMap(channels?.channel_groups), [channels?.channel_groups])
   const latest = useAtomValue(latestAtom)
   const triggerRefresh = useSetAtom(refreshTriggerAtom)
 
@@ -230,7 +231,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
       datasets: keys.map((k, i) => {
         const isSoc = k.toLowerCase().startsWith('soc_pct')
         return {
-          label: keyToLabel(k, channels?.channel_names),
+          label: keyToLabel(k, channels?.channel_names, channelLabelMap),
           data: points.map(p => ({ x: p.t, y: p.v[k] ?? null })),
           borderColor: colorForKey(k, metric, i),
           backgroundColor: colorForKey(k, metric, i) + '40',
@@ -386,7 +387,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
               className={`flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-full border transition-all duration-150 ${active ? 'border-transparent shadow-sm' : 'border-slate-200 text-slate-400 opacity-60'}`}
               style={active ? { backgroundColor: color + '18', borderColor: color + '40' } : {}}>
               <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
-              <span style={active ? { color } : {}}>{keyToLabel(k, channels?.channel_names)}</span>
+              <span style={active ? { color } : {}}>{keyToLabel(k, channels?.channel_names, channelLabelMap)}</span>
             </button>
           )
         })}
