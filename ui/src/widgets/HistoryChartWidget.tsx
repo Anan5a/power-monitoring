@@ -155,6 +155,19 @@ function HistoryChartWidget({ deviceKey }: Props) {
   const hoverSyncPlugin = useMemo(() => makeHoverSyncPlugin(setHoveredRef), [])
   const channels = useAtomValue(deviceChannelsAtomFamily(deviceKey))
   const channelLabelMap = useMemo(() => buildChannelLabelMap(channels?.channel_groups), [channels?.channel_groups])
+  // Debug: log once per deviceKey when channels first arrive so we can verify
+  // what shape the UI is actually getting. Remove once labels are confirmed working.
+  const debugLoggedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (debugLoggedRef.current === deviceKey) return
+    debugLoggedRef.current = deviceKey
+    // eslint-disable-next-line no-console
+    console.debug('[HistoryChart] channels for', deviceKey, channels)
+    if (channels) {
+      // eslint-disable-next-line no-console
+      console.debug('[HistoryChart] channel_groups:', channels.channel_groups)
+    }
+  }, [deviceKey, channels])
   const latest = useAtomValue(latestAtom)
   const triggerRefresh = useSetAtom(refreshTriggerAtom)
 
