@@ -13,7 +13,6 @@ import {
   Legend as ChartLegend,
   type ChartOptions,
   type ChartData,
-  type Plugin,
 } from 'chart.js'
 import 'chartjs-adapter-date-fns'
 import zoomPlugin from 'chartjs-plugin-zoom'
@@ -73,28 +72,32 @@ function fmtTick(iso: string, range: HistoryRange): string {
     ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-const hoverSyncPlugin: Plugin<'line'> = {
-  id: 'hoverSync',
-  afterEvent(chart, _args, opts: { setHovered: (p: { time: string; values: Record<string, number> } | null) => void }) {
-    const active = chart.tooltip?.getActiveElements()
-    if (!active || active.length === 0) {
-      opts.setHovered(null)
-      return
-    }
-    const idx = active[0].index
-    const ds = chart.data.datasets
-    const values: Record<string, number> = {}
-    for (let i = 0; i < ds.length; i++) {
-      const v = (ds[i].data as any[])[idx]
-      const label = ds[i].label
-      if (typeof v === 'number' && label) values[label] = v
-    }
-    const t = (chart.data.datasets[0].data as any[])[idx]
-    opts.setHovered({
-      time: typeof t === 'number' ? new Date(t).toLocaleString() : String(t),
-      values,
-    })
-  },
+// Mouse-move bridge: feed hoveredPointAtom so the tooltip can render
+// outside the canvas. Uses a ref so we don't add a per-mousemove subscription.
+function makeHoverSyncPlugin(setHoveredRef: { current: (p: { time: string; values: Record<string, number> } | null) => void }) {
+  return {
+    id: 'hoverSync',
+    afterEvent(chart: any) {
+      const active = chart.tooltip?.getActiveElements()
+      if (!active || active.length === 0) {
+        setHoveredRef.current(null)
+        return
+      }
+      const idx = active[0].index
+      const ds = chart.data.datasets
+      const values: Record<string, number> = {}
+      for (let i = 0; i < ds.length; i++) {
+        const v = (ds[i].data as any[])[idx]
+        const label = ds[i].label
+        if (typeof v === 'number' && label) values[label] = v
+      }
+      const t = (chart.data.datasets[0].data as any[])[idx]
+      setHoveredRef.current({
+        time: typeof t === 'number' ? new Date(t).toLocaleString() : String(t),
+        values,
+      })
+    },
+  } as any
 }
 
 function HistoryChartWidget({ deviceKey }: Props) {
@@ -112,6 +115,9 @@ function HistoryChartWidget({ deviceKey }: Props) {
   const zoom = useAtomValue(zoomRangeAtom)
   const setZoom = useSetAtom(zoomRangeAtom)
   const setHovered = useSetAtom(hoveredPointAtom)
+  const setHoveredRef = useRef(setHovered)
+  useEffect(() => { setHoveredRef.current = setHovered })
+  const hoverSyncPlugin = useMemo(() => makeHoverSyncPlugin(setHoveredRef), [])
   const channels = useAtomValue(deviceChannelsAtomFamily(deviceKey))
   const latest = useAtomValue(latestAtom)
   const triggerRefresh = useSetAtom(refreshTriggerAtom)
@@ -241,7 +247,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
           title: (items: any[]) => items.length ? fmtTick(new Date(items[0].parsed.x).toISOString(), range) : '',
           label: (ctx: any) => {
             const v = ctx.parsed.y
-            if (v == null) return null
+            if (v == null) return ''
             const decimals = metric === 'voltage' ? 2 : 1
             return `${ctx.dataset.label}: ${Math.abs(v).toFixed(decimals)} ${UNIT[metric]}`
           },
@@ -264,8 +270,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
         },
       },
     },
-    hoverSync: { setHovered },
-  } as any), [range, metric, setZoom, setHovered, onChartClick])
+  }), [range, metric, setZoom, onChartClick])
 
   const visibleKeys = useMemo(
     () => seriesDataRef.current.keys.filter(k => !hiddenKeys.has(k)),
