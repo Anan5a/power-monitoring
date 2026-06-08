@@ -56,10 +56,46 @@ interface Props {
   deviceKey: string
 }
 
-const SERIES_COLORS = [
-  '#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#06b6d4',
-  '#ec4899', '#f97316', '#84cc16', '#10b981', '#ef4444',
+// Yellow / orange family for PV across all metrics. Other series get distinct hues.
+const PV_COLORS = {
+  power:    '#f59e0b', // amber
+  voltage:  '#fbbf24', // amber-400
+  current:  '#fb923c', // orange-400
+}
+const PALETTE_FALLBACK = [
+  '#3b82f6', // blue
+  '#10b981', // emerald
+  '#a855f7', // purple
+  '#06b6d4', // cyan
+  '#ec4899', // pink
+  '#84cc16', // lime
+  '#ef4444', // red
+  '#6366f1', // indigo
+  '#14b8a6', // teal
+  '#f43f5e', // rose
 ]
+
+function colorForKey(k: string, metric: 'power' | 'voltage' | 'current', index: number): string {
+  if (k === 'pv_power') return PV_COLORS.power
+  if (k === 'ina226_p' || k === 'ina226_v' || k === 'ina226_i') return '#a855f7' // purple for the INA226 standalone
+  if (k === 'inverter_power' || k === 'inverter_current') return '#3b82f6' // blue for inverter
+  if (k === 'battery_power') return '#10b981' // emerald for battery
+  if (k === 'dc_load_power') return '#ef4444' // red for DC load
+  if (k === 'soc_pct0') return '#a855f7' // purple for SoC
+  // For raw channel keys (ch0_V, ch0_P, etc.), the first one is usually PV.
+  // We can't tell PV from a generic chN_V without channel_names, so use PV color
+  // for the first voltage/current series on the corresponding tab and fall back.
+  if (/^ch\d_p$/i.test(k) && metric === 'power') {
+    return index === 0 ? PV_COLORS.power : PALETTE_FALLBACK[(index - 1) % PALETTE_FALLBACK.length]
+  }
+  if (/^ch\d_v$/i.test(k) && metric === 'voltage') {
+    return index === 0 ? PV_COLORS.voltage : PALETTE_FALLBACK[(index - 1) % PALETTE_FALLBACK.length]
+  }
+  if (/^ch\d_i$/i.test(k) && metric === 'current') {
+    return index === 0 ? PV_COLORS.current : PALETTE_FALLBACK[(index - 1) % PALETTE_FALLBACK.length]
+  }
+  return PALETTE_FALLBACK[index % PALETTE_FALLBACK.length]
+}
 
 const UNIT: Record<HistoryMetric, string> = { power: 'W', voltage: 'V', current: 'A' }
 
@@ -196,8 +232,8 @@ function HistoryChartWidget({ deviceKey }: Props) {
         return {
           label: keyToLabel(k, channels?.channel_names),
           data: points.map(p => ({ x: p.t, y: p.v[k] ?? null })),
-          borderColor: SERIES_COLORS[i % SERIES_COLORS.length],
-          backgroundColor: SERIES_COLORS[i % SERIES_COLORS.length] + '40',
+          borderColor: colorForKey(k, metric, i),
+          backgroundColor: colorForKey(k, metric, i) + '40',
           borderWidth: 2,
           fill: !isSoc && metric === 'power' ? 'origin' : false,
           pointRadius: 0,
@@ -343,7 +379,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         {series.keys.map((k, i) => {
           const active = !hiddenKeys.has(k)
-          const color = SERIES_COLORS[i % SERIES_COLORS.length]
+          const color = colorForKey(k, metric, i)
           return (
             <button key={k} onClick={() => {
               const next = new Set(hiddenKeys)
