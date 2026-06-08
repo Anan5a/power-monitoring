@@ -39,7 +39,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
   // Decide which loadable to use
   const drilldown = breadcrumb.length > 0 ? breadcrumb[breadcrumb.length - 1] : null
   const loadable = drilldown
-    ? useAtomValue(drilldownLoadableAtom({ deviceKey, tStart: new Date(drilldown.tStart).toISOString(), tEnd: new Date(drilldown.tEnd).toISOString(), metric }))
+    ? useAtomValue(drilldownLoadableAtom({ deviceKey, tStart: drilldown.tStart, tEnd: drilldown.tEnd, metric }))
     : useAtomValue(historyAtomFamily({ deviceKey, range, metric }))
 
   // Build plot data from loadable

@@ -65,8 +65,8 @@ export const historyAtomFamily = atomFamily((k: HistoryKey) =>
 
 interface DrilldownKey {
   deviceKey: string
-  tStart: string
-  tEnd: string
+  tStart: number
+  tEnd: number
   metric: HistoryMetric
 }
 
@@ -77,8 +77,8 @@ export const drilldownLoadableAtom = atomFamily((k: DrilldownKey) =>
       .from('telemetry_computed')
       .select('*')
       .eq('device_key', k.deviceKey)
-      .gte('recorded_at', k.tStart)
-      .lte('recorded_at', k.tEnd)
+      .gte('recorded_at', new Date(k.tStart).toISOString())
+      .lte('recorded_at', new Date(k.tEnd).toISOString())
       .order('recorded_at', { ascending: true })
       .limit(20000)
     if (error) throw error
