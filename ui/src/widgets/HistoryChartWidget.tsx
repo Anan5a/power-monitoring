@@ -23,7 +23,7 @@ import {
   type HistoryRange,
   type HistoryMetric,
 } from '../state/history'
-import { extractKeys, keyToLabel, suggestDrilldown, bucketToWindow, buildChannelLabelMap } from '../state/services/historyService'
+import { extractKeys, keyToLabel, suggestDrilldown, bucketToWindow, buildChannelLabelMap, withSystemCurrents } from '../state/services/historyService'
 import {
   zoomRangeAtom,
   drilldownBreadcrumbAtom,
@@ -76,11 +76,11 @@ const PALETTE_FALLBACK = [
 ]
 
 function colorForKey(k: string, metric: 'power' | 'voltage' | 'current', index: number): string {
-  if (k === 'pv_power') return PV_COLORS.power
+  if (k === 'pv_power' || k === 'pv_current') return metric === 'current' ? PV_COLORS.current : PV_COLORS.power
   if (k === 'ina226_p' || k === 'ina226_v' || k === 'ina226_i') return '#a855f7' // purple for the INA226 standalone
   if (k === 'inverter_power' || k === 'inverter_current') return '#3b82f6' // blue for inverter
-  if (k === 'battery_power') return '#10b981' // emerald for battery
-  if (k === 'dc_load_power') return '#ef4444' // red for DC load
+  if (k === 'battery_power' || k === 'battery_current') return '#10b981' // emerald for battery
+  if (k === 'dc_load_power' || k === 'dc_load_current') return '#ef4444' // red for DC load
   if (k === 'soc_pct0') return '#a855f7' // purple for SoC
   // For raw channel keys (ch0_V, ch0_P, etc.), the first one is usually PV.
   // We can't tell PV from a generic chN_V without channel_names, so use PV color
@@ -177,7 +177,8 @@ function HistoryChartWidget({ deviceKey }: Props) {
       setSeries({ points: [], keys: [] })
       return
     }
-    const keys = extractKeys(data, metric)
+    const channelGroups = channels?.channel_groups
+    const keys = extractKeys(data, metric, channelGroups)
     if (keys.length === 0) {
       setSeries({ points: [], keys: [] })
       return
@@ -187,12 +188,17 @@ function HistoryChartWidget({ deviceKey }: Props) {
     for (let i = 0; i < data.length; i += step) {
       const pt = data[i]
       const t = new Date(pt.recorded_at).getTime()
+      // Augment the payload with derived system current keys so they survive
+      // the per-point `keys.map(...)` lookup below.
+      const payload = metric === 'current'
+        ? withSystemCurrents(pt.payload as Record<string, number>, channelGroups)
+        : (pt.payload as Record<string, number>)
       const v: Record<string, number> = {}
-      for (const k of keys) v[k] = (pt.payload as any)[k] ?? null
+      for (const k of keys) v[k] = payload[k] ?? null
       points.push({ t, v })
     }
     setSeries({ points, keys })
-  }, [loadable.state, loadable.data, metric])
+  }, [loadable.state, loadable.data, metric, channels?.channel_groups])
 
   // Live-append latest sample, then setSeries re-renders the chart
   useEffect(() => {
@@ -201,8 +207,11 @@ function HistoryChartWidget({ deviceKey }: Props) {
     const last = series.points[series.points.length - 1]
     if (last && t <= last.t) return
     if (series.keys.length === 0) return
+    const payload = metric === 'current'
+      ? withSystemCurrents(latest.payload as Record<string, number>, channels?.channel_groups)
+      : (latest.payload as Record<string, number>)
     const v: Record<string, number> = {}
-    for (const k of series.keys) v[k] = (latest.payload as any)[k] ?? null
+    for (const k of series.keys) v[k] = payload[k] ?? null
     setSeries(s => ({ ...s, points: [...s.points, { t, v }] }))
   }, [latest])
 
