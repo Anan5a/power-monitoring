@@ -354,7 +354,15 @@ function HistoryChartWidget({ deviceKey }: Props) {
             const isSoc = (ctx.dataset.label ?? '').toLowerCase().includes('soc')
             if (isSoc) return `${ctx.dataset.label}: ${v.toFixed(0)} %`
             const decimals = metric === 'voltage' ? 2 : 1
-            return `${ctx.dataset.label}: ${Math.abs(v).toFixed(decimals)} ${UNIT[metric]}`
+            // On the Current tab, system currents carry a meaningful sign
+            // (battery charging is +, discharging is -; inverter flow
+            // direction; PV / DC load are always >= 0). Show the sign.
+            // On the Power tab we keep the existing convention of stripping
+            // the sign — the four power series are all net values where the
+            // user is more interested in magnitude than flow direction.
+            const showSign = metric === 'current'
+            const valueStr = (showSign && v < 0 ? '-' : '') + Math.abs(v).toFixed(decimals)
+            return `${ctx.dataset.label}: ${valueStr} ${UNIT[metric]}`
           },
         },
       },

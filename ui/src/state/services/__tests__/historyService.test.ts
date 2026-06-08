@@ -127,6 +127,18 @@ describe('computeSystemCurrents', () => {
     expect(out.dc_load_current).toBeCloseTo(4.0)
   })
 
+  it('preserves the sign on battery_current so charging (+) and discharging (-) are distinguishable', () => {
+    const charging = computeSystemCurrents({ ch2_I: 1.2 }, groups)
+    expect(charging.battery_current).toBeCloseTo(1.2)        // + = charging
+    const discharging = computeSystemCurrents({ ch2_I: -0.8 }, groups)
+    expect(discharging.battery_current).toBeCloseTo(-0.8)    // - = discharging
+  })
+
+  it('passes inverter_current through with its sign intact', () => {
+    const out = computeSystemCurrents({ ch0_I: 1.0, inverter_current: -3.5 }, groups)
+    expect(out.inverter_current).toBe(-3.5)
+  })
+
   it('handles uppercase and lowercase keys', () => {
     const out = computeSystemCurrents({ ch0_i: 1.0, ch2_i: 2.0 }, groups)
     expect(out.pv_current).toBeCloseTo(1.0)

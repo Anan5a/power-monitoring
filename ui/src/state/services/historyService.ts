@@ -30,8 +30,10 @@ const EXTRA_REGEX: Record<HistoryMetric, RegExp> = {
 const SYSTEM_POWER_KEYS = ['pv_power', 'battery_power', 'inverter_power', 'dc_load_power']
 export const SYSTEM_CURRENT_KEYS = ['pv_current', 'battery_current', 'inverter_current', 'dc_load_current']
 // Channel-to-system mapping for current, derived the same way the trigger
-// derives system power. Currents are always magnitudes (signs live in power),
-// so each system current is a sum of |ch_i| across the channels in its group.
+// derives system power. We sum the *signed* ch_i value (no Math.abs) so
+// battery and inverter currents keep their direction: positive = charging
+// in / sourcing, negative = discharging / sinking. PV and DC Load currents
+// are naturally non-negative, so signed sums work the same.
 export function computeSystemCurrents(
   payload: Record<string, number>,
   channelGroups: ChannelGroup[] | undefined | null,
@@ -48,7 +50,7 @@ export function computeSystemCurrents(
       const k = `ch${ch}_I`
       // Case-insensitive lookup (RPC returns ch*_i, payload writes ch*_I).
       const v = payload[k] ?? payload[k.toLowerCase()] ?? payload[k.toUpperCase()]
-      if (v != null) { sum += Math.abs(v); any = true }
+      if (v != null) { sum += v; any = true }
     }
     if (!any) continue
     if (group.icon === 0) out['pv_current'] = (out['pv_current'] ?? 0) + sum
@@ -57,7 +59,7 @@ export function computeSystemCurrents(
   }
   // Inverter current isn't derivable from per-channel currents alone (it's an
   // energy balance, not a sum of magnitudes). Pass it through from the payload
-  // if the device provides it directly.
+  // if the device provides it directly. Its sign encodes flow direction.
   const inv = payload['inverter_current'] ?? payload['inverter_I']
   if (inv != null) out['inverter_current'] = inv
   return out
