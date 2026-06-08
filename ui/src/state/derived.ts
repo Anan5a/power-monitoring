@@ -1,6 +1,6 @@
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai/utils'
-import { latestAtom, nowAtom, liveBufferAtomPrimitive } from './atoms'
+import { latestAtom, nowAtom, liveBufferAtomPrimitive, selectedDeviceAtom, deviceChannelsAtomFamily } from './atoms'
 import { computeTelemetry, type ComputedValues } from '../lib/computedTelemetry'
 import type { ChannelGroup, BatteryProfile } from '../lib/types'
 
@@ -8,8 +8,14 @@ export const liveBufferAtom = atom((get) => get(liveBufferAtomPrimitive))
 
 export const computedTelemetryAtom = atom<ComputedValues>((get) => {
   const latest = get(latestAtom)
+  const device = get(selectedDeviceAtom)
+  const channels = device ? get(deviceChannelsAtomFamily(device.device_key)) : null
   const payload = (latest?.payload ?? {}) as Record<string, number>
-  return computeTelemetry(payload, [] as ChannelGroup[], [] as BatteryProfile[])
+  return computeTelemetry(
+    payload,
+    (channels?.channel_groups ?? []) as ChannelGroup[],
+    (channels?.battery_profiles ?? []) as BatteryProfile[],
+  )
 })
 
 export interface ChannelPayload {
@@ -37,7 +43,8 @@ export const channelPayloadAtomFamily = atomFamily((channelIdx: number) =>
 export const secondsAgoAtom = atom<number | null>((get) => {
   const latest = get(latestAtom)
   if (!latest) return null
-  get(nowAtom) // subscribe to now changes
+  const _tick = get(nowAtom) // subscribe to now changes; must use the value
+  void _tick
   return Math.max(0, Math.floor((Date.now() - new Date(latest.recorded_at).getTime()) / 1000))
 })
 

@@ -93,13 +93,23 @@ function HistoryChartWidget({ deviceKey }: Props) {
           points: { show: false },
         })
       })
+      const fmtDate = (u: any, splits: number[], _space: number) => {
+        return splits.map(s => {
+          const d = new Date(s * 1000)
+          if (range === '1h' || range === '6h' || range === '24h') {
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }
+          return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+            ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        })
+      }
       const opts: any = {
         width: containerRef.current.clientWidth,
         height: 480,
         series,
         scales: { x: { time: true } },
         axes: [
-          { stroke: '#94a3b8', grid: { stroke: '#f1f5f9' } },
+          { stroke: '#94a3b8', grid: { stroke: '#f1f5f9' }, values: fmtDate },
           { stroke: '#94a3b8', grid: { stroke: '#f1f5f9' } },
         ],
         cursor: {
