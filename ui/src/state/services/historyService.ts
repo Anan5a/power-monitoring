@@ -70,7 +70,13 @@ export function extractKeys(data: TelemetryPoint[], metric: HistoryMetric): stri
 // --- keyToLabel (moved from PowerHistoryChart) ---
 
 function vcName(channelNames: ChannelName[] | undefined, idx: number): string {
-  return channelNames?.find(cn => cn.channel === idx)?.name ?? `VC${idx}`
+  const override = channelNames?.find(cn => cn.channel === idx)?.name
+  // If the DB has a placeholder-looking name (raw column name), use VC{idx}.
+  // Matches strings like 'ch0_V', 'ch1_P', 'ch0_v', 'ch0 V', etc.
+  if (override && !/^ch\d+\s*[_ ]?\s*(?:V|P|I|v|p|i)$/i.test(override.trim())) {
+    return override
+  }
+  return `VC${idx}`
 }
 
 export function keyToLabel(k: string, channelNames?: ChannelName[]): string {

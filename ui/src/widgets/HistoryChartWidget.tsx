@@ -32,7 +32,7 @@ import {
   latestAtom,
   refreshTriggerAtom,
 } from '../state/atoms'
-import HistoryTooltip from './HistoryTooltip'
+// Chart.js built-in tooltip handles hover; custom HTML tooltip removed.
 
 // Re-export for tests
 export { extractKeys } from '../state/services/historyService'
@@ -329,10 +329,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
     },
   }), [range, metric, setZoom, onChartClick, showSecondaryAxis])
 
-  const visibleKeys = useMemo(
-    () => series.keys.filter(k => !hiddenKeys.has(k)),
-    [series.keys, hiddenKeys],
-  )
+  // visibleKeys removed (was only used by the deleted custom tooltip)
 
   if (loadable.state === 'loading') {
     return <div className="h-full w-full bg-slate-50 animate-pulse rounded-2xl" />
@@ -401,7 +398,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
           options={chartOptions}
           plugins={[hoverSyncPlugin]}
         />
-        <HistoryTooltip visibleKeys={visibleKeys} metric={metric} channelNames={channels?.channel_names} />
+          // Tooltip rendered by Chart.js; see chartOptions.plugins.tooltip.
       </div>
     </div>
   )
