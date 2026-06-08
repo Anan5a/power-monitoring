@@ -20,7 +20,7 @@ function Chip({ label, value, unit, color, icon }: { label: string; value: numbe
   return (
     <div className="flex items-center gap-2 min-w-0">
       {icon && <div className={`shrink-0 ${color}`}>{icon}</div>}
-      <div className="flex flex-col leading-tight min-w-0">
+      <div className="flex flex-col leading-snug min-w-0">
         <span className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-400 font-medium">{label}</span>
         <span className={`text-base sm:text-lg font-semibold tabular-nums transition-colors duration-200 truncate ${color}`}>
           <StaticNumber value={value} />
@@ -41,7 +41,7 @@ function Directional({ label, value, unit }: { label: string; value: number; uni
       <div className="shrink-0 w-5 h-5">
         {Icon && <Icon className={`w-5 h-5 ${color}`} />}
       </div>
-      <div className="flex flex-col leading-tight min-w-0">
+      <div className="flex flex-col leading-snug min-w-0">
         <span className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-400 font-medium">{label}</span>
         <span className={`text-base sm:text-lg font-semibold tabular-nums transition-colors duration-200 truncate ${color}`}>
           <StaticNumber value={Math.abs(value)} />
@@ -71,9 +71,9 @@ function QuickStatsWidget() {
   }
 
   return (
-    <div className="h-full w-full bg-white rounded-2xl shadow-sm border border-slate-100 px-4 sm:px-6 py-3 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-x-3 gap-y-1 overflow-hidden">
+    <div className="h-full w-full bg-white rounded-2xl shadow-sm border border-slate-100 px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-x-3 gap-y-2 overflow-hidden">
       <div className="flex items-center justify-between gap-2 sm:contents">
-        <div className="flex flex-col leading-tight min-w-0">
+        <div className="flex flex-col leading-snug min-w-0">
           <span className="text-[10px] sm:text-[11px] uppercase tracking-wide text-slate-400 font-medium">Total Power</span>
           <span className="text-xl sm:text-2xl font-bold text-slate-800 tabular-nums truncate">
             {totalPower > 0 ? <><StaticNumber value={totalPower} /><span className="text-sm sm:text-base font-normal text-slate-400 ml-1">W</span></> : <span className="text-slate-300">--</span>}
@@ -86,13 +86,13 @@ function QuickStatsWidget() {
       </div>
       {/* Mobile: horizontal divider between the total/status row and the 3-chip grid */}
       <div className="h-px bg-slate-200 sm:hidden" />
-      <div className="hidden sm:block h-10 w-px bg-slate-200" />
+      <div className="hidden sm:block h-12 w-px bg-slate-200" />
       {/* Three directional chips: 3-column grid on mobile, inline on sm+ */}
       <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center sm:gap-0 sm:contents">
         <Chip label="PV" value={pv} unit="W" color="text-amber-500" icon={<SunIcon className="w-5 h-5" />} />
-        <div className="hidden sm:block h-10 w-px bg-slate-200" />
+        <div className="hidden sm:block h-12 w-px bg-slate-200" />
         <Directional label="Inverter" value={inverter} unit="W" />
-        <div className="hidden sm:block h-10 w-px bg-slate-200" />
+        <div className="hidden sm:block h-12 w-px bg-slate-200" />
         <Directional label="Battery" value={battery} unit="W" />
       </div>
     </div>
