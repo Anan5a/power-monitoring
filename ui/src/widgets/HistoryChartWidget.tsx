@@ -104,11 +104,10 @@ function HistoryChartWidget({ deviceKey }: Props) {
   const [range, setRange] = useState<HistoryRange>('24h')
   const [metric, setMetric] = useState<HistoryMetric>('power')
   const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(new Set())
+  // Source of truth for the chart: state, not a ref. The build effect writes
+  // here; the live-append effect mutates via setState so React re-renders.
+  const [series, setSeries] = useState<{ points: { t: number; v: Record<string, number> }[]; keys: string[] }>({ points: [], keys: [] })
   const chartRef = useRef<any>(null)
-  const seriesDataRef = useRef<{ points: { t: number; v: Record<string, number> }[]; keys: string[] }>({
-    points: [],
-    keys: [],
-  })
 
   const breadcrumb = useAtomValue(drilldownBreadcrumbAtom)
   const setBreadcrumb = useSetAtom(drilldownBreadcrumbAtom)
@@ -132,15 +131,18 @@ function HistoryChartWidget({ deviceKey }: Props) {
 
   // Build the time series from RPC output
   useEffect(() => {
-    if (loadable.state !== 'hasData') return
+    if (loadable.state !== 'hasData') {
+      setSeries({ points: [], keys: [] })
+      return
+    }
     const data = loadable.data as any[]
     if (data.length === 0) {
-      seriesDataRef.current = { points: [], keys: [] }
+      setSeries({ points: [], keys: [] })
       return
     }
     const keys = extractKeys(data, metric)
     if (keys.length === 0) {
-      seriesDataRef.current = { points: [], keys: [] }
+      setSeries({ points: [], keys: [] })
       return
     }
     const step = data.length > DOWNSAMPLE_TARGET ? Math.ceil(data.length / DOWNSAMPLE_TARGET) : 1
@@ -152,27 +154,19 @@ function HistoryChartWidget({ deviceKey }: Props) {
       for (const k of keys) v[k] = (pt.payload as any)[k] ?? null
       points.push({ t, v })
     }
-    seriesDataRef.current = { points, keys }
+    setSeries({ points, keys })
   }, [loadable.state, loadable.data, metric])
 
-  // Live-append latest sample without re-rendering React
+  // Live-append latest sample, then setSeries re-renders the chart
   useEffect(() => {
     if (!latest) return
     const t = new Date(latest.recorded_at).getTime()
-    const last = seriesDataRef.current.points[seriesDataRef.current.points.length - 1]
+    const last = series.points[series.points.length - 1]
     if (last && t <= last.t) return
-    if (seriesDataRef.current.keys.length === 0) return
+    if (series.keys.length === 0) return
     const v: Record<string, number> = {}
-    for (const k of seriesDataRef.current.keys) v[k] = (latest.payload as any)[k] ?? null
-    seriesDataRef.current.points = [...seriesDataRef.current.points, { t, v }]
-    if (chartRef.current) {
-      const ds = chartRef.current.data.datasets
-      for (let i = 0; i < ds.length; i++) {
-        const key = seriesDataRef.current.keys[i]
-        ds[i].data.push({ x: t, y: v[key] ?? null })
-      }
-      chartRef.current.update('none')
-    }
+    for (const k of series.keys) v[k] = (latest.payload as any)[k] ?? null
+    setSeries(s => ({ ...s, points: [...s.points, { t, v }] }))
   }, [latest])
 
   const onChartClick = useCallback((_e: any, _els: any, chart: any) => {
@@ -180,7 +174,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
     const active = chart.tooltip.getActiveElements()
     if (active.length === 0) return
     const idx = active[0].index
-    const point = seriesDataRef.current.points[idx]
+    const point = series.points[idx]
     if (!point) return
     const bucketMs = range === '24h' ? 3600_000 : range === '7d' ? 86400_000 : range === '30d' ? 86400_000 : 3600_000
     const tISO = new Date(point.t).toISOString()
@@ -195,7 +189,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
 
   // Split datasets by axis: power keys go to the left y axis, soc_pct* goes to the right.
   const chartData = useMemo<ChartData<'line'>>(() => {
-    const { points, keys } = seriesDataRef.current
+    const { points, keys } = series
     return {
       datasets: keys.map((k, i) => {
         const isSoc = k.toLowerCase().startsWith('soc_pct')
@@ -215,7 +209,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
         }
       }),
     }
-  }, [loadable.data, channels, metric, hiddenKeys])
+  }, [series, channels, metric, hiddenKeys])
 
   const showSecondaryAxis = metric === 'power'
 
@@ -293,8 +287,8 @@ function HistoryChartWidget({ deviceKey }: Props) {
   }), [range, metric, setZoom, onChartClick, showSecondaryAxis])
 
   const visibleKeys = useMemo(
-    () => seriesDataRef.current.keys.filter(k => !hiddenKeys.has(k)),
-    [loadable.data, hiddenKeys],
+    () => series.keys.filter(k => !hiddenKeys.has(k)),
+    [series.keys, hiddenKeys],
   )
 
   if (loadable.state === 'loading') {
@@ -340,7 +334,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
         ))}
       </div>
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        {seriesDataRef.current.keys.map((k, i) => {
+        {series.keys.map((k, i) => {
           const active = !hiddenKeys.has(k)
           const color = SERIES_COLORS[i % SERIES_COLORS.length]
           return (
