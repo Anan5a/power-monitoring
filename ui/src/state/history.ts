@@ -105,12 +105,12 @@ function drilldownFetcher(k: DrilldownKey) {
 function reconstructPayload(row: any): Record<string, number> {
   const p: Record<string, number> = {}
   const set = (k: string, v: any) => { if (v != null && typeof v === 'number') p[k] = v }
-  // All keys are normalized to lowercase to match the lowercase keys returned by Supabase
-  // and the lowercase regex in extractKeys.
-  set('ch0_v', row.ch0_v); set('ch0_i', row.ch0_i); set('ch0_p', row.ch0_p)
-  set('ch1_v', row.ch1_v); set('ch1_i', row.ch1_i); set('ch1_p', row.ch1_p)
-  set('ch2_v', row.ch2_v); set('ch2_i', row.ch2_i); set('ch2_p', row.ch2_p)
-  set('ch3_v', row.ch3_v); set('ch3_i', row.ch3_i); set('ch3_p', row.ch3_p)
+  // Uppercase keys for the 1h/6h typed-column path, matching the original
+  // chart's key shape. The 7d/30d RPC returns lowercase keys directly.
+  set('ch0_V', row.ch0_v); set('ch0_I', row.ch0_i); set('ch0_P', row.ch0_p)
+  set('ch1_V', row.ch1_v); set('ch1_I', row.ch1_i); set('ch1_P', row.ch1_p)
+  set('ch2_V', row.ch2_v); set('ch2_I', row.ch2_i); set('ch2_P', row.ch2_p)
+  set('ch3_V', row.ch3_v); set('ch3_I', row.ch3_i); set('ch3_P', row.ch3_p)
   set('pv_power', row.pv_power)
   set('battery_power', row.battery_power)
   set('inverter_power', row.inverter_power)

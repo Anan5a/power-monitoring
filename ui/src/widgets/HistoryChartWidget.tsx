@@ -193,23 +193,31 @@ function HistoryChartWidget({ deviceKey }: Props) {
     ])
   }, [range, setBreadcrumb])
 
+  // Split datasets by axis: power keys go to the left y axis, soc_pct* goes to the right.
   const chartData = useMemo<ChartData<'line'>>(() => {
     const { points, keys } = seriesDataRef.current
     return {
-      datasets: keys.map((k, i) => ({
-        label: keyToLabel(k, channels?.channel_names),
-        data: points.map(p => ({ x: p.t, y: p.v[k] ?? null })),
-        borderColor: SERIES_COLORS[i % SERIES_COLORS.length],
-        backgroundColor: SERIES_COLORS[i % SERIES_COLORS.length] + '40',
-        borderWidth: 2,
-        fill: metric === 'power' ? 'origin' : false,
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        tension: 0.3,
-        hidden: hiddenKeys.has(k),
-      })),
+      datasets: keys.map((k, i) => {
+        const isSoc = k.toLowerCase().startsWith('soc_pct')
+        return {
+          label: keyToLabel(k, channels?.channel_names),
+          data: points.map(p => ({ x: p.t, y: p.v[k] ?? null })),
+          borderColor: SERIES_COLORS[i % SERIES_COLORS.length],
+          backgroundColor: SERIES_COLORS[i % SERIES_COLORS.length] + '40',
+          borderWidth: 2,
+          fill: !isSoc && metric === 'power' ? 'origin' : false,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          tension: 0.3,
+          hidden: hiddenKeys.has(k),
+          yAxisID: isSoc ? 'y1' : 'y',
+          borderDash: isSoc ? [4, 4] : undefined,
+        }
+      }),
     }
   }, [loadable.data, channels, metric, hiddenKeys])
+
+  const showSecondaryAxis = metric === 'power'
 
   const chartOptions = useMemo<ChartOptions<'line'>>(() => ({
     responsive: true,
@@ -223,16 +231,26 @@ function HistoryChartWidget({ deviceKey }: Props) {
       x: {
         type: 'time' as const,
         time: {
-          unit: range === '30d' ? 'day' : 'hour',
+          unit: range === '1h' ? 'hour' : range === '6h' ? 'hour' : range === '24h' ? 'hour' : 'day',
           displayFormats: { hour: 'HH:mm', day: 'MMM d' },
         },
         grid: { color: '#f1f5f9' },
         ticks: { color: '#94a3b8', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
       },
       y: {
+        position: 'left' as const,
         grid: { color: '#f1f5f9' },
         ticks: { color: '#94a3b8' },
+        title: { display: true, text: 'Power (W)', color: '#94a3b8' },
       },
+      y1: showSecondaryAxis ? {
+        position: 'right' as const,
+        grid: { drawOnChartArea: false },
+        ticks: { color: '#a855f7' },
+        min: 0,
+        max: 100,
+        title: { display: true, text: 'SoC (%)', color: '#a855f7' },
+      } : undefined,
     },
     plugins: {
       legend: { display: false },
@@ -248,6 +266,8 @@ function HistoryChartWidget({ deviceKey }: Props) {
           label: (ctx: any) => {
             const v = ctx.parsed.y
             if (v == null) return ''
+            const isSoc = (ctx.dataset.label ?? '').toLowerCase().includes('soc')
+            if (isSoc) return `${ctx.dataset.label}: ${v.toFixed(0)} %`
             const decimals = metric === 'voltage' ? 2 : 1
             return `${ctx.dataset.label}: ${Math.abs(v).toFixed(decimals)} ${UNIT[metric]}`
           },
@@ -270,7 +290,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
         },
       },
     },
-  }), [range, metric, setZoom, onChartClick])
+  }), [range, metric, setZoom, onChartClick, showSecondaryAxis])
 
   const visibleKeys = useMemo(
     () => seriesDataRef.current.keys.filter(k => !hiddenKeys.has(k)),

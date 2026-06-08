@@ -9,11 +9,22 @@ export interface SeriesSelection {
 
 // --- extractKeys (moved from PowerHistoryChart) ---
 
-// Supabase returns columns in lowercase. We compare lowercase, but render labels from canonical forms.
+// Case-insensitive: the 1h/6h path produces uppercase keys (ch0_V) from
+// reconstructPayload, while the 7d/30d RPC returns lowercase keys (ch0_v)
+// directly from Supabase. Both are valid.
 const METRIC_REGEX: Record<HistoryMetric, RegExp> = {
-  power: /^ch\d_p$|^ina226_p$|^ina3221_p\d$|^inverter_power$|^pv_power$|^battery_power$|^dc_load_power$/,
-  voltage: /^ch\d_v$|^ina226_v$|^ina3221_v\d$/,
-  current: /^ch\d_i$|^ina226_i$|^ina3221_i\d$|^inverter_current$/,
+  power: /^ch\d_p$/i,
+  voltage: /^ch\d_v$/i,
+  current: /^ch\d_i$/i,
+}
+// Pre-compiled alternations for the more specific system/INA keys
+const POWER_EXTRA = /^(ina226_p|ina3221_p\d|inverter_power|pv_power|battery_power|dc_load_power)$/i
+const VOLTAGE_EXTRA = /^(ina226_v|ina3221_v\d)$/i
+const CURRENT_EXTRA = /^(ina226_i|ina3221_i\d|inverter_current)$/i
+const EXTRA_REGEX: Record<HistoryMetric, RegExp> = {
+  power: POWER_EXTRA,
+  voltage: VOLTAGE_EXTRA,
+  current: CURRENT_EXTRA,
 }
 
 const SYSTEM_POWER_KEYS = ['pv_power', 'battery_power', 'inverter_power', 'dc_load_power']
@@ -24,7 +35,9 @@ export function extractKeys(data: TelemetryPoint[], metric: HistoryMetric): stri
   for (const pt of data) {
     Object.keys(pt.payload).forEach(k => allKeys.add(k))
   }
-  const regexKeys = Array.from(allKeys).filter(k => METRIC_REGEX[metric].test(k))
+  const regexKeys = Array.from(allKeys).filter(k =>
+    METRIC_REGEX[metric].test(k) || EXTRA_REGEX[metric].test(k),
+  )
   const nonZero = regexKeys.filter(k => data.some(pt => {
     const v = pt.payload[k]
     return v != null && Math.abs(v) > 0.5
