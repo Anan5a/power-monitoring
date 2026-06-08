@@ -282,15 +282,19 @@ function HistoryChartWidget({ deviceKey }: Props) {
           color: '#94a3b8',
         },
       },
-      y1: showSecondaryAxis ? {
+      // Always define y1 to keep the scale registered with Chart.js, but hide
+      // it when not in use. Flipping between defined/undefined triggers the
+      // "Invalid scale configuration for scale: y1" error on tab switch.
+      y1: {
         type: 'linear' as const,
         position: 'right' as const,
+        display: showSecondaryAxis,
         grid: { drawOnChartArea: false },
         ticks: { color: '#a855f7' },
         min: 0,
         max: 100,
-        title: { display: true, text: 'SoC (%)', color: '#a855f7' },
-      } : undefined,
+        title: { display: showSecondaryAxis, text: 'SoC (%)', color: '#a855f7' },
+      },
     },
     plugins: {
       legend: { display: false },
