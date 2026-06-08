@@ -294,6 +294,9 @@ function HistoryChartWidget({ deviceKey }: Props) {
     spanGaps: true,
     interaction: { mode: 'index', intersect: false },
     onClick: onChartClick,
+    layout: {
+      padding: { top: 4, bottom: 0, left: 0, right: 0 },
+    },
     scales: {
       x: {
         type: 'time' as const,
@@ -310,12 +313,14 @@ function HistoryChartWidget({ deviceKey }: Props) {
         grid: { color: '#f1f5f9' },
         ticks: {
           color: '#94a3b8',
+          font: { size: 10 },
           callback: (v: any) => `${v} ${UNIT[metric]}`,
         },
         title: {
           display: true,
           text: `${metric.charAt(0).toUpperCase() + metric.slice(1)} (${UNIT[metric]})`,
           color: '#94a3b8',
+          font: { size: 10 },
         },
       },
       // Always define y1 to keep the scale registered with Chart.js, but hide
@@ -326,10 +331,10 @@ function HistoryChartWidget({ deviceKey }: Props) {
         position: 'right' as const,
         display: showSecondaryAxis,
         grid: { drawOnChartArea: false },
-        ticks: { color: '#a855f7' },
+        ticks: { color: '#a855f7', font: { size: 10 } },
         min: 0,
         max: 100,
-        title: { display: showSecondaryAxis, text: 'SoC (%)', color: '#a855f7' },
+        title: { display: showSecondaryAxis, text: 'SoC (%)', color: '#a855f7', font: { size: 10 } },
       },
     },
     plugins: {
@@ -445,7 +450,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
           )
         })()}
       </div>
-      <div className="relative" style={{ height: 480 }}>
+      <div className="relative h-[60vh] sm:h-[480px]">
         <Line
           ref={chartRef as any}
           data={chartData}
