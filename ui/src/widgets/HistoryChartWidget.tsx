@@ -23,7 +23,7 @@ import {
   type HistoryRange,
   type HistoryMetric,
 } from '../state/history'
-import { extractKeys, keyToLabel, suggestDrilldown, bucketToWindow, buildChannelLabelMap, withSystemCurrents } from '../state/services/historyService'
+import { extractKeys, keyToLabel, suggestDrilldown, bucketToWindow, buildChannelLabelMap, withSystemCurrents, SYSTEM_CURRENT_KEYS } from '../state/services/historyService'
 import {
   zoomRangeAtom,
   drilldownBreadcrumbAtom,
@@ -178,7 +178,14 @@ function HistoryChartWidget({ deviceKey }: Props) {
       return
     }
     const channelGroups = channels?.channel_groups
-    const keys = extractKeys(data, metric, channelGroups)
+    let keys = extractKeys(data, metric, channelGroups)
+    // On the Current tab, surface only the four system currents. The raw
+    // ch*_I / ina226_i series are aggregated into pv_current,
+    // battery_current, inverter_current, dc_load_current so showing them
+    // too would double the lines and double the legend.
+    if (metric === 'current') {
+      keys = keys.filter(k => SYSTEM_CURRENT_KEYS.includes(k))
+    }
     if (keys.length === 0) {
       setSeries({ points: [], keys: [] })
       return

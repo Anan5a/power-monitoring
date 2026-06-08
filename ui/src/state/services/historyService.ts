@@ -28,7 +28,7 @@ const EXTRA_REGEX: Record<HistoryMetric, RegExp> = {
 }
 
 const SYSTEM_POWER_KEYS = ['pv_power', 'battery_power', 'inverter_power', 'dc_load_power']
-const SYSTEM_CURRENT_KEYS = ['pv_current', 'battery_current', 'inverter_current', 'dc_load_current']
+export const SYSTEM_CURRENT_KEYS = ['pv_current', 'battery_current', 'inverter_current', 'dc_load_current']
 // Channel-to-system mapping for current, derived the same way the trigger
 // derives system power. Currents are always magnitudes (signs live in power),
 // so each system current is a sum of |ch_i| across the channels in its group.
