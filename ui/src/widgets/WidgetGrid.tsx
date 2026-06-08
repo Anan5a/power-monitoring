@@ -19,8 +19,9 @@ function colSpanClass(colSpan: number): string {
   return 'col-span-12 sm:col-span-6 md:col-span-4 lg:col-span-3'
 }
 
-function widgetStyle(rowSpan: number): React.CSSProperties {
-  // On mobile, let content drive height; on larger screens, honor the rowSpan.
+function widgetStyle(): React.CSSProperties {
+  // On mobile, let content drive height; on larger screens, the rowSpan
+  // values are interpreted via auto-rows-min in the parent grid.
   return { minHeight: '80px' }
 }
 
@@ -35,7 +36,7 @@ export default function WidgetGrid() {
         <div
           key={entry.id}
           className={colSpanClass(entry.gridArea.colSpan)}
-          style={widgetStyle(entry.gridArea.rowSpan)}
+          style={widgetStyle()}
         >
           <WidgetHost entry={entry} />
         </div>
