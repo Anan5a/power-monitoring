@@ -1,12 +1,55 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { historyAtomFamily, drilldownLoadableAtom, type HistoryRange, type HistoryMetric } from '../state/history'
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  TimeScale,
+  PointElement,
+  LineElement,
+  LineController,
+  Filler,
+  Tooltip,
+  Legend as ChartLegend,
+  type ChartOptions,
+  type ChartData,
+  type Plugin,
+} from 'chart.js'
+import 'chartjs-adapter-date-fns'
+import zoomPlugin from 'chartjs-plugin-zoom'
+import { Line } from 'react-chartjs-2'
+import {
+  historyAtomFamily,
+  drilldownLoadableAtom,
+  type HistoryRange,
+  type HistoryMetric,
+} from '../state/history'
 import { extractKeys, keyToLabel, suggestDrilldown, bucketToWindow } from '../state/services/historyService'
-import { zoomRangeAtom, drilldownBreadcrumbAtom, hoveredPointAtom, deviceChannelsAtomFamily, latestAtom, refreshTriggerAtom } from '../state/atoms'
+import {
+  zoomRangeAtom,
+  drilldownBreadcrumbAtom,
+  hoveredPointAtom,
+  deviceChannelsAtomFamily,
+  latestAtom,
+  refreshTriggerAtom,
+} from '../state/atoms'
 import HistoryTooltip from './HistoryTooltip'
 
 // Re-export for tests
 export { extractKeys } from '../state/services/historyService'
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  TimeScale,
+  PointElement,
+  LineElement,
+  LineController,
+  Filler,
+  Tooltip,
+  ChartLegend,
+  zoomPlugin,
+)
 
 const DOWNSAMPLE_TARGET = 1500
 
@@ -19,13 +62,50 @@ const SERIES_COLORS = [
   '#ec4899', '#f97316', '#84cc16', '#10b981', '#ef4444',
 ]
 
+const UNIT: Record<HistoryMetric, string> = { power: 'W', voltage: 'V', current: 'A' }
+
+function fmtTick(iso: string, range: HistoryRange): string {
+  const d = new Date(iso)
+  if (range === '1h' || range === '6h' || range === '24h') {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+    ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+const hoverSyncPlugin: Plugin<'line'> = {
+  id: 'hoverSync',
+  afterEvent(chart, _args, opts: { setHovered: (p: { time: string; values: Record<string, number> } | null) => void }) {
+    const active = chart.tooltip?.getActiveElements()
+    if (!active || active.length === 0) {
+      opts.setHovered(null)
+      return
+    }
+    const idx = active[0].index
+    const ds = chart.data.datasets
+    const values: Record<string, number> = {}
+    for (let i = 0; i < ds.length; i++) {
+      const v = (ds[i].data as any[])[idx]
+      const label = ds[i].label
+      if (typeof v === 'number' && label) values[label] = v
+    }
+    const t = (chart.data.datasets[0].data as any[])[idx]
+    opts.setHovered({
+      time: typeof t === 'number' ? new Date(t).toLocaleString() : String(t),
+      values,
+    })
+  },
+}
+
 function HistoryChartWidget({ deviceKey }: Props) {
   const [range, setRange] = useState<HistoryRange>('24h')
   const [metric, setMetric] = useState<HistoryMetric>('power')
-  const [visibleLines, setVisibleLines] = useState<Set<string>>(new Set())
-  const containerRef = useRef<HTMLDivElement>(null)
-  const plotRef = useRef<any>(null)
-  const seriesDataRef = useRef<{ xs: number[]; ysList: number[][]; keys: string[] }>({ xs: [], ysList: [], keys: [] })
+  const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(new Set())
+  const chartRef = useRef<any>(null)
+  const seriesDataRef = useRef<{ points: { t: number; v: Record<string, number> }[]; keys: string[] }>({
+    points: [],
+    keys: [],
+  })
 
   const breadcrumb = useAtomValue(drilldownBreadcrumbAtom)
   const setBreadcrumb = useSetAtom(drilldownBreadcrumbAtom)
@@ -37,150 +117,160 @@ function HistoryChartWidget({ deviceKey }: Props) {
   const triggerRefresh = useSetAtom(refreshTriggerAtom)
 
   const breadcrumbRef = useRef(breadcrumb)
-  const channelsRef = useRef(channels)
   useEffect(() => { breadcrumbRef.current = breadcrumb })
-  useEffect(() => { channelsRef.current = channels })
 
-  // Decide which loadable to use
   const drilldown = breadcrumb.length > 0 ? breadcrumb[breadcrumb.length - 1] : null
   const loadable: any = drilldown
     ? useAtomValue(drilldownLoadableAtom({ deviceKey, tStart: drilldown.tStart, tEnd: drilldown.tEnd, metric }))
     : useAtomValue(historyAtomFamily({ deviceKey, range, metric }))
 
-  // Build plot data from loadable
-  useEffect(() => {
-    if (loadable.state !== 'hasData' || !containerRef.current) return
-    const data = loadable.data
-    if (data.length === 0) return
-    const keys = extractKeys(data, metric)
-    if (keys.length === 0) return
-
-    // Downsample to 1500 points
-    const step = data.length > DOWNSAMPLE_TARGET ? Math.ceil(data.length / DOWNSAMPLE_TARGET) : 1
-    const xs: number[] = []
-    const ysList: number[][] = keys.map(() => [])
-    for (let i = 0; i < data.length; i += step) {
-      const pt = data[i]
-      xs.push(new Date(pt.recorded_at).getTime() / 1000)
-      keys.forEach((k, ki) => {
-        ysList[ki].push((pt.payload as any)[k] ?? null)
-      })
-    }
-    seriesDataRef.current = { xs, ysList, keys }
-    setVisibleLines(prev => prev.size === 0 ? new Set(keys) : prev)
-  }, [loadable.state, metric])
-
-  // Init uPlot
+  // Build the time series from RPC output
   useEffect(() => {
     if (loadable.state !== 'hasData') return
-    if (seriesDataRef.current.xs.length === 0) return
-    if (plotRef.current) return
-    if (!containerRef.current) return
-
-    let cancelled = false
-    import('uplot').then((mod) => {
-      if (cancelled || !containerRef.current) return
-      const uPlot = mod.default
-      const { xs, ysList, keys } = seriesDataRef.current
-      const visibleKeys = keys.filter(k => visibleLines.has(k) || visibleLines.size === 0)
-      const series: any[] = [{}]
-      visibleKeys.forEach((k, i) => {
-        series.push({
-          label: keyToLabel(k, channelsRef.current?.channel_names),
-          stroke: SERIES_COLORS[i % SERIES_COLORS.length],
-          width: 2,
-          fill: SERIES_COLORS[i % SERIES_COLORS.length] + '40',
-          points: { show: false },
-        })
-      })
-      const fmtDate = (_u: any, splits: number[], _space: number) => {
-        return splits.map(s => {
-          const d = new Date(s * 1000)
-          if (range === '1h' || range === '6h' || range === '24h') {
-            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          }
-          return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
-            ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        })
-      }
-      const opts: any = {
-        width: containerRef.current.clientWidth,
-        height: 480,
-        series,
-        scales: { x: { time: true } },
-        axes: [
-          { stroke: '#94a3b8', grid: { stroke: '#f1f5f9' }, values: fmtDate },
-          { stroke: '#94a3b8', grid: { stroke: '#f1f5f9' } },
-        ],
-        cursor: {
-          drag: { x: true, y: false, setScale: true },
-          sync: { key: 'history' },
-          focus: { prox: 16 },
-        },
-        hooks: {
-          setCursor: [
-            (u: any) => {
-              const idx = u.cursor.idx
-              if (idx == null) { setHovered(null); return }
-              const t = new Date(u.data[0][idx] * 1000).toLocaleString()
-              const values: Record<string, number> = {}
-              u.series.forEach((s: any, i: number) => {
-                if (i === 0) return
-                const v = u.data[i]?.[idx]
-                if (typeof v === 'number') values[s.label] = v
-              })
-              setHovered({ time: t, values })
-            },
-          ],
-          setScale: [
-            (u: any, scaleKey: string) => {
-              if (scaleKey === 'x') {
-                setZoom({ start: u.scales.x.min * 1000, end: u.scales.x.max * 1000 })
-              }
-            },
-          ],
-        },
-      }
-      const data: any[] = [xs]
-      visibleKeys.forEach((_, i) => data.push(ysList[i]))
-      const plot = new uPlot(opts, data, containerRef.current)
-      // Double-click to reset zoom
-      containerRef.current!.addEventListener('dblclick', () => {
-        plot.setScale('x', { min: xs[0], max: xs[xs.length - 1] })
-        setZoom(null)
-      })
-      // Click on data point to drill
-      containerRef.current!.addEventListener('click', () => {
-        const idx = plot.cursor.idx
-        if (idx == null) return
-        const t = new Date(xs[idx] * 1000)
-        const bucketMs = range === '24h' ? 3600_000 : range === '7d' ? 86400_000 : range === '30d' ? 86400_000 : 3600_000
-        const { tStart, tEnd } = bucketToWindow(t.toISOString(), bucketMs)
-        const drilldownRange = suggestDrilldown(range, bucketMs)
-        setBreadcrumb([...breadcrumbRef.current, { rangeLabel: `${range} → ${t.toLocaleDateString()}`, tStart: new Date(tStart).getTime(), tEnd: new Date(tEnd).getTime(), fromRange: drilldownRange }])
-      })
-      plotRef.current = plot
-    })
-    return () => {
-      cancelled = true
-      if (plotRef.current) { plotRef.current.destroy(); plotRef.current = null }
+    const data = loadable.data as any[]
+    if (data.length === 0) {
+      seriesDataRef.current = { points: [], keys: [] }
+      return
     }
-  }, [loadable.state, range, metric, visibleLines.size, visibleLines])
+    const keys = extractKeys(data, metric)
+    if (keys.length === 0) {
+      seriesDataRef.current = { points: [], keys: [] }
+      return
+    }
+    const step = data.length > DOWNSAMPLE_TARGET ? Math.ceil(data.length / DOWNSAMPLE_TARGET) : 1
+    const points: { t: number; v: Record<string, number> }[] = []
+    for (let i = 0; i < data.length; i += step) {
+      const pt = data[i]
+      const t = new Date(pt.recorded_at).getTime()
+      const v: Record<string, number> = {}
+      for (const k of keys) v[k] = (pt.payload as any)[k] ?? null
+      points.push({ t, v })
+    }
+    seriesDataRef.current = { points, keys }
+  }, [loadable.state, loadable.data, metric])
 
-  // Push live data point into uPlot on every latest update
+  // Live-append latest sample without re-rendering React
   useEffect(() => {
-    if (!plotRef.current || !latest) return
-    const t = new Date(latest.recorded_at).getTime() / 1000
-    if (t <= seriesDataRef.current.xs[seriesDataRef.current.xs.length - 1]) return
-    const newXs = [...seriesDataRef.current.xs, t]
-    const newYsList = seriesDataRef.current.ysList.map(ys => {
-      const idx = seriesDataRef.current.ysList.indexOf(ys)
-      const key = seriesDataRef.current.keys[idx]
-      return [...ys, (latest.payload as any)[key] ?? null]
-    })
-    seriesDataRef.current = { xs: newXs, ysList: newYsList, keys: seriesDataRef.current.keys }
-    plotRef.current.setData([newXs, ...newYsList])
+    if (!latest) return
+    const t = new Date(latest.recorded_at).getTime()
+    const last = seriesDataRef.current.points[seriesDataRef.current.points.length - 1]
+    if (last && t <= last.t) return
+    if (seriesDataRef.current.keys.length === 0) return
+    const v: Record<string, number> = {}
+    for (const k of seriesDataRef.current.keys) v[k] = (latest.payload as any)[k] ?? null
+    seriesDataRef.current.points = [...seriesDataRef.current.points, { t, v }]
+    if (chartRef.current) {
+      const ds = chartRef.current.data.datasets
+      for (let i = 0; i < ds.length; i++) {
+        const key = seriesDataRef.current.keys[i]
+        ds[i].data.push({ x: t, y: v[key] ?? null })
+      }
+      chartRef.current.update('none')
+    }
   }, [latest])
+
+  const onChartClick = useCallback((_e: any, _els: any, chart: any) => {
+    if (!chart?.tooltip) return
+    const active = chart.tooltip.getActiveElements()
+    if (active.length === 0) return
+    const idx = active[0].index
+    const point = seriesDataRef.current.points[idx]
+    if (!point) return
+    const bucketMs = range === '24h' ? 3600_000 : range === '7d' ? 86400_000 : range === '30d' ? 86400_000 : 3600_000
+    const tISO = new Date(point.t).toISOString()
+    const { tStart, tEnd } = bucketToWindow(tISO, bucketMs)
+    const drilldownRange = suggestDrilldown(range, bucketMs)
+    const dateLabel = new Date(point.t).toLocaleDateString()
+    setBreadcrumb([
+      ...breadcrumbRef.current,
+      { rangeLabel: `${range} → ${dateLabel}`, tStart: new Date(tStart).getTime(), tEnd: new Date(tEnd).getTime(), fromRange: drilldownRange },
+    ])
+  }, [range, setBreadcrumb])
+
+  const chartData = useMemo<ChartData<'line'>>(() => {
+    const { points, keys } = seriesDataRef.current
+    return {
+      datasets: keys.map((k, i) => ({
+        label: keyToLabel(k, channels?.channel_names),
+        data: points.map(p => ({ x: p.t, y: p.v[k] ?? null })),
+        borderColor: SERIES_COLORS[i % SERIES_COLORS.length],
+        backgroundColor: SERIES_COLORS[i % SERIES_COLORS.length] + '40',
+        borderWidth: 2,
+        fill: metric === 'power' ? 'origin' : false,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        tension: 0.3,
+        hidden: hiddenKeys.has(k),
+      })),
+    }
+  }, [loadable.data, channels, metric, hiddenKeys])
+
+  const chartOptions = useMemo<ChartOptions<'line'>>(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    parsing: false,
+    spanGaps: true,
+    interaction: { mode: 'index', intersect: false },
+    onClick: onChartClick,
+    scales: {
+      x: {
+        type: 'time' as const,
+        time: {
+          unit: range === '30d' ? 'day' : 'hour',
+          displayFormats: { hour: 'HH:mm', day: 'MMM d' },
+        },
+        grid: { color: '#f1f5f9' },
+        ticks: { color: '#94a3b8', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+      },
+      y: {
+        grid: { color: '#f1f5f9' },
+        ticks: { color: '#94a3b8' },
+      },
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: 'rgb(30 41 59)',
+        titleColor: '#cbd5e1',
+        bodyColor: '#f1f5f9',
+        padding: 10,
+        cornerRadius: 8,
+        displayColors: false,
+        callbacks: {
+          title: (items: any[]) => items.length ? fmtTick(new Date(items[0].parsed.x).toISOString(), range) : '',
+          label: (ctx: any) => {
+            const v = ctx.parsed.y
+            if (v == null) return null
+            const decimals = metric === 'voltage' ? 2 : 1
+            return `${ctx.dataset.label}: ${Math.abs(v).toFixed(decimals)} ${UNIT[metric]}`
+          },
+        },
+      },
+      zoom: {
+        pan: { enabled: true, mode: 'x' as const },
+        zoom: {
+          wheel: { enabled: true },
+          drag: { enabled: true, backgroundColor: 'rgba(59, 130, 246, 0.1)' },
+          mode: 'x' as const,
+          onZoomComplete: ({ chart }: any) => {
+            const xScale = chart.scales.x
+            setZoom({ start: xScale.min, end: xScale.max })
+          },
+          onPanComplete: ({ chart }: any) => {
+            const xScale = chart.scales.x
+            setZoom({ start: xScale.min, end: xScale.max })
+          },
+        },
+      },
+    },
+    hoverSync: { setHovered },
+  } as any), [range, metric, setZoom, setHovered, onChartClick])
+
+  const visibleKeys = useMemo(
+    () => seriesDataRef.current.keys.filter(k => !hiddenKeys.has(k)),
+    [loadable.data, hiddenKeys],
+  )
 
   if (loadable.state === 'loading') {
     return <div className="h-full w-full bg-slate-50 animate-pulse rounded-2xl" />
@@ -188,7 +278,6 @@ function HistoryChartWidget({ deviceKey }: Props) {
   if (loadable.state === 'hasError') {
     return <div className="h-full w-full bg-red-50 text-red-600 rounded-2xl p-4">Failed to load: {String((loadable as any).error)}</div>
   }
-  const visibleKeys = seriesDataRef.current.keys.filter(k => visibleLines.has(k))
 
   return (
     <div className="h-full w-full bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
@@ -196,7 +285,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
         <h3 className="font-bold text-slate-800 text-sm">History</h3>
         <div className="flex items-center gap-1 flex-wrap">
           {(['1h', '6h', '24h', '7d', '30d'] as HistoryRange[]).map(r => (
-            <button key={r} onClick={() => { setRange(r); setBreadcrumb([]); setZoom(null) }}
+            <button key={r} onClick={() => { setRange(r); setBreadcrumb([]); setZoom(null); setHiddenKeys(new Set()) }}
               className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors duration-150 ${range === r ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
               {r}
             </button>
@@ -209,7 +298,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
             </div>
           )}
           {zoom && (
-            <button onClick={() => { setZoom(null); if (plotRef.current && seriesDataRef.current.xs.length > 0) plotRef.current.setScale('x', { min: seriesDataRef.current.xs[0], max: seriesDataRef.current.xs[seriesDataRef.current.xs.length - 1] }) }}
+            <button onClick={() => { setZoom(null); if (chartRef.current) chartRef.current.resetZoom() }}
               className="ml-2 px-2 py-0.5 rounded bg-slate-100 text-slate-500 text-[11px]">
               Reset zoom
             </button>
@@ -227,13 +316,13 @@ function HistoryChartWidget({ deviceKey }: Props) {
       </div>
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         {seriesDataRef.current.keys.map((k, i) => {
-          const active = visibleLines.has(k) || visibleLines.size === 0
+          const active = !hiddenKeys.has(k)
           const color = SERIES_COLORS[i % SERIES_COLORS.length]
           return (
             <button key={k} onClick={() => {
-              const next = new Set(visibleLines)
+              const next = new Set(hiddenKeys)
               if (next.has(k)) next.delete(k); else next.add(k)
-              setVisibleLines(next)
+              setHiddenKeys(next)
             }}
               className={`flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-full border transition-all duration-150 ${active ? 'border-transparent shadow-sm' : 'border-slate-200 text-slate-400 opacity-60'}`}
               style={active ? { backgroundColor: color + '18', borderColor: color + '40' } : {}}>
@@ -243,8 +332,13 @@ function HistoryChartWidget({ deviceKey }: Props) {
           )
         })}
       </div>
-      <div className="relative">
-        <div ref={containerRef} />
+      <div className="relative" style={{ height: 480 }}>
+        <Line
+          ref={chartRef as any}
+          data={chartData}
+          options={chartOptions}
+          plugins={[hoverSyncPlugin]}
+        />
         <HistoryTooltip visibleKeys={visibleKeys} metric={metric} channelNames={channels?.channel_names} />
       </div>
     </div>
