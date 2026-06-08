@@ -36,6 +36,11 @@ function HistoryChartWidget({ deviceKey }: Props) {
   const latest = useAtomValue(latestAtom)
   const triggerRefresh = useSetAtom(refreshTriggerAtom)
 
+  const breadcrumbRef = useRef(breadcrumb)
+  const channelsRef = useRef(channels)
+  useEffect(() => { breadcrumbRef.current = breadcrumb })
+  useEffect(() => { channelsRef.current = channels })
+
   // Decide which loadable to use
   const drilldown = breadcrumb.length > 0 ? breadcrumb[breadcrumb.length - 1] : null
   const loadable = drilldown
@@ -63,7 +68,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
     }
     seriesDataRef.current = { xs, ysList, keys }
     setVisibleLines(prev => prev.size === 0 ? new Set(keys) : prev)
-  }, [loadable.state, (loadable as any).data, metric])
+  }, [loadable.state, metric])
 
   // Init uPlot
   useEffect(() => {
@@ -81,7 +86,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
       const series: any[] = [{}]
       visibleKeys.forEach((k, i) => {
         series.push({
-          label: keyToLabel(k, channels?.channel_names),
+          label: keyToLabel(k, channelsRef.current?.channel_names),
           stroke: SERIES_COLORS[i % SERIES_COLORS.length],
           width: 2,
           fill: SERIES_COLORS[i % SERIES_COLORS.length] + '40',
@@ -142,7 +147,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
         const bucketMs = range === '24h' ? 3600_000 : range === '7d' ? 86400_000 : range === '30d' ? 86400_000 : 3600_000
         const { tStart, tEnd } = bucketToWindow(t.toISOString(), bucketMs)
         const drilldownRange = suggestDrilldown(range, bucketMs)
-        setBreadcrumb([...breadcrumb, { rangeLabel: `${range} → ${t.toLocaleDateString()}`, tStart: new Date(tStart).getTime(), tEnd: new Date(tEnd).getTime(), fromRange: drilldownRange }])
+        setBreadcrumb([...breadcrumbRef.current, { rangeLabel: `${range} → ${t.toLocaleDateString()}`, tStart: new Date(tStart).getTime(), tEnd: new Date(tEnd).getTime(), fromRange: drilldownRange }])
       })
       plotRef.current = plot
     })
@@ -150,7 +155,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
       cancelled = true
       if (plotRef.current) { plotRef.current.destroy(); plotRef.current = null }
     }
-  }, [loadable.state, range, metric, visibleLines, channels, breadcrumb])
+  }, [loadable.state, range, metric, visibleLines.size, visibleLines])
 
   // Push live data point into uPlot on every latest update
   useEffect(() => {
