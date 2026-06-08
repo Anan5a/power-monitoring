@@ -403,7 +403,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
       </div>
       <div className="flex items-center gap-1.5 mb-3">
         {(['power', 'voltage', 'current'] as HistoryMetric[]).map(m => (
-          <button key={m} onClick={() => setMetric(m)}
+          <button key={m} onClick={() => { setMetric(m); setHiddenKeys(new Set()) }}
             className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors duration-150 ${metric === m ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-sm' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
             {m.charAt(0).toUpperCase() + m.slice(1)}
           </button>
@@ -426,6 +426,17 @@ function HistoryChartWidget({ deviceKey }: Props) {
             </button>
           )
         })}
+        {series.keys.length > 0 && (() => {
+          const allHidden = hiddenKeys.size === series.keys.length
+          return (
+            <button
+              onClick={() => setHiddenKeys(allHidden ? new Set() : new Set(series.keys))}
+              className="ml-auto px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-500 hover:bg-slate-200 transition-colors duration-150"
+            >
+              {allHidden ? 'Show all' : 'Hide all'}
+            </button>
+          )
+        })()}
       </div>
       <div className="relative" style={{ height: 480 }}>
         <Line
