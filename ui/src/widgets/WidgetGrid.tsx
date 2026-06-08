@@ -19,9 +19,9 @@ function colSpanClass(colSpan: number): string {
   return 'col-span-12 sm:col-span-6 md:col-span-4 lg:col-span-3'
 }
 
-function rowSpanStyle(rowSpan: number): React.CSSProperties {
-  // min height = rowSpan * 80px + (rowSpan-1)*16px (gap)
-  return { minHeight: `calc(${rowSpan} * 80px + (${rowSpan} - 1) * 16px)` }
+function widgetStyle(rowSpan: number): React.CSSProperties {
+  // On mobile, let content drive height; on larger screens, honor the rowSpan.
+  return { minHeight: '80px' }
 }
 
 export default function WidgetGrid() {
@@ -30,12 +30,12 @@ export default function WidgetGrid() {
   const doc = saved ?? fallback
 
   return (
-    <div className="grid grid-cols-12 gap-4">
+    <div className="grid grid-cols-12 gap-4 auto-rows-min">
       {doc.entries.map(entry => (
         <div
           key={entry.id}
           className={colSpanClass(entry.gridArea.colSpan)}
-          style={rowSpanStyle(entry.gridArea.rowSpan)}
+          style={widgetStyle(entry.gridArea.rowSpan)}
         >
           <WidgetHost entry={entry} />
         </div>
