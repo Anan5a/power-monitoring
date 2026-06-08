@@ -234,8 +234,15 @@ function HistoryChartWidget({ deviceKey }: Props) {
       y: {
         position: 'left' as const,
         grid: { color: '#f1f5f9' },
-        ticks: { color: '#94a3b8' },
-        title: { display: true, text: 'Power (W)', color: '#94a3b8' },
+        ticks: {
+          color: '#94a3b8',
+          callback: (v: any) => `${v} ${UNIT[metric]}`,
+        },
+        title: {
+          display: true,
+          text: `${metric.charAt(0).toUpperCase() + metric.slice(1)} (${UNIT[metric]})`,
+          color: '#94a3b8',
+        },
       },
       y1: showSecondaryAxis ? {
         position: 'right' as const,
