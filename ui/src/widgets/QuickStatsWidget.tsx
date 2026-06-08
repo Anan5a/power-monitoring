@@ -84,6 +84,8 @@ function QuickStatsWidget() {
           <span className={`text-xs font-semibold ${style.text}`}>{style.label}</span>
         </div>
       </div>
+      {/* Mobile: horizontal divider between the total/status row and the 3-chip grid */}
+      <div className="h-px bg-slate-200 sm:hidden" />
       <div className="hidden sm:block h-10 w-px bg-slate-200" />
       {/* Three directional chips: 3-column grid on mobile, inline on sm+ */}
       <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center sm:gap-0 sm:contents">

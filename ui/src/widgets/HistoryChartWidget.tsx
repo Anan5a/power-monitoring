@@ -387,7 +387,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
   }
 
   return (
-    <div className="h-full w-full bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
+    <div className="h-full w-full bg-white rounded-2xl shadow-sm border border-slate-100 p-2 sm:p-4">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <h3 className="font-bold text-slate-800 text-sm">History</h3>
         <div className="flex items-center gap-1 flex-wrap">
