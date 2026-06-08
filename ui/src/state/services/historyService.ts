@@ -89,9 +89,11 @@ function vcName(
   return `VC${idx}`
 }
 
-// Build a map of channel index → friendly label from channel_groups.
-// The first channel in a group gets the bare name; subsequent ones get a
-// numeric suffix. If a channel belongs to multiple groups, the first one wins.
+// Map of channel index → friendly label from channel_groups.
+// Priority: explicit `name` from the group (e.g. "PV Voltage") wins, then the
+// icon-derived base label. When two groups share an icon (e.g. icon=0 = PV
+// split across ch0 and ch1), their distinct names keep the legend readable;
+// if a group has no name we fall back to "PV", "PV 1", "PV 2" numbering.
 const GROUP_ICON_LABELS: Record<number, string> = {
   0: 'PV',
   1: 'Battery',
@@ -102,16 +104,38 @@ const GROUP_ICON_LABELS: Record<number, string> = {
 export function buildChannelLabelMap(channelGroups: ChannelGroup[] | undefined | null): Map<number, string> {
   const map = new Map<number, string>()
   if (!channelGroups) return map
+
+  // First pass: count how many groups share each icon, so we can disambiguate
+  // unnamed groups with a numeric suffix ("PV 1", "PV 2").
+  const iconCounts: Record<number, number> = {}
+  for (const g of channelGroups) {
+    iconCounts[g.icon] = (iconCounts[g.icon] ?? 0) + 1
+  }
+  const iconSeen: Record<number, number> = {}
+
   for (const group of channelGroups) {
     const baseLabel = GROUP_ICON_LABELS[group.icon] ?? `Group ${group.name ?? group.icon}`
+    // Prefer the user-supplied name when it looks like a real label.
+    const explicitName = (group.name ?? '').trim()
+    const isPlaceholder = /^ch\d+\s*[_ ]?\s*(?:V|P|I|v|p|i)$/i.test(explicitName) || explicitName === ''
     const memberChannels: number[] = []
     for (let ch = 0; ch < 4; ch++) {
       if (group.channel_mask & (1 << ch)) memberChannels.push(ch)
     }
+    // Numbering within a single group: "PV 1", "PV 2" when one group has >1 ch.
+    // Across multiple groups sharing an icon, number unnamed ones so they
+    // don't collide: "PV", "PV 2", "PV 3"...
     memberChannels.forEach((ch, i) => {
-      if (!map.has(ch)) {
-        map.set(ch, memberChannels.length > 1 ? `${baseLabel} ${i + 1}` : baseLabel)
+      if (map.has(ch)) return
+      let label: string
+      if (!isPlaceholder) {
+        label = memberChannels.length > 1 ? `${explicitName} ${i + 1}` : explicitName
+      } else {
+        iconSeen[group.icon] = (iconSeen[group.icon] ?? 0) + 1
+        const idx = iconSeen[group.icon]
+        label = iconCounts[group.icon] > 1 ? `${baseLabel} ${idx}` : baseLabel
       }
+      map.set(ch, label)
     })
   }
   return map
@@ -136,7 +160,7 @@ export function keyToLabel(
     const m2m: Record<string, string> = { p: 'P', v: 'V', i: 'I' }
     return `${vcName(channelNames, parseInt(ina[2]), groupLabelByChannel)} ${m2m[ina[1]]}`
   }
-  const ch = k.match(/^ch(\d)_([pvi])$/)
+  const ch = k.match(/^ch(\d)_([pvi])$/i)
   if (ch) return `${vcName(channelNames, parseInt(ch[1]), groupLabelByChannel)} ${ch[2].toUpperCase()}`
   return k
 }
