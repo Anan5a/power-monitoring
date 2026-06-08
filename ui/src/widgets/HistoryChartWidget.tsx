@@ -215,6 +215,26 @@ function HistoryChartWidget({ deviceKey }: Props) {
     setSeries(s => ({ ...s, points: [...s.points, { t, v }] }))
   }, [latest])
 
+  // Re-apply the saved zoom range whenever the underlying data changes.
+  // Without this, new data (live-append, metric switch, range change) resets
+  // the x-axis to the full extent and discards the user's current view.
+  useEffect(() => {
+    if (!zoom || !chartRef.current) return
+    const chart = chartRef.current
+    const apply = () => {
+      const xScale = chart.scales?.x
+      if (!xScale) return
+      // Only re-apply if the saved range is still within the new data extent.
+      const min = Math.max(zoom.start, xScale.min)
+      const max = Math.min(zoom.end, xScale.max)
+      if (min >= max) return
+      chart.zoomScale('x', { min, max }, 'none')
+    }
+    // The chart may not have re-rendered the new data yet; defer one frame.
+    const id = requestAnimationFrame(apply)
+    return () => cancelAnimationFrame(id)
+  }, [series, zoom])
+
   const onChartClick = useCallback((_e: any, _els: any, chart: any) => {
     if (!chart?.tooltip) return
     const active = chart.tooltip.getActiveElements()
@@ -245,7 +265,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
           borderColor: colorForKey(k, metric, i),
           backgroundColor: colorForKey(k, metric, i) + '40',
           borderWidth: 2,
-          fill: !isSoc && metric === 'power' ? 'origin' : false,
+          fill: !isSoc && (metric === 'power' || metric === 'current') ? 'origin' : false,
           pointRadius: 0,
           pointHoverRadius: 4,
           tension: 0.3,
@@ -414,7 +434,6 @@ function HistoryChartWidget({ deviceKey }: Props) {
           options={chartOptions}
           plugins={[hoverSyncPlugin]}
         />
-          // Tooltip rendered by Chart.js; see chartOptions.plugins.tooltip.
       </div>
     </div>
   )

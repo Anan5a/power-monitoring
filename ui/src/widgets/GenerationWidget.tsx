@@ -1,6 +1,16 @@
-import { memo } from 'react'
+import { memo, useMemo } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { SunIcon } from '@heroicons/react/24/outline'
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Tooltip,
+  type ChartOptions,
+  type ChartData,
+} from 'chart.js'
+import { Bar } from 'react-chartjs-2'
 import {
   generationDataAtom,
   generationLoadingAtom,
@@ -8,6 +18,8 @@ import {
   selectedDeviceAtom,
   type GenerationRange,
 } from '../state/atoms'
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip)
 
 const RANGE_OPTIONS: { value: GenerationRange; label: string }[] = [
   { value: 'today', label: 'Today' },
@@ -23,6 +35,55 @@ function GenerationWidget() {
   const setRange = useSetAtom(generationRangeAtom)
   const device = useAtomValue(selectedDeviceAtom)
 
+  const chartData = useMemo<ChartData<'bar'>>(() => {
+    const hourly = data?.hourly ?? []
+    return {
+      labels: hourly.map(h => h.hour),
+      datasets: [{
+        data: hourly.map(h => h.value),
+        backgroundColor: hourly.map(h => h.projected ? 'rgba(251, 191, 36, 0.55)' : '#f59e0b'),
+        borderRadius: 2,
+        borderSkipped: false,
+        barPercentage: 0.92,
+        categoryPercentage: 0.95,
+      }],
+    }
+  }, [data?.hourly])
+
+  const chartOptions = useMemo<ChartOptions<'bar'>>(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: 'rgb(30 41 59)',
+        titleColor: '#cbd5e1',
+        bodyColor: '#f1f5f9',
+        padding: 8,
+        cornerRadius: 6,
+        displayColors: false,
+        callbacks: {
+          label: (ctx: any) => {
+            const v = ctx.parsed.y
+            const proj = data?.hourly?.[ctx.dataIndex]?.projected
+            return `${v.toFixed(3)} kWh${proj ? ' (partial)' : ''}`
+          },
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: { display: false },
+        ticks: { color: '#94a3b8', font: { size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+      },
+      y: {
+        display: false,
+        beginAtZero: true,
+      },
+    },
+  }), [data?.hourly])
+
   if (!device) {
     return (
       <div className="h-full w-full bg-white rounded-2xl shadow-sm border border-slate-100 p-4 flex items-center text-slate-300 text-sm">
@@ -31,8 +92,10 @@ function GenerationWidget() {
     )
   }
 
+  const hasHourly = (data?.hourly?.length ?? 0) > 0
+
   return (
-    <div className="h-full w-full bg-gradient-to-br from-amber-50/50 to-white bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
+    <div className="h-full w-full bg-gradient-to-br from-amber-50/50 to-white bg-white rounded-2xl shadow-sm border border-slate-100 p-4 flex flex-col">
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2">
           <SunIcon className="w-5 h-5 text-amber-400" />
@@ -60,7 +123,16 @@ function GenerationWidget() {
           </>
         )}
       </div>
-      <div className="text-[10px] text-slate-400">{data?.rangeLabel ?? '—'}</div>
+      <div className="text-[10px] text-slate-400 mb-2">{data?.rangeLabel ?? '—'}</div>
+      <div className="flex-1 min-h-0">
+        {hasHourly ? (
+          <Bar data={chartData} options={chartOptions} />
+        ) : (
+          <div className="h-full flex items-center justify-center text-[10px] text-slate-300">
+            {loading ? 'Loading…' : 'No generation data for this range'}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
