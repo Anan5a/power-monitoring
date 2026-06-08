@@ -1,5 +1,5 @@
-import { memo, useMemo } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { memo, useEffect, useMemo } from 'react'
+import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { SunIcon } from '@heroicons/react/24/outline'
 import {
   Chart as ChartJS,
@@ -29,11 +29,24 @@ const RANGE_OPTIONS: { value: GenerationRange; label: string }[] = [
 ]
 
 function GenerationWidget() {
+  const store = useStore()
   const data = useAtomValue(generationDataAtom)
   const loading = useAtomValue(generationLoadingAtom)
   const range = useAtomValue(generationRangeAtom)
   const setRange = useSetAtom(generationRangeAtom)
   const device = useAtomValue(selectedDeviceAtom)
+
+  // Re-run the generation fetcher whenever the selected range changes.
+  // The fetcher atom is write-only and was only fired once in
+  // startAggregatesPolling, so we have to drive it from the widget.
+  useEffect(() => {
+    if (!device) return
+    let cancelled = false
+    import('../state/services/aggregatesService').then(({ generationFetcherAtom }) => {
+      if (!cancelled) store.set(generationFetcherAtom)
+    })
+    return () => { cancelled = true }
+  }, [range, device, store])
 
   const chartData = useMemo<ChartData<'bar'>>(() => {
     const hourly = data?.hourly ?? []

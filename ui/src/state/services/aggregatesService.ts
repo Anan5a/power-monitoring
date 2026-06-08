@@ -7,6 +7,8 @@ const POLL_BATTERY_MS = 10_000
 // --- Derived atoms that drive the RPC fetches ---
 
 // When the selected device OR the range changes, fire the generation RPC.
+// Stale check: if the range moves on while we're awaiting the RPC, drop
+// the response so a fast clicker doesn't see older data overwrite newer.
 export const generationFetcherAtom = atom(null, async (get, set) => {
   const device = get(selectedDeviceAtom)
   const range = get(generationRangeAtom)
@@ -17,6 +19,7 @@ export const generationFetcherAtom = atom(null, async (get, set) => {
   }
   set(generationLoadingAtom, true)
   const data = await fetchGeneration(device.device_key, range)
+  if (get(generationRangeAtom) !== range) return
   set(generationDataAtom, data)
   set(generationLoadingAtom, false)
 })
@@ -40,26 +43,40 @@ export const batteryFetcherAtom = atom(null, async (get, set) => {
 // --- Plain async helpers (no atoms) ---
 
 function rangeToBounds(range: GenerationRange): { start: Date; end: Date; label: string; isDaily: boolean } {
+  // Use LOCAL day boundaries so "Today" matches the user's calendar day
+  // regardless of timezone. The RPC's hourly buckets are still UTC-aligned,
+  // but the query window is local; the chart will show local-hour labels
+  // for the UTC hour_start values, so a 6-hour UTC offset is visible in
+  // the bar positions. (For local-aligned buckets the RPC would need to
+  // bucket on the user's tz; left as-is to keep DB work minimal.)
   const now = new Date()
+  const startOfLocalDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const endOfLocalDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999)
+  const addDays = (d: Date, n: number) => {
+    const r = new Date(d)
+    r.setDate(r.getDate() + n)
+    return r
+  }
   let startTime: Date
   let endTime: Date
   let rangeLabel = ''
   let isDaily = false
   if (range === 'today') {
-    startTime = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+    startTime = startOfLocalDay(now)
     endTime = now
     rangeLabel = 'Today'
   } else if (range === 'yesterday') {
-    startTime = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1))
-    endTime = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 23, 59, 59, 999))
+    const y = addDays(now, -1)
+    startTime = startOfLocalDay(y)
+    endTime = endOfLocalDay(y)
     rangeLabel = 'Yesterday'
   } else if (range === '7d') {
-    startTime = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 6))
+    startTime = startOfLocalDay(addDays(now, -6))
     endTime = now
     isDaily = true
     rangeLabel = 'Last 7 Days'
   } else {
-    startTime = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 29))
+    startTime = startOfLocalDay(addDays(now, -29))
     endTime = now
     isDaily = true
     rangeLabel = 'Last 30 Days'
