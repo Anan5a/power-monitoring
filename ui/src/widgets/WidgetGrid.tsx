@@ -3,8 +3,6 @@ import { layoutAtom } from '../state/atoms'
 import { defaultLayoutAtom } from '../state/layout'
 import WidgetHost from './WidgetHost'
 
-const ROW_HEIGHT = '80px'
-
 // Responsive col spans: on small screens, the 12-col grid is too cramped.
 // We map the layout's colSpan to a CSS class that adjusts at breakpoints.
 function colSpanClass(colSpan: number): string {

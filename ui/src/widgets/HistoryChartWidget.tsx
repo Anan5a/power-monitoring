@@ -93,7 +93,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
           points: { show: false },
         })
       })
-      const fmtDate = (u: any, splits: number[], _space: number) => {
+      const fmtDate = (_u: any, splits: number[], _space: number) => {
         return splits.map(s => {
           const d = new Date(s * 1000)
           if (range === '1h' || range === '6h' || range === '24h') {
