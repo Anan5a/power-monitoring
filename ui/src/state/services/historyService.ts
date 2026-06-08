@@ -9,10 +9,11 @@ export interface SeriesSelection {
 
 // --- extractKeys (moved from PowerHistoryChart) ---
 
+// Supabase returns columns in lowercase. We compare lowercase, but render labels from canonical forms.
 const METRIC_REGEX: Record<HistoryMetric, RegExp> = {
-  power: /^ch\d_P$|ina226_p|^ina3221_p\d$|inverter_power|pv_power|battery_power|dc_load_power/,
-  voltage: /^ch\d_V$|ina226_v|^ina3221_v\d$/,
-  current: /^ch\d_I$|ina226_i|^ina3221_i\d$|inverter_current$/,
+  power: /^ch\d_p$|^ina226_p$|^ina3221_p\d$|^inverter_power$|^pv_power$|^battery_power$|^dc_load_power$/,
+  voltage: /^ch\d_v$|^ina226_v$|^ina3221_v\d$/,
+  current: /^ch\d_i$|^ina226_i$|^ina3221_i\d$|^inverter_current$/,
 }
 
 const SYSTEM_POWER_KEYS = ['pv_power', 'battery_power', 'inverter_power', 'dc_load_power']
@@ -69,12 +70,12 @@ export function keyToLabel(k: string, channelNames?: ChannelName[]): string {
   if (k === 'battery_power') return 'Battery'
   if (k === 'dc_load_power') return 'DC Load'
   if (k === 'soc_pct0') return 'Battery SOC'
-  const ina = k.match(/^ina3221_([pvi])([0-2])$/)
+  const ina = k.match(/^ina3221_([pvi])(\d)$/)
   if (ina) {
     const m2m: Record<string, string> = { p: 'P', v: 'V', i: 'I' }
     return `${vcName(channelNames, parseInt(ina[2]))} ${m2m[ina[1]]}`
   }
-  const ch = k.match(/^ch(\d)_([PVI])$/i)
+  const ch = k.match(/^ch(\d)_([pvi])$/)
   if (ch) return `${vcName(channelNames, parseInt(ch[1]))} ${ch[2].toUpperCase()}`
   return k
 }
