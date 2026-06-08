@@ -40,9 +40,11 @@ export default function DashboardPage() {
       startLiveTelemetrySafe(store, selectedDevice.device_key),
       loadChannels(store, selectedDevice.device_key),
       loadLayout(store, userId),
+      startAggregatesPollingSafe(store),
     ])
     return () => {
       stopLiveTelemetrySafe()
+      stopAggregatesPollingSafe()
     }
   }, [selectedDevice, userId, store])
 
@@ -91,4 +93,14 @@ async function startLiveTelemetrySafe(store: any, deviceKey: string) {
 async function stopLiveTelemetrySafe() {
   const { stopLiveTelemetry } = await import('../state/services/telemetryService')
   stopLiveTelemetry()
+}
+
+async function startAggregatesPollingSafe(store: any) {
+  const { startAggregatesPolling } = await import('../state/services/aggregatesService')
+  startAggregatesPolling(store)
+}
+
+async function stopAggregatesPollingSafe() {
+  const { stopAggregatesPolling } = await import('../state/services/aggregatesService')
+  stopAggregatesPolling()
 }

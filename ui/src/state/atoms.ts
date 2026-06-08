@@ -59,3 +59,28 @@ export const hoveredPointAtom = atom<{ time: string; values: Record<string, numb
 // --- Selected device (global, so widgets can read it) ---
 
 export const selectedDeviceAtom = atom<Device | null>(null)
+
+// --- Aggregates (RPC-backed) ---
+
+export type GenerationRange = 'today' | 'yesterday' | '7d' | '30d'
+
+export interface GenerationData {
+  total: number
+  hourly: Array<{ hour: string; value: number; projected?: boolean }>
+  rangeLabel: string
+}
+
+export const generationRangeAtom = atom<GenerationRange>('today')
+
+export interface BatteryData {
+  chargeWh: number
+  capacityWh: number
+  energyIn24h: number
+  energyOut24h: number
+  isFullChargeToday: boolean
+}
+
+export const generationDataAtom = atom<GenerationData | null>(null)
+export const batteryDataAtom = atom<BatteryData | null>(null)
+export const batteryLoadingAtom = atom<boolean>(true)
+export const generationLoadingAtom = atom<boolean>(false)
