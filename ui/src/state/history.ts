@@ -21,8 +21,13 @@ interface HistoryKey {
   metric: HistoryMetric
 }
 
-export const historyAtomFamily = atomFamily((k: HistoryKey) =>
-  loadable(atom(async (get) => {
+export const historyAtomFamily: any = atomFamily(
+  (k: HistoryKey) => loadable(historyFetcher(k)),
+  (a: HistoryKey, b: HistoryKey) => a.deviceKey === b.deviceKey && a.range === b.range && a.metric === b.metric,
+)
+
+function historyFetcher(k: HistoryKey) {
+  return atom(async (get) => {
     get(refreshTriggerAtom)
     const hours = RANGE_HOURS[k.range]
     if (k.range === '1h' || k.range === '6h') {
@@ -60,8 +65,8 @@ export const historyAtomFamily = atomFamily((k: HistoryKey) =>
       }
       return { id: 0, device_id: k.deviceKey, recorded_at: row.bucket as string, payload, metadata: {} }
     })
-  })),
-)
+  })
+}
 
 interface DrilldownKey {
   deviceKey: string
@@ -70,8 +75,13 @@ interface DrilldownKey {
   metric: HistoryMetric
 }
 
-export const drilldownLoadableAtom = atomFamily((k: DrilldownKey) =>
-  loadable(atom(async (get) => {
+export const drilldownLoadableAtom: any = atomFamily(
+  (k: DrilldownKey) => loadable(drilldownFetcher(k)),
+  (a: DrilldownKey, b: DrilldownKey) => a.deviceKey === b.deviceKey && a.tStart === b.tStart && a.tEnd === b.tEnd && a.metric === b.metric,
+)
+
+function drilldownFetcher(k: DrilldownKey) {
+  return atom(async (get) => {
     get(refreshTriggerAtom)
     const { data, error } = await supabase
       .from('telemetry_computed')
@@ -89,8 +99,8 @@ export const drilldownLoadableAtom = atomFamily((k: DrilldownKey) =>
       payload: reconstructPayload(row),
       metadata: {},
     }))
-  })),
-)
+  })
+}
 
 function reconstructPayload(row: any): Record<string, number> {
   const p: Record<string, number> = {}
