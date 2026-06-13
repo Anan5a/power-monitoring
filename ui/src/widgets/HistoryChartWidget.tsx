@@ -28,7 +28,6 @@ import { extractKeys, keyToLabel, suggestDrilldown, bucketToWindow, buildChannel
 import {
   zoomRangeAtom,
   drilldownBreadcrumbAtom,
-  hoveredPointAtom,
   deviceChannelsAtomFamily,
   latestAtom,
   refreshTriggerAtom,
@@ -121,34 +120,6 @@ const DRILLDOWN_SPAN_MS = 2 * 60 * 60 * 1000
 // than the currently-loaded window (prevents tiny zoom jitters).
 const DRILLDOWN_ZOOM_RATIO = 2.5
 
-// Mouse-move bridge: feed hoveredPointAtom so the tooltip can render
-// outside the canvas. Uses a ref so we don't add a per-mousemove subscription.
-function makeHoverSyncPlugin(setHoveredRef: { current: (p: { time: string; values: Record<string, number> } | null) => void }) {
-  return {
-    id: 'hoverSync',
-    afterEvent(chart: any) {
-      const active = chart.tooltip?.getActiveElements()
-      if (!active || active.length === 0) {
-        setHoveredRef.current(null)
-        return
-      }
-      const idx = active[0].index
-      const ds = chart.data.datasets
-      const values: Record<string, number> = {}
-      for (let i = 0; i < ds.length; i++) {
-        const v = (ds[i].data as any[])[idx]
-        const label = ds[i].label
-        if (typeof v === 'number' && label) values[label] = v
-      }
-      const t = (chart.data.datasets[0].data as any[])[idx]
-      setHoveredRef.current({
-        time: typeof t === 'number' ? new Date(t).toLocaleString() : String(t),
-        values,
-      })
-    },
-  } as any
-}
-
 function HistoryChartWidget({ deviceKey }: Props) {
   const [range, setRange] = useState<HistoryRange>('24h')
   const [metric, setMetric] = useState<HistoryMetric>('power')
@@ -162,10 +133,6 @@ function HistoryChartWidget({ deviceKey }: Props) {
   const setBreadcrumb = useSetAtom(drilldownBreadcrumbAtom)
   const zoom = useAtomValue(zoomRangeAtom)
   const setZoom = useSetAtom(zoomRangeAtom)
-  const setHovered = useSetAtom(hoveredPointAtom)
-  const setHoveredRef = useRef(setHovered)
-  useEffect(() => { setHoveredRef.current = setHovered })
-  const hoverSyncPlugin = useMemo(() => makeHoverSyncPlugin(setHoveredRef), [])
   const channels = useAtomValue(deviceChannelsAtomFamily(deviceKey))
   const channelLabelMap = useMemo(() => buildChannelLabelMap(channels?.channel_groups), [channels?.channel_groups])
   const latest = useAtomValue(latestAtom)
@@ -285,13 +252,10 @@ function HistoryChartWidget({ deviceKey }: Props) {
     const shouldDrilldown = visibleMs <= DRILLDOWN_SPAN_MS
       && visibleMs * DRILLDOWN_ZOOM_RATIO < loadedMs
     if (!shouldDrilldown) return
-    const startLabel = new Date(start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    const endLabel = new Date(end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    const dateLabel = new Date(start).toLocaleDateString([], { month: 'short', day: 'numeric' })
     setBreadcrumb([
       ...breadcrumbRef.current,
       {
-        rangeLabel: `${dateLabel} ${startLabel}–${endLabel}`,
+        rangeLabel: 'zoomed',
         tStart: start,
         tEnd: end,
         fromRange: '1h',
@@ -420,16 +384,15 @@ function HistoryChartWidget({ deviceKey }: Props) {
         pan: {
           enabled: true,
           mode: 'x' as const,
+          modifierKey: 'shift' as const,
           onPanComplete: ({ chart }: any) => {
             const xScale = chart.scales.x
             setZoom({ start: xScale.min, end: xScale.max })
-            maybeTriggerDrilldown(xScale.min, xScale.max)
           },
         },
         zoom: {
-          wheel: { enabled: true },
-          // Drag-to-zoom is disabled because it conflicts with pan gestures
-          // and feels direction-inverted. Use wheel zoom + drag pan instead.
+          wheel: { enabled: true, speed: 0.15 },
+          // Drag-to-zoom disabled. Use wheel zoom and Shift+drag pan.
           drag: { enabled: false },
           mode: 'x' as const,
           onZoomComplete: ({ chart }: any) => {
@@ -462,29 +425,30 @@ function HistoryChartWidget({ deviceKey }: Props) {
               {r}
             </button>
           ))}
-          {breadcrumb.length > 0 && (
-            <div className="flex items-center gap-1 ml-2 text-[11px] text-slate-500">
-              <button
-                onClick={() => {
-                  const next = breadcrumb.slice(0, -1)
-                  setBreadcrumb(next)
-                  setZoom(null)
-                  if (chartRef.current) chartRef.current.resetZoom()
-                }}
-                className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600"
-              >
-                ← Back
-              </button>
-              {breadcrumb.map((b, i) => (
-                <span key={i} className="px-2 py-0.5 rounded bg-slate-100">{b.rangeLabel}</span>
-              ))}
+          {(breadcrumb.length > 0 || zoom) && (
+            <div className="flex items-center gap-1 ml-2 text-[11px]">
+              {breadcrumb.length > 0 && (
+                <button
+                  onClick={() => {
+                    const next = breadcrumb.slice(0, -1)
+                    setBreadcrumb(next)
+                    setZoom(null)
+                    if (chartRef.current) chartRef.current.resetZoom()
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600"
+                >
+                  ← Back
+                </button>
+              )}
+              {zoom && (
+                <button
+                  onClick={() => { setZoom(null); if (chartRef.current) chartRef.current.resetZoom() }}
+                  className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600"
+                >
+                  Reset
+                </button>
+              )}
             </div>
-          )}
-          {zoom && (
-            <button onClick={() => { setZoom(null); if (chartRef.current) chartRef.current.resetZoom() }}
-              className="ml-2 px-2 py-0.5 rounded bg-slate-100 text-slate-500 text-[11px]">
-              Reset zoom
-            </button>
           )}
           <button onClick={() => triggerRefresh(n => n + 1)} className="ml-1 px-2 py-0.5 rounded bg-slate-100 text-slate-500 text-[11px]">↻</button>
         </div>
@@ -531,7 +495,6 @@ function HistoryChartWidget({ deviceKey }: Props) {
           ref={chartRef as any}
           data={chartData}
           options={chartOptions}
-          plugins={[hoverSyncPlugin]}
         />
       </div>
     </div>
