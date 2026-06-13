@@ -27,6 +27,11 @@ interface TelemetryRow {
   energy_wh2: number | null; energy_wh3: number | null
   soc_pct0: number | null; soc_pct1: number | null
   soc_pct2: number | null; soc_pct3: number | null
+  // raw sensor values
+  ina3221_v0: number | null; ina3221_v1: number | null; ina3221_v2: number | null
+  ina3221_i0: number | null; ina3221_i1: number | null; ina3221_i2: number | null
+  ina226_v: number | null; ina226_i: number | null; ina226_p: number | null
+  ads1115_0: number | null; ads1115_1: number | null; ads1115_2: number | null; ads1115_3: number | null
 }
 
 function rowToPoint(row: TelemetryRow): TelemetryPoint {
@@ -34,18 +39,27 @@ function rowToPoint(row: TelemetryRow): TelemetryPoint {
   const set = (k: string, v: number | null | undefined) => {
     if (v != null) p[k] = v
   }
+  // Virtual channels
   set('ch0_V', row.ch0_v); set('ch0_I', row.ch0_i); set('ch0_P', row.ch0_p)
   set('ch1_V', row.ch1_v); set('ch1_I', row.ch1_i); set('ch1_P', row.ch1_p)
   set('ch2_V', row.ch2_v); set('ch2_I', row.ch2_i); set('ch2_P', row.ch2_p)
   set('ch3_V', row.ch3_v); set('ch3_I', row.ch3_i); set('ch3_P', row.ch3_p)
+  // System computed values
   set('pv_power', row.pv_power)
   set('battery_power', row.battery_power)
   set('inverter_power', row.inverter_power)
   set('dc_load_power', row.dc_load_power)
+  // Energy / SoC
   set('energy_wh0', row.energy_wh0); set('energy_wh1', row.energy_wh1)
   set('energy_wh2', row.energy_wh2); set('energy_wh3', row.energy_wh3)
   set('soc_pct0', row.soc_pct0); set('soc_pct1', row.soc_pct1)
   set('soc_pct2', row.soc_pct2); set('soc_pct3', row.soc_pct3)
+  // Raw sensor values (used by Channels page)
+  set('ina3221_v0', row.ina3221_v0); set('ina3221_v1', row.ina3221_v1); set('ina3221_v2', row.ina3221_v2)
+  set('ina3221_i0', row.ina3221_i0); set('ina3221_i1', row.ina3221_i1); set('ina3221_i2', row.ina3221_i2)
+  set('ina226_v', row.ina226_v); set('ina226_i', row.ina226_i); set('ina226_p', row.ina226_p)
+  set('ads1115_0', row.ads1115_0); set('ads1115_1', row.ads1115_1)
+  set('ads1115_2', row.ads1115_2); set('ads1115_3', row.ads1115_3)
   if (row.system_status) p['system_status'] = row.system_status as unknown as number
   return {
     id: row.id,
