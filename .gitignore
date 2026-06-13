@@ -11,3 +11,4 @@ ui/package-lock.json
 !.dev.vars.example
 .env*
 !.env.example
+.worktrees/
