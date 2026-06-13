@@ -408,12 +408,8 @@ function HistoryChartWidget({ deviceKey }: Props) {
 
   // visibleKeys removed (was only used by the deleted custom tooltip)
 
-  if (loadable.state === 'loading') {
-    return <div className="h-full w-full bg-slate-50 animate-pulse rounded-2xl" />
-  }
-  if (loadable.state === 'hasError') {
-    return <div className="h-full w-full bg-red-50 text-red-600 rounded-2xl p-4">Failed to load: {String((loadable as any).error)}</div>
-  }
+  const isLoading = loadable.state === 'loading'
+  const error = loadable.state === 'hasError' ? String((loadable as any).error) : null
 
   return (
     <div className="h-full w-full bg-white rounded-2xl shadow-sm border border-slate-100 p-2 sm:p-4">
@@ -492,6 +488,16 @@ function HistoryChartWidget({ deviceKey }: Props) {
         })()}
       </div>
       <div className="relative h-[60vh] sm:h-[480px]">
+        {isLoading && (
+          <div className="absolute inset-0 z-10 bg-white/70 rounded-2xl flex items-center justify-center">
+            <div className="w-8 h-8 border-2 border-slate-300 border-t-brand-500 rounded-full animate-spin" />
+          </div>
+        )}
+        {error && (
+          <div className="absolute inset-0 z-10 bg-red-50 text-red-600 rounded-2xl p-4 flex items-center justify-center text-sm">
+            Failed to load: {error}
+          </div>
+        )}
         <Line
           ref={chartRef as any}
           data={chartData}
