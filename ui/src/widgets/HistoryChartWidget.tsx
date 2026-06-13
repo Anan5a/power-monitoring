@@ -392,8 +392,9 @@ function HistoryChartWidget({ deviceKey }: Props) {
         },
         zoom: {
           wheel: { enabled: true, speed: 0.15 },
-          // Drag-to-zoom disabled. Use wheel zoom and Shift+drag pan.
-          drag: { enabled: false },
+          // Drag-to-zoom: normal drag selects a region to zoom into.
+          // Shift+drag still pans. This avoids the two gestures conflicting.
+          drag: { enabled: true, backgroundColor: 'rgba(59, 130, 246, 0.15)' },
           mode: 'x' as const,
           onZoomComplete: ({ chart }: any) => {
             const xScale = chart.scales.x
