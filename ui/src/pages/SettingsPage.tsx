@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import type { Device, DeviceChannels, RelayRule, VirtualChannelConfig, BatteryConfig } from '../lib/types'
@@ -22,6 +22,9 @@ export default function SettingsPage() {
   const [loadingDevices, setLoadingDevices] = useState(true)
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
 
+  // Keep selectedKey and selectedDeviceId in sync.
+  const selectedDevice = useMemo(() => devices.find(d => d.device_key === selectedKey) ?? null, [devices, selectedKey])
+
   // Command form states per tab
   const [wifi, setWifi] = useState({ ssid: '', pass: '', pin: '' })
   const [mqtt, setMqtt] = useState({ broker: '', port: '1883', topic: '' })
@@ -36,7 +39,11 @@ export default function SettingsPage() {
       const { data } = await supabase.from('devices').select('*').order('device_name')
       if (data) {
         setDevices(data)
-        setSelectedDeviceId(data[0]?.id ?? null)
+        const first = data[0]
+        if (first) {
+          setSelectedDeviceId(first.id)
+          setSelectedKey(first.device_key)
+        }
       }
       setLoadingDevices(false)
     }
@@ -101,8 +108,6 @@ export default function SettingsPage() {
   function handleNavigate(path: string) { navigate(path) }
   function handleSignOut() { supabase.auth.signOut(); navigate('/login') }
 
-  const selectedDevice = devices.find(d => d.device_key === selectedKey) ?? null
-
   const header = ({ onMenuClick }: { onMenuClick: () => void }) => (
     <HeaderBar
       devices={devices}
@@ -129,21 +134,6 @@ export default function SettingsPage() {
       deviceName={selectedDevice?.device_name}
     >
       <div className="space-y-6">
-        {/* Device selector */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
-          <label className="block text-sm font-medium text-slate-700 mb-2">Device</label>
-          <select
-            value={selectedKey}
-            onChange={e => setSelectedKey(e.target.value)}
-            className="w-full max-w-xs rounded-xl border border-slate-200 px-3 py-2 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
-          >
-            <option value="">-- Choose a device --</option>
-            {devices.map(d => (
-              <option key={d.id} value={d.device_key}>{d.device_name}</option>
-            ))}
-          </select>
-        </div>
-
         {selectedKey && (
           <>
             {/* Tab bar */}
