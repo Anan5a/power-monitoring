@@ -20,6 +20,7 @@ import { Line } from 'react-chartjs-2'
 import {
   historyAtomFamily,
   drilldownLoadableAtom,
+  RANGE_HOURS,
   type HistoryRange,
   type HistoryMetric,
 } from '../state/history'
@@ -99,14 +100,26 @@ function colorForKey(k: string, metric: 'power' | 'voltage' | 'current', index: 
 
 const UNIT: Record<HistoryMetric, string> = { power: 'W', voltage: 'V', current: 'A' }
 
-function fmtTick(iso: string, range: HistoryRange): string {
+function fmtTick(iso: string, showDate: boolean): string {
   const d = new Date(iso)
-  if (range === '1h' || range === '6h' || range === '24h') {
+  if (!showDate) {
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
     ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
+
+function spanToTimeUnit(ms: number): 'minute' | 'hour' | 'day' {
+  if (ms < 60 * 60 * 1000) return 'minute'
+  if (ms < 24 * 60 * 60 * 1000) return 'hour'
+  return 'day'
+}
+
+// Threshold for triggering a raw-data drilldown when zooming in.
+const DRILLDOWN_SPAN_MS = 2 * 60 * 60 * 1000
+// Only drill down when the visible window is at least this much smaller
+// than the currently-loaded window (prevents tiny zoom jitters).
+const DRILLDOWN_ZOOM_RATIO = 2.5
 
 // Mouse-move bridge: feed hoveredPointAtom so the tooltip can render
 // outside the canvas. Uses a ref so we don't add a per-mousemove subscription.
@@ -260,6 +273,32 @@ function HistoryChartWidget({ deviceKey }: Props) {
     ])
   }, [range, setBreadcrumb])
 
+  // Zoom / pan into a narrow window should load raw, higher-resolution data
+  // for that exact window via the drilldown fetcher.
+  const maybeTriggerDrilldown = useCallback((start: number, end: number) => {
+    const visibleMs = Math.max(0, end - start)
+    const loadedStart = drilldown ? drilldown.tStart : Date.now() - RANGE_HOURS[range] * 3600 * 1000
+    const loadedEnd = drilldown ? drilldown.tEnd : Date.now()
+    const loadedMs = Math.max(1, loadedEnd - loadedStart)
+    // No need to drill down when the base range is already raw 1-sec data.
+    if (range === '1h') return
+    const shouldDrilldown = visibleMs <= DRILLDOWN_SPAN_MS
+      && visibleMs * DRILLDOWN_ZOOM_RATIO < loadedMs
+    if (!shouldDrilldown) return
+    const startLabel = new Date(start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    const endLabel = new Date(end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    const dateLabel = new Date(start).toLocaleDateString([], { month: 'short', day: 'numeric' })
+    setBreadcrumb([
+      ...breadcrumbRef.current,
+      {
+        rangeLabel: `${dateLabel} ${startLabel}–${endLabel}`,
+        tStart: start,
+        tEnd: end,
+        fromRange: '1h',
+      },
+    ])
+  }, [drilldown, range, setBreadcrumb])
+
   // Split datasets by axis: power keys go to the left y axis, soc_pct* goes to the right.
   const chartData = useMemo<ChartData<'line'>>(() => {
     const { points, keys } = series
@@ -286,6 +325,17 @@ function HistoryChartWidget({ deviceKey }: Props) {
 
   const showSecondaryAxis = metric === 'power'
 
+  // X-axis granularity should follow the actual visible span, not the top-level
+  // range, so drilldowns and zoom windows get minute-level ticks when needed.
+  const xAxisUnit = useMemo(() => {
+    const span = zoom
+      ? zoom.end - zoom.start
+      : drilldown
+        ? drilldown.tEnd - drilldown.tStart
+        : RANGE_HOURS[range] * 3600 * 1000
+    return spanToTimeUnit(span)
+  }, [zoom, drilldown, range])
+
   const chartOptions = useMemo<ChartOptions<'line'>>(() => ({
     responsive: true,
     maintainAspectRatio: false,
@@ -301,8 +351,8 @@ function HistoryChartWidget({ deviceKey }: Props) {
       x: {
         type: 'time' as const,
         time: {
-          unit: range === '1h' ? 'hour' : range === '6h' ? 'hour' : range === '24h' ? 'hour' : 'day',
-          displayFormats: { hour: 'HH:mm', day: 'MMM d' },
+          unit: xAxisUnit,
+          displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'MMM d' },
         },
         grid: { color: '#f1f5f9' },
         ticks: { color: '#94a3b8', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
@@ -347,7 +397,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
         cornerRadius: 8,
         displayColors: false,
         callbacks: {
-          title: (items: any[]) => items.length ? fmtTick(new Date(items[0].parsed.x).toISOString(), range) : '',
+          title: (items: any[]) => items.length ? fmtTick(new Date(items[0].parsed.x).toISOString(), xAxisUnit === 'day') : '',
           label: (ctx: any) => {
             const v = ctx.parsed.y
             if (v == null) return ''
@@ -367,23 +417,30 @@ function HistoryChartWidget({ deviceKey }: Props) {
         },
       },
       zoom: {
-        pan: { enabled: true, mode: 'x' as const },
+        pan: {
+          enabled: true,
+          mode: 'x' as const,
+          onPanComplete: ({ chart }: any) => {
+            const xScale = chart.scales.x
+            setZoom({ start: xScale.min, end: xScale.max })
+            maybeTriggerDrilldown(xScale.min, xScale.max)
+          },
+        },
         zoom: {
           wheel: { enabled: true },
-          drag: { enabled: true, backgroundColor: 'rgba(59, 130, 246, 0.1)' },
+          // Drag-to-zoom is disabled because it conflicts with pan gestures
+          // and feels direction-inverted. Use wheel zoom + drag pan instead.
+          drag: { enabled: false },
           mode: 'x' as const,
           onZoomComplete: ({ chart }: any) => {
             const xScale = chart.scales.x
             setZoom({ start: xScale.min, end: xScale.max })
-          },
-          onPanComplete: ({ chart }: any) => {
-            const xScale = chart.scales.x
-            setZoom({ start: xScale.min, end: xScale.max })
+            maybeTriggerDrilldown(xScale.min, xScale.max)
           },
         },
       },
     },
-  }), [range, metric, setZoom, onChartClick, showSecondaryAxis])
+  }), [range, metric, setZoom, onChartClick, showSecondaryAxis, xAxisUnit, maybeTriggerDrilldown])
 
   // visibleKeys removed (was only used by the deleted custom tooltip)
 
@@ -407,6 +464,17 @@ function HistoryChartWidget({ deviceKey }: Props) {
           ))}
           {breadcrumb.length > 0 && (
             <div className="flex items-center gap-1 ml-2 text-[11px] text-slate-500">
+              <button
+                onClick={() => {
+                  const next = breadcrumb.slice(0, -1)
+                  setBreadcrumb(next)
+                  setZoom(null)
+                  if (chartRef.current) chartRef.current.resetZoom()
+                }}
+                className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600"
+              >
+                ← Back
+              </button>
               {breadcrumb.map((b, i) => (
                 <span key={i} className="px-2 py-0.5 rounded bg-slate-100">{b.rangeLabel}</span>
               ))}

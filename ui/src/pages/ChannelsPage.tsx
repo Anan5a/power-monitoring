@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAtomValue } from 'jotai'
+import { useAtomValue, useStore } from 'jotai'
 import { supabase, fetchDeviceChannels } from '../lib/supabase'
 import { latestAtom } from '../state/atoms'
 import type { Device, DeviceChannels } from '../lib/types'
@@ -263,6 +263,7 @@ function ChannelsPageInner({
 
 export default function ChannelsPage() {
   const navigate = useNavigate()
+  const store = useStore()
   const [devices, setDevices] = useState<Device[]>([])
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null)
   const [deviceChannels, setDeviceChannels] = useState<DeviceChannels | null>(null)
@@ -285,6 +286,13 @@ export default function ChannelsPage() {
     if (!selectedDevice) { setDeviceChannels(null); return }
     fetchDeviceChannels(selectedDevice.device_key).then(setDeviceChannels)
   }, [selectedDevice])
+
+  // Start live telemetry subscription so latestAtom gets populated
+  useEffect(() => {
+    if (!selectedDevice) return
+    startLiveTelemetrySafe(store, selectedDevice.device_key)
+    return () => { stopLiveTelemetrySafe() }
+  }, [selectedDevice, store])
 
   useEffect(() => {
     if (!selectedDevice) return
@@ -331,6 +339,16 @@ export default function ChannelsPage() {
 
   function handleNavigate(path: string) { navigate(path) }
   function handleSignOut() { supabase.auth.signOut(); navigate('/login') }
+
+async function startLiveTelemetrySafe(store: any, deviceKey: string) {
+  const { startLiveTelemetry } = await import('../state/services/telemetryService')
+  startLiveTelemetry(store, deviceKey)
+}
+
+async function stopLiveTelemetrySafe() {
+  const { stopLiveTelemetry } = await import('../state/services/telemetryService')
+  stopLiveTelemetry()
+}
 
   const header = ({ onMenuClick }: { onMenuClick: () => void }) => (
     <HeaderBar

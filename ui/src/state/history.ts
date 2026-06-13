@@ -8,11 +8,12 @@ import type { TelemetryPoint } from '../lib/types'
 export type HistoryRange = '1h' | '6h' | '24h' | '7d' | '30d'
 export type HistoryMetric = 'power' | 'voltage' | 'current'
 
-const RANGE_HOURS: Record<HistoryRange, number> = {
+export const RANGE_HOURS: Record<HistoryRange, number> = {
   '1h': 1, '6h': 6, '24h': 24, '7d': 168, '30d': 720,
 }
 const RANGE_LIMITS: Record<HistoryRange, number> = {
-  '1h': 1000, '6h': 5000, '24h': 20000, '7d': 50000, '30d': 50000,
+  // 1h keeps raw 1-sec data; raise limit to cover the full hour.
+  '1h': 4000, '6h': 1000, '24h': 20000, '7d': 50000, '30d': 50000,
 }
 
 interface HistoryKey {
@@ -30,7 +31,7 @@ function historyFetcher(k: HistoryKey) {
   return atom(async (get) => {
     get(refreshTriggerAtom)
     const hours = RANGE_HOURS[k.range]
-    if (k.range === '1h' || k.range === '6h') {
+    if (k.range === '1h') {
       const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
       const { data, error } = await supabase
         .from('telemetry_computed')
