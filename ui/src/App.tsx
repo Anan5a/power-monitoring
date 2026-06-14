@@ -3,9 +3,11 @@ import { useEffect, useState } from 'react'
 import { supabase } from './lib/supabase'
 import type { Session } from '@supabase/supabase-js'
 import LoginPage from './pages/LoginPage'
-import DashboardPage from './pages/DashboardPage'
 import ClassicDashboardPage from './pages/ClassicDashboardPage'
-import LegacyDashboardPage from './pages/LegacyDashboardPage'
+import SolisOverviewPage from './pages/SolisOverviewPage'
+import SolisDevicePage from './pages/SolisDevicePage'
+import SolisAnalysisPage from './pages/SolisAnalysisPage'
+import SolisAlarmsPage from './pages/SolisAlarmsPage'
 import AdminPage from './pages/AdminPage'
 import ProvisioningPage from './pages/ProvisioningPage'
 import ResetPasswordPage from './pages/ResetPasswordPage'
@@ -38,9 +40,11 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/provision" element={<ProvisioningPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
-        <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+        <Route path="/dashboard" element={<ProtectedRoute><SolisOverviewPage /></ProtectedRoute>} />
+        <Route path="/dashboard/device" element={<ProtectedRoute><SolisDevicePage /></ProtectedRoute>} />
+        <Route path="/dashboard/analysis" element={<ProtectedRoute><SolisAnalysisPage /></ProtectedRoute>} />
+        <Route path="/dashboard/alarms" element={<ProtectedRoute><SolisAlarmsPage /></ProtectedRoute>} />
         <Route path="/dashboard/classic" element={<ProtectedRoute><ClassicDashboardPage /></ProtectedRoute>} />
-        <Route path="/dashboard/legacy" element={<ProtectedRoute><LegacyDashboardPage /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
         <Route path="/channels" element={<ProtectedRoute><ChannelsPage /></ProtectedRoute>} />
