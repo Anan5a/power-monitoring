@@ -4,6 +4,7 @@ import { supabase } from './lib/supabase'
 import type { Session } from '@supabase/supabase-js'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
+import ClassicDashboardPage from './pages/ClassicDashboardPage'
 import LegacyDashboardPage from './pages/LegacyDashboardPage'
 import AdminPage from './pages/AdminPage'
 import ProvisioningPage from './pages/ProvisioningPage'
@@ -38,6 +39,7 @@ export default function App() {
         <Route path="/provision" element={<ProvisioningPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+        <Route path="/dashboard/classic" element={<ProtectedRoute><ClassicDashboardPage /></ProtectedRoute>} />
         <Route path="/dashboard/legacy" element={<ProtectedRoute><LegacyDashboardPage /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
