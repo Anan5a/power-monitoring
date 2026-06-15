@@ -21,6 +21,25 @@ export default {
           card: '#ffffff',
           dark: '#0f172a',
         },
+        topbar: 'var(--topbar-bg)',
+        sidebar: 'var(--sidebar-bg)',
+        page: 'var(--page-bg)',
+        accent: {
+          DEFAULT: 'var(--accent)',
+          green: 'var(--accent-green)',
+          amber: 'var(--accent-amber)',
+          blue: 'var(--accent-blue)',
+        },
+      },
+      textColor: {
+        primary: 'var(--text-primary)',
+        secondary: 'var(--text-secondary)',
+      },
+      borderColor: {
+        DEFAULT: 'var(--border-color)',
+      },
+      width: {
+        sidebar: 'var(--sidebar-width)',
       },
       boxShadow: {
         card: '0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06)',

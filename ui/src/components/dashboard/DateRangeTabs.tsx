@@ -21,7 +21,7 @@ export default function DateRangeTabs({ value, onChange }: DateRangeTabsProps) {
           type="button"
           onClick={() => onChange(opt.value)}
           className={`px-4 py-1.5 text-sm font-medium border-r border-gray-200 last:border-r-0 ${
-            value === opt.value ? 'bg-[#3c4454] text-white' : 'text-gray-600 hover:bg-gray-50'
+            value === opt.value ? 'bg-topbar text-white' : 'text-gray-600 hover:bg-gray-50'
           }`}
         >
           {opt.label}

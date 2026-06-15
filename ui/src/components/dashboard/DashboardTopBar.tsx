@@ -29,7 +29,7 @@ export default function DashboardTopBar({
   const [menuOpen, setMenuOpen] = useState(false)
 
   return (
-    <header className="h-14 bg-[#3c4454] text-white flex items-center justify-between px-4 shrink-0">
+    <header className="h-14 bg-topbar text-white flex items-center justify-between px-4 shrink-0">
       <div className="flex items-center gap-4">
         <button type="button" onClick={onMenuClick} className="lg:hidden p-1 rounded hover:bg-white/10">
           <Bars3Icon className="h-6 w-6" />

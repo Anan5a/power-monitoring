@@ -15,6 +15,7 @@ import SettingsPage from './pages/SettingsPage'
 import ChannelsPage from './pages/ChannelsPage'
 import { useNowTicker } from './state/nowTicker'
 import { useDevicesLoader } from './lib/useDevicesLoader'
+import ShellWrap from './components/ShellWrap'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
@@ -47,9 +48,9 @@ export default function App() {
         <Route path="/dashboard/analysis" element={<ProtectedRoute><AnalysisPage /></ProtectedRoute>} />
         <Route path="/dashboard/alarms" element={<ProtectedRoute><AlarmsPage /></ProtectedRoute>} />
         <Route path="/dashboard/classic" element={<ProtectedRoute><ClassicDashboardPage /></ProtectedRoute>} />
-        <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
-        <Route path="/channels" element={<ProtectedRoute><ChannelsPage /></ProtectedRoute>} />
+        <Route path="/admin" element={<ProtectedRoute><ShellWrap currentPath="/admin"><AdminPage /></ShellWrap></ProtectedRoute>} />
+        <Route path="/settings" element={<ProtectedRoute><ShellWrap currentPath="/settings"><SettingsPage /></ShellWrap></ProtectedRoute>} />
+        <Route path="/channels" element={<ProtectedRoute><ShellWrap currentPath="/channels"><ChannelsPage /></ShellWrap></ProtectedRoute>} />
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </BrowserRouter>

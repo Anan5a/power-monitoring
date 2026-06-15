@@ -6,3 +6,19 @@ html {
   overflow-y: scroll;
   overflow-anchor: none;
 }
+
+@layer base {
+  :root {
+    --topbar-bg: #3c4454;
+    --sidebar-bg: #2e3440;
+    --page-bg: #f0f2f5;
+    --accent: #f97316;
+    --accent-green: #22c55e;
+    --accent-amber: #f59e0b;
+    --accent-blue: #3b82f6;
+    --text-primary: #1f2937;
+    --text-secondary: #6b7280;
+    --border-color: #e5e7eb;
+    --sidebar-width: 14rem;
+  }
+}

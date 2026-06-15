@@ -33,7 +33,7 @@ export default function DashboardShell({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   return (
-    <div className="min-h-screen bg-[#f0f2f5] flex flex-col">
+    <div className="min-h-screen bg-page flex flex-col">
       <DashboardTopBar
         devices={devices}
         selectedDeviceId={selectedDeviceId}

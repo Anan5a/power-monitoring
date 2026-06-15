@@ -85,7 +85,7 @@ export default function SolisOverviewPage() {
           unit="W"
           subText={kpiSub.cap}
           icon={<SemiGauge value={telemetry.pv_power} max={4200} size={56} stroke={8} />}
-          accent="bg-orange-500"
+          accent="bg-accent"
         />
         <KpiCard
           label="Daily Yield"
@@ -93,22 +93,22 @@ export default function SolisOverviewPage() {
           unit="kWh"
           subText={kpiSub.totalYield}
           icon={<SemiGauge value={telemetry.total_energy_wh / 1000} max={42} size={56} stroke={8} />}
-          accent="bg-orange-500"
+          accent="bg-accent"
         />
         <KpiCard
           label="Battery SoC"
           value={telemetry.min_soc_pct?.toFixed(0) ?? '--'}
           unit="%"
           subText={`Status: ${telemetry.system_status}`}
-          icon={<SemiGauge value={telemetry.min_soc_pct ?? 0} max={100} size={56} stroke={8} color="#22c55e" />}
-          accent="bg-green-500"
+          icon={<SemiGauge value={telemetry.min_soc_pct ?? 0} max={100} size={56} stroke={8} color="var(--accent-green)" />}
+          accent="bg-accent-green"
         />
         <KpiCard
           label="System Status"
           value={status}
           subText={<StatusBadge status={status} label={status === 'normal' ? 'Normal' : 'Offline'} />}
           icon={<div className="h-7 w-7 rounded-full bg-white/20" />}
-          accent="bg-[#3c4454]"
+          accent="bg-topbar"
         />
       </div>
 
@@ -125,7 +125,7 @@ export default function SolisOverviewPage() {
               type="button"
               onClick={() => setActiveTab(t.key as Tab)}
               className={`px-4 py-1.5 text-sm font-medium border-r border-gray-200 last:border-r-0 ${
-                activeTab === t.key ? 'bg-[#3c4454] text-white' : 'text-gray-600 hover:bg-gray-50'
+                activeTab === t.key ? 'bg-topbar text-white' : 'text-gray-600 hover:bg-gray-50'
               }`}
             >
               {t.label}

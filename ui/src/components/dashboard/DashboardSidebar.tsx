@@ -42,7 +42,7 @@ export default function DashboardSidebar({ currentPath, onNavigate, onSignOut, v
         onClick={() => onNavigate(path)}
         className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors ${
           active
-            ? 'text-orange-400 bg-white/10 border-l-4 border-orange-400'
+            ? 'text-accent bg-white/10 border-l-4 border-accent'
             : 'text-gray-300 hover:text-white hover:bg-white/5 border-l-4 border-transparent'
         }`}
       >
@@ -53,9 +53,9 @@ export default function DashboardSidebar({ currentPath, onNavigate, onSignOut, v
   }
 
   return (
-    <aside className="h-full w-56 bg-[#2e3440] text-gray-100 flex flex-col shrink-0">
+    <aside className="h-full w-sidebar bg-sidebar text-gray-100 flex flex-col shrink-0">
       <div className="h-14 flex items-center px-4 border-b border-white/10">
-        <BoltIcon className="h-6 w-6 text-orange-400" />
+        <BoltIcon className="h-6 w-6 text-accent" />
         <span className="ml-2 font-semibold tracking-tight">PowerMonitor</span>
       </div>
 
