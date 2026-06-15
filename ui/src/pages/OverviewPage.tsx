@@ -6,15 +6,15 @@ import { computedTelemetryAtom, liveBufferAtom, secondsAgoAtom } from '../state/
 import { supabase } from '../lib/supabase'
 import { APP_VERSION } from '../lib/version'
 import { useTelemetryInit } from '../lib/useTelemetryInit'
-import SolisLayout from '../components/solis/SolisLayout'
-import SemiGauge from '../components/solis/SemiGauge'
-import KpiCard from '../components/solis/KpiCard'
-import StatusBadge from '../components/solis/StatusBadge'
-import DateRangeTabs from '../components/solis/DateRangeTabs'
-import SolisChart from '../components/solis/SolisChart'
-import AlarmPanel from '../components/solis/AlarmPanel'
-import DeviceInfoCard from '../components/solis/DeviceInfoCard'
-import TopologyDiagram from '../components/solis/TopologyDiagram'
+import DashboardShell from '../components/dashboard/DashboardShell'
+import SemiGauge from '../components/dashboard/SemiGauge'
+import KpiCard from '../components/dashboard/KpiCard'
+import StatusBadge from '../components/dashboard/StatusBadge'
+import DateRangeTabs from '../components/dashboard/DateRangeTabs'
+import SolisChart from '../components/dashboard/DashboardChart'
+import AlarmPanel from '../components/dashboard/AlarmPanel'
+import DeviceInfoCard from '../components/dashboard/DeviceInfoCard'
+import TopologyDiagram from '../components/dashboard/TopologyDiagram'
 
 type Tab = 'overview' | 'yield' | 'flow'
 type Range = 'day' | 'month' | 'year' | 'total'
@@ -48,7 +48,7 @@ export default function SolisOverviewPage() {
 
   if (!selectedDevice) {
     return (
-      <SolisLayout
+      <DashboardShell
         currentPath="/dashboard"
         onNavigate={handleNavigate}
         onSignOut={handleSignOut}
@@ -61,12 +61,12 @@ export default function SolisOverviewPage() {
         onRefresh={handleRefresh}
       >
         <div className="text-center py-20 text-gray-500">Select a device to view telemetry.</div>
-      </SolisLayout>
+      </DashboardShell>
     )
   }
 
   return (
-    <SolisLayout
+    <DashboardShell
       currentPath="/dashboard"
       onNavigate={handleNavigate}
       onSignOut={handleSignOut}
@@ -161,6 +161,6 @@ export default function SolisOverviewPage() {
           batterySoc={telemetry.min_soc_pct}
         />
       )}
-    </SolisLayout>
+    </DashboardShell>
   )
 }

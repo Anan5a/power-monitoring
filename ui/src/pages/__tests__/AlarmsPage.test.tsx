@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
-import SolisAlarmsPage from '../SolisAlarmsPage'
+import AlarmsPage from '../AlarmsPage'
 
 vi.mock('../../lib/supabase', () => ({
   supabase: {
@@ -16,11 +16,11 @@ vi.mock('../../lib/supabase', () => ({
   },
 }))
 
-describe('SolisAlarmsPage', () => {
+describe('AlarmsPage', () => {
   it('renders the alarms heading', () => {
     render(
       <BrowserRouter>
-        <SolisAlarmsPage />
+        <AlarmsPage />
       </BrowserRouter>
     )
 
@@ -30,7 +30,7 @@ describe('SolisAlarmsPage', () => {
   it('shows offline alarm when no device selected', () => {
     render(
       <BrowserRouter>
-        <SolisAlarmsPage />
+        <AlarmsPage />
       </BrowserRouter>
     )
 

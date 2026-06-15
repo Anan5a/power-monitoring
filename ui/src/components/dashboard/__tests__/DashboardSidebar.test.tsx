@@ -1,13 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import SolisSidebar from '../SolisSidebar'
+import DashboardSidebar from '../DashboardSidebar'
 
 const noop = vi.fn()
 
-describe('SolisSidebar', () => {
+describe('DashboardSidebar', () => {
   it('renders navigation items and version', () => {
     render(
-      <SolisSidebar
+      <DashboardSidebar
         currentPath="/dashboard"
         onNavigate={noop}
         onSignOut={noop}

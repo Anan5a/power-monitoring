@@ -1,9 +1,9 @@
 import { useState, type ReactNode } from 'react'
 import type { Device } from '../../lib/types'
-import SolisSidebar from './SolisSidebar'
-import SolisTopBar from './SolisTopBar'
+import DashboardSidebar from './DashboardSidebar'
+import DashboardTopBar from './DashboardTopBar'
 
-export interface SolisLayoutProps {
+export interface DashboardShellProps {
   children: ReactNode
   currentPath: string
   onNavigate: (path: string) => void
@@ -17,7 +17,7 @@ export interface SolisLayoutProps {
   onRefresh?: () => void
 }
 
-export default function SolisLayout({
+export default function DashboardShell({
   children,
   currentPath,
   onNavigate,
@@ -29,12 +29,12 @@ export default function SolisLayout({
   lastUpdated,
   version,
   onRefresh,
-}: SolisLayoutProps) {
+}: DashboardShellProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] flex flex-col">
-      <SolisTopBar
+      <DashboardTopBar
         devices={devices}
         selectedDeviceId={selectedDeviceId}
         onSelectDevice={onSelectDevice}
@@ -49,7 +49,7 @@ export default function SolisLayout({
       <div className="flex flex-1 overflow-hidden">
         {/* Desktop sidebar */}
         <div className="hidden lg:block">
-          <SolisSidebar
+          <DashboardSidebar
             currentPath={currentPath}
             onNavigate={onNavigate}
             onSignOut={onSignOut}
@@ -65,7 +65,7 @@ export default function SolisLayout({
               onClick={() => setMobileMenuOpen(false)}
             />
             <div className="fixed inset-y-0 left-0 z-40 lg:hidden">
-              <SolisSidebar
+              <DashboardSidebar
                 currentPath={currentPath}
                 onNavigate={(path) => { onNavigate(path); setMobileMenuOpen(false) }}
                 onSignOut={() => { setMobileMenuOpen(false); onSignOut() }}

@@ -14,12 +14,12 @@ import type { TelemetryPoint } from '../../lib/types'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend)
 
-interface SolisChartProps {
+interface DashboardChartProps {
   data: TelemetryPoint[]
   metric: string
 }
 
-export default function SolisChart({ data, metric }: SolisChartProps) {
+export default function DashboardChart({ data, metric }: DashboardChartProps) {
   const labels = data.map((p) => new Date(p.recorded_at).toLocaleTimeString())
   const values = data.map((p) => p.payload[metric] ?? 0)
 

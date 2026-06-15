@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Bars3Icon, ArrowPathIcon, UserCircleIcon } from '@heroicons/react/24/outline'
 import type { Device } from '../../lib/types'
 
-interface SolisTopBarProps {
+interface DashboardTopBarProps {
   devices: Device[]
   selectedDeviceId: string | null
   onSelectDevice: (device: Device) => void
@@ -14,7 +14,7 @@ interface SolisTopBarProps {
   onSignOut?: () => void
 }
 
-export default function SolisTopBar({
+export default function DashboardTopBar({
   devices,
   selectedDeviceId,
   onSelectDevice,
@@ -24,7 +24,7 @@ export default function SolisTopBar({
   onMenuClick,
   onRefresh,
   onSignOut,
-}: SolisTopBarProps) {
+}: DashboardTopBarProps) {
   const selected = devices.find((d) => d.id === selectedDeviceId)
   const [menuOpen, setMenuOpen] = useState(false)
 

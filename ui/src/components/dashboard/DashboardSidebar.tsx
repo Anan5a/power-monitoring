@@ -8,7 +8,7 @@ import {
   Squares2X2Icon,
 } from '@heroicons/react/24/outline'
 
-export interface SolisSidebarProps {
+export interface DashboardSidebarProps {
   currentPath: string
   onNavigate: (path: string) => void
   onSignOut: () => void
@@ -33,7 +33,7 @@ const BOTTOM_ITEMS: NavItem[] = [
   { label: 'Classic View', path: '/dashboard/classic', Icon: Squares2X2Icon },
 ]
 
-export default function SolisSidebar({ currentPath, onNavigate, onSignOut, version }: SolisSidebarProps) {
+export default function DashboardSidebar({ currentPath, onNavigate, onSignOut, version }: DashboardSidebarProps) {
   function Item({ label, path, Icon }: NavItem) {
     const active = currentPath === path || (path !== '/dashboard' && currentPath.startsWith(path))
     return (

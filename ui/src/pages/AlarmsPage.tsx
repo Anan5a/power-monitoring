@@ -5,7 +5,7 @@ import { secondsAgoAtom } from '../state/derived'
 import { supabase } from '../lib/supabase'
 import { APP_VERSION } from '../lib/version'
 import { useTelemetryInit } from '../lib/useTelemetryInit'
-import SolisLayout from '../components/solis/SolisLayout'
+import DashboardShell from '../components/dashboard/DashboardShell'
 
 interface Alarm {
   time: string
@@ -43,7 +43,7 @@ export default function SolisAlarmsPage() {
   }
 
   return (
-    <SolisLayout
+    <DashboardShell
       currentPath="/dashboard/alarms"
       onNavigate={handleNavigate}
       onSignOut={handleSignOut}
@@ -76,6 +76,6 @@ export default function SolisAlarmsPage() {
           ))}
         </div>
       )}
-    </SolisLayout>
+    </DashboardShell>
   )
 }

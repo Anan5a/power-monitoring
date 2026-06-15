@@ -6,10 +6,10 @@ import { liveBufferAtom, secondsAgoAtom } from '../state/derived'
 import { supabase } from '../lib/supabase'
 import { APP_VERSION } from '../lib/version'
 import { useTelemetryInit } from '../lib/useTelemetryInit'
-import SolisLayout from '../components/solis/SolisLayout'
-import DateRangeTabs from '../components/solis/DateRangeTabs'
-import MetricSelector from '../components/solis/MetricSelector'
-import SolisChart from '../components/solis/SolisChart'
+import DashboardShell from '../components/dashboard/DashboardShell'
+import DateRangeTabs from '../components/dashboard/DateRangeTabs'
+import MetricSelector from '../components/dashboard/MetricSelector'
+import SolisChart from '../components/dashboard/DashboardChart'
 
 type Range = 'day' | 'month' | 'year' | 'total'
 
@@ -58,7 +58,7 @@ export default function SolisAnalysisPage() {
 
   if (!selectedDevice) {
     return (
-      <SolisLayout
+      <DashboardShell
         currentPath="/dashboard/analysis"
         onNavigate={handleNavigate}
         onSignOut={handleSignOut}
@@ -71,12 +71,12 @@ export default function SolisAnalysisPage() {
         onRefresh={handleRefresh}
       >
         <div className="text-center py-20 text-gray-500">Select a device to view analysis.</div>
-      </SolisLayout>
+      </DashboardShell>
     )
   }
 
   return (
-    <SolisLayout
+    <DashboardShell
       currentPath="/dashboard/analysis"
       onNavigate={handleNavigate}
       onSignOut={handleSignOut}
@@ -108,6 +108,6 @@ export default function SolisAnalysisPage() {
           )}
         </div>
       </div>
-    </SolisLayout>
+    </DashboardShell>
   )
 }

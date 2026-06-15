@@ -5,10 +5,10 @@ import { computedTelemetryAtom, channelPayloadAtomFamily, liveBufferAtom, second
 import { supabase } from '../lib/supabase'
 import { APP_VERSION } from '../lib/version'
 import { useTelemetryInit } from '../lib/useTelemetryInit'
-import SolisLayout from '../components/solis/SolisLayout'
-import TopologyDiagram from '../components/solis/TopologyDiagram'
-import RealtimePanel from '../components/solis/RealtimePanel'
-import ParamTable from '../components/solis/ParamTable'
+import DashboardShell from '../components/dashboard/DashboardShell'
+import TopologyDiagram from '../components/dashboard/TopologyDiagram'
+import RealtimePanel from '../components/dashboard/RealtimePanel'
+import ParamTable from '../components/dashboard/ParamTable'
 
 export default function SolisDevicePage() {
   const navigate = useNavigate()
@@ -47,7 +47,7 @@ export default function SolisDevicePage() {
 
   if (!selectedDevice) {
     return (
-      <SolisLayout
+      <DashboardShell
         currentPath="/dashboard/device"
         onNavigate={handleNavigate}
         onSignOut={handleSignOut}
@@ -60,12 +60,12 @@ export default function SolisDevicePage() {
         onRefresh={handleRefresh}
       >
         <div className="text-center py-20 text-gray-500">Select a device to view details.</div>
-      </SolisLayout>
+      </DashboardShell>
     )
   }
 
   return (
-    <SolisLayout
+    <DashboardShell
       currentPath="/dashboard/device"
       onNavigate={handleNavigate}
       onSignOut={handleSignOut}
@@ -138,6 +138,6 @@ export default function SolisDevicePage() {
           />
         )}
       </div>
-    </SolisLayout>
+    </DashboardShell>
   )
 }

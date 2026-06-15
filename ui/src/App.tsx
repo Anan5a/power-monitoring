@@ -4,10 +4,10 @@ import { supabase } from './lib/supabase'
 import type { Session } from '@supabase/supabase-js'
 import LoginPage from './pages/LoginPage'
 import ClassicDashboardPage from './pages/ClassicDashboardPage'
-import SolisOverviewPage from './pages/SolisOverviewPage'
-import SolisDevicePage from './pages/SolisDevicePage'
-import SolisAnalysisPage from './pages/SolisAnalysisPage'
-import SolisAlarmsPage from './pages/SolisAlarmsPage'
+import OverviewPage from './pages/OverviewPage'
+import DevicePage from './pages/DevicePage'
+import AnalysisPage from './pages/AnalysisPage'
+import AlarmsPage from './pages/AlarmsPage'
 import AdminPage from './pages/AdminPage'
 import ProvisioningPage from './pages/ProvisioningPage'
 import ResetPasswordPage from './pages/ResetPasswordPage'
@@ -42,10 +42,10 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/provision" element={<ProvisioningPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
-        <Route path="/dashboard" element={<ProtectedRoute><SolisOverviewPage /></ProtectedRoute>} />
-        <Route path="/dashboard/device" element={<ProtectedRoute><SolisDevicePage /></ProtectedRoute>} />
-        <Route path="/dashboard/analysis" element={<ProtectedRoute><SolisAnalysisPage /></ProtectedRoute>} />
-        <Route path="/dashboard/alarms" element={<ProtectedRoute><SolisAlarmsPage /></ProtectedRoute>} />
+        <Route path="/dashboard" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
+        <Route path="/dashboard/device" element={<ProtectedRoute><DevicePage /></ProtectedRoute>} />
+        <Route path="/dashboard/analysis" element={<ProtectedRoute><AnalysisPage /></ProtectedRoute>} />
+        <Route path="/dashboard/alarms" element={<ProtectedRoute><AlarmsPage /></ProtectedRoute>} />
         <Route path="/dashboard/classic" element={<ProtectedRoute><ClassicDashboardPage /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
