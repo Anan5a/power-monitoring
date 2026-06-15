@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAtom, useAtomValue } from 'jotai'
 import { selectedDeviceAtom, connectionStateAtom } from '../state/atoms'
-import { computedTelemetryAtom, liveBufferAtom } from '../state/derived'
+import { computedTelemetryAtom, liveBufferAtom, secondsAgoAtom } from '../state/derived'
 import { supabase } from '../lib/supabase'
 import type { Device } from '../lib/types'
 import { APP_VERSION } from '../lib/version'
@@ -14,6 +14,7 @@ import DateRangeTabs from '../components/solis/DateRangeTabs'
 import SolisChart from '../components/solis/SolisChart'
 import AlarmPanel from '../components/solis/AlarmPanel'
 import DeviceInfoCard from '../components/solis/DeviceInfoCard'
+import TopologyDiagram from '../components/solis/TopologyDiagram'
 
 type Tab = 'overview' | 'yield' | 'flow'
 type Range = 'day' | 'month' | 'year' | 'total'
@@ -25,6 +26,7 @@ export default function SolisOverviewPage() {
   const telemetry = useAtomValue(computedTelemetryAtom)
   const buffer = useAtomValue(liveBufferAtom)
   const connection = useAtomValue(connectionStateAtom)
+  const secondsAgo = useAtomValue(secondsAgoAtom)
 
   useEffect(() => {
     async function load() {
@@ -62,6 +64,7 @@ export default function SolisOverviewPage() {
         onSelectDevice={setSelectedDevice}
         isOnline={false}
         version={APP_VERSION}
+        lastUpdated={secondsAgo != null ? `${secondsAgo}s ago` : undefined}
         onRefresh={handleRefresh}
       >
         <div className="text-center py-20 text-gray-500">Select a device to view telemetry.</div>
@@ -157,9 +160,13 @@ export default function SolisOverviewPage() {
       )}
 
       {activeTab === 'flow' && (
-        <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm text-center text-gray-500">
-          Power flow diagram will be implemented in Task 6.
-        </div>
+        <TopologyDiagram
+          pvPower={telemetry.pv_power / 1000}
+          gridPower={0}
+          batteryPower={telemetry.battery_power / 1000}
+          loadPower={telemetry.dc_load_power / 1000}
+          batterySoc={telemetry.min_soc_pct}
+        />
       )}
     </SolisLayout>
   )

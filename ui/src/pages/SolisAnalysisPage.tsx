@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAtom, useAtomValue } from 'jotai'
 import { selectedDeviceAtom } from '../state/atoms'
-import { liveBufferAtom } from '../state/derived'
+import { liveBufferAtom, secondsAgoAtom } from '../state/derived'
 import { supabase } from '../lib/supabase'
 import type { Device } from '../lib/types'
 import { APP_VERSION } from '../lib/version'
@@ -45,6 +45,7 @@ export default function SolisAnalysisPage() {
   const [devices, setDevices] = useState<Device[]>([])
   const [selectedDevice, setSelectedDevice] = useAtom(selectedDeviceAtom)
   const buffer = useAtomValue(liveBufferAtom)
+  const secondsAgo = useAtomValue(secondsAgoAtom)
   const [range, setRange] = useState<Range>('day')
   const [selectedMetrics, setSelectedMetrics] = useState<string[]>(['total_power'])
 
@@ -73,6 +74,7 @@ export default function SolisAnalysisPage() {
         onSelectDevice={setSelectedDevice}
         isOnline={false}
         version={APP_VERSION}
+        lastUpdated={secondsAgo != null ? `${secondsAgo}s ago` : undefined}
         onRefresh={handleRefresh}
       >
         <div className="text-center py-20 text-gray-500">Select a device to view analysis.</div>

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAtom } from 'jotai'
+import { useAtom, useAtomValue } from 'jotai'
 import { selectedDeviceAtom } from '../state/atoms'
+import { secondsAgoAtom } from '../state/derived'
 import { supabase } from '../lib/supabase'
 import type { Device } from '../lib/types'
 import { APP_VERSION } from '../lib/version'
@@ -23,6 +24,7 @@ export default function SolisAlarmsPage() {
   const navigate = useNavigate()
   const [devices, setDevices] = useState<Device[]>([])
   const [selectedDevice, setSelectedDevice] = useAtom(selectedDeviceAtom)
+  const secondsAgo = useAtomValue(secondsAgoAtom)
 
   useEffect(() => {
     async function load() {
@@ -58,6 +60,7 @@ export default function SolisAlarmsPage() {
       onSelectDevice={setSelectedDevice}
       isOnline={online}
       version={APP_VERSION}
+      lastUpdated={secondsAgo != null ? `${secondsAgo}s ago` : undefined}
       onRefresh={handleRefresh}
     >
       <h2 className="text-lg font-semibold text-gray-800 mb-4">Alarms</h2>

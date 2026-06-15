@@ -4,7 +4,7 @@ import {
   ChartBarIcon,
   BellIcon,
   Cog6ToothIcon,
-  ArrowLeftOnRectangleIcon,
+  ArrowRightStartOnRectangleIcon,
   Squares2X2Icon,
 } from '@heroicons/react/24/outline'
 
@@ -70,7 +70,7 @@ export default function SolisSidebar({ currentPath, onNavigate, onSignOut, versi
           onClick={onSignOut}
           className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-gray-400 hover:text-white hover:bg-white/5 border-l-4 border-transparent"
         >
-          <ArrowLeftOnRectangleIcon className="h-5 w-5 shrink-0" />
+          <ArrowRightStartOnRectangleIcon className="h-5 w-5 shrink-0" />
           <span>Sign Out</span>
         </button>
       </div>

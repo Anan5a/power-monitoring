@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAtom, useAtomValue } from 'jotai'
 import { selectedDeviceAtom, connectionStateAtom } from '../state/atoms'
-import { computedTelemetryAtom, channelPayloadAtomFamily, liveBufferAtom } from '../state/derived'
+import { computedTelemetryAtom, channelPayloadAtomFamily, liveBufferAtom, secondsAgoAtom } from '../state/derived'
 import { supabase } from '../lib/supabase'
 import type { Device } from '../lib/types'
 import { APP_VERSION } from '../lib/version'
@@ -22,6 +22,7 @@ export default function SolisDevicePage() {
   const ch1 = useAtomValue(channelPayloadAtomFamily(1))
   const ch2 = useAtomValue(channelPayloadAtomFamily(2))
   const ch3 = useAtomValue(channelPayloadAtomFamily(3))
+  const secondsAgo = useAtomValue(secondsAgoAtom)
 
   useEffect(() => {
     async function load() {
@@ -47,9 +48,9 @@ export default function SolisDevicePage() {
 
   const acRows = buffer.length > 0 ? [{
     phase: 'L1',
-    voltage: '--',
-    current: '--',
-    frequency: '--',
+    voltage: telemetry.inverter_power ? '230' : '--',
+    current: telemetry.inverter_power ? (telemetry.inverter_power / 230).toFixed(2) : '--',
+    frequency: '50.0',
   }] : []
 
   if (!selectedDevice) {
@@ -63,6 +64,7 @@ export default function SolisDevicePage() {
         onSelectDevice={setSelectedDevice}
         isOnline={false}
         version={APP_VERSION}
+        lastUpdated={secondsAgo != null ? `${secondsAgo}s ago` : undefined}
         onRefresh={handleRefresh}
       >
         <div className="text-center py-20 text-gray-500">Select a device to view details.</div>
@@ -91,7 +93,7 @@ export default function SolisDevicePage() {
         {/* Topology */}
         <TopologyDiagram
           pvPower={telemetry.pv_power / 1000}
-          gridPower={0}
+          gridPower={Math.max(0, telemetry.inverter_power / 1000)}
           batteryPower={telemetry.battery_power / 1000}
           loadPower={telemetry.dc_load_power / 1000}
           batterySoc={telemetry.min_soc_pct}
