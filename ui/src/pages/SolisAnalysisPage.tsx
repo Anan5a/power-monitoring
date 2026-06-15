@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAtom, useAtomValue } from 'jotai'
-import { selectedDeviceAtom } from '../state/atoms'
+import { selectedDeviceAtom, devicesAtom } from '../state/atoms'
 import { liveBufferAtom, secondsAgoAtom } from '../state/derived'
 import { supabase } from '../lib/supabase'
-import type { Device } from '../lib/types'
 import { APP_VERSION } from '../lib/version'
+import { useTelemetryInit } from '../lib/useTelemetryInit'
 import SolisLayout from '../components/solis/SolisLayout'
 import DateRangeTabs from '../components/solis/DateRangeTabs'
 import MetricSelector from '../components/solis/MetricSelector'
@@ -42,20 +42,13 @@ const GROUPS = [
 
 export default function SolisAnalysisPage() {
   const navigate = useNavigate()
-  const [devices, setDevices] = useState<Device[]>([])
+  const devices = useAtomValue(devicesAtom)
   const [selectedDevice, setSelectedDevice] = useAtom(selectedDeviceAtom)
   const buffer = useAtomValue(liveBufferAtom)
   const secondsAgo = useAtomValue(secondsAgoAtom)
+  useTelemetryInit(selectedDevice)
   const [range, setRange] = useState<Range>('day')
   const [selectedMetrics, setSelectedMetrics] = useState<string[]>(['total_power'])
-
-  useEffect(() => {
-    async function load() {
-      const { data } = await supabase.from('devices').select('*').order('device_name')
-      if (data) setDevices(data)
-    }
-    load()
-  }, [])
 
   const online = selectedDevice?.is_online ?? false
 

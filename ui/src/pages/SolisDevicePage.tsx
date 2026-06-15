@@ -1,11 +1,10 @@
-import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAtom, useAtomValue } from 'jotai'
-import { selectedDeviceAtom, connectionStateAtom } from '../state/atoms'
+import { selectedDeviceAtom, connectionStateAtom, devicesAtom } from '../state/atoms'
 import { computedTelemetryAtom, channelPayloadAtomFamily, liveBufferAtom, secondsAgoAtom } from '../state/derived'
 import { supabase } from '../lib/supabase'
-import type { Device } from '../lib/types'
 import { APP_VERSION } from '../lib/version'
+import { useTelemetryInit } from '../lib/useTelemetryInit'
 import SolisLayout from '../components/solis/SolisLayout'
 import TopologyDiagram from '../components/solis/TopologyDiagram'
 import RealtimePanel from '../components/solis/RealtimePanel'
@@ -13,7 +12,7 @@ import ParamTable from '../components/solis/ParamTable'
 
 export default function SolisDevicePage() {
   const navigate = useNavigate()
-  const [devices, setDevices] = useState<Device[]>([])
+  const devices = useAtomValue(devicesAtom)
   const [selectedDevice, setSelectedDevice] = useAtom(selectedDeviceAtom)
   const telemetry = useAtomValue(computedTelemetryAtom)
   const buffer = useAtomValue(liveBufferAtom)
@@ -23,14 +22,7 @@ export default function SolisDevicePage() {
   const ch2 = useAtomValue(channelPayloadAtomFamily(2))
   const ch3 = useAtomValue(channelPayloadAtomFamily(3))
   const secondsAgo = useAtomValue(secondsAgoAtom)
-
-  useEffect(() => {
-    async function load() {
-      const { data } = await supabase.from('devices').select('*').order('device_name')
-      if (data) setDevices(data)
-    }
-    load()
-  }, [])
+  useTelemetryInit(selectedDevice)
 
   const online = selectedDevice?.is_online ?? false
   const status = connection === 'live' ? 'Online' : 'Offline'

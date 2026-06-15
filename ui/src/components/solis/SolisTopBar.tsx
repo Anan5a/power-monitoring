@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Bars3Icon, ArrowPathIcon, UserCircleIcon } from '@heroicons/react/24/outline'
 import type { Device } from '../../lib/types'
 
@@ -10,6 +11,7 @@ interface SolisTopBarProps {
   version?: string
   onMenuClick: () => void
   onRefresh?: () => void
+  onSignOut?: () => void
 }
 
 export default function SolisTopBar({
@@ -21,8 +23,10 @@ export default function SolisTopBar({
   version,
   onMenuClick,
   onRefresh,
+  onSignOut,
 }: SolisTopBarProps) {
   const selected = devices.find((d) => d.id === selectedDeviceId)
+  const [menuOpen, setMenuOpen] = useState(false)
 
   return (
     <header className="h-14 bg-[#3c4454] text-white flex items-center justify-between px-4 shrink-0">
@@ -58,8 +62,31 @@ export default function SolisTopBar({
         <button type="button" onClick={onRefresh} className="p-1.5 rounded hover:bg-white/10">
           <ArrowPathIcon className="h-5 w-5" />
         </button>
-        <div className="flex items-center gap-2 pl-3 border-l border-white/20">
-          <UserCircleIcon className="h-6 w-6 text-gray-300" />
+        <div className="relative flex items-center gap-2 pl-3 border-l border-white/20">
+          <button type="button" onClick={() => setMenuOpen(!menuOpen)} className="rounded hover:bg-white/10 p-0.5">
+            <UserCircleIcon className="h-6 w-6 text-gray-300" />
+          </button>
+          {menuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+              <div className="absolute right-0 top-full mt-2 w-44 z-20 bg-white rounded-md shadow-lg border border-gray-200 py-1">
+                <button
+                  type="button"
+                  onClick={() => { setMenuOpen(false); window.location.href = '/settings' }}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Settings
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setMenuOpen(false); onSignOut?.() }}
+                  className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-50"
+                >
+                  Sign Out
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </header>

@@ -43,6 +43,7 @@ export default function SolisLayout({
         version={version}
         onMenuClick={() => setMobileMenuOpen(true)}
         onRefresh={onRefresh}
+        onSignOut={onSignOut}
       />
 
       <div className="flex flex-1 overflow-hidden">

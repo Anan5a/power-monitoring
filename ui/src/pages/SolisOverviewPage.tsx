@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAtom, useAtomValue } from 'jotai'
-import { selectedDeviceAtom, connectionStateAtom } from '../state/atoms'
+import { selectedDeviceAtom, connectionStateAtom, devicesAtom } from '../state/atoms'
 import { computedTelemetryAtom, liveBufferAtom, secondsAgoAtom } from '../state/derived'
 import { supabase } from '../lib/supabase'
-import type { Device } from '../lib/types'
 import { APP_VERSION } from '../lib/version'
+import { useTelemetryInit } from '../lib/useTelemetryInit'
 import SolisLayout from '../components/solis/SolisLayout'
 import SemiGauge from '../components/solis/SemiGauge'
 import KpiCard from '../components/solis/KpiCard'
@@ -21,20 +21,13 @@ type Range = 'day' | 'month' | 'year' | 'total'
 
 export default function SolisOverviewPage() {
   const navigate = useNavigate()
-  const [devices, setDevices] = useState<Device[]>([])
+  const devices = useAtomValue(devicesAtom)
   const [selectedDevice, setSelectedDevice] = useAtom(selectedDeviceAtom)
   const telemetry = useAtomValue(computedTelemetryAtom)
   const buffer = useAtomValue(liveBufferAtom)
   const connection = useAtomValue(connectionStateAtom)
   const secondsAgo = useAtomValue(secondsAgoAtom)
-
-  useEffect(() => {
-    async function load() {
-      const { data } = await supabase.from('devices').select('*').order('device_name')
-      if (data) setDevices(data)
-    }
-    load()
-  }, [])
+  useTelemetryInit(selectedDevice)
 
   const [activeTab, setActiveTab] = useState<Tab>('overview')
   const [range, setRange] = useState<Range>('day')

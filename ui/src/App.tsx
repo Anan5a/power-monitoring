@@ -14,6 +14,7 @@ import ResetPasswordPage from './pages/ResetPasswordPage'
 import SettingsPage from './pages/SettingsPage'
 import ChannelsPage from './pages/ChannelsPage'
 import { useNowTicker } from './state/nowTicker'
+import { useDevicesLoader } from './lib/useDevicesLoader'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
@@ -34,6 +35,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   useNowTicker()
+  useDevicesLoader()
   return (
     <BrowserRouter>
       <Routes>

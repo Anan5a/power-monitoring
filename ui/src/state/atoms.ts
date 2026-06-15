@@ -60,6 +60,10 @@ export const hoveredPointAtom = atom<{ time: string; values: Record<string, numb
 
 export const selectedDeviceAtom = atom<Device | null>(null)
 
+// --- Devices list (loaded once, shared across pages) ---
+
+export const devicesAtom = atom<Device[]>([])
+
 // --- Aggregates (RPC-backed) ---
 
 export type GenerationRange = 'today' | 'yesterday' | '7d' | '30d'
