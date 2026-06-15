@@ -4,8 +4,6 @@ import { useAtomValue, useStore } from 'jotai'
 import { supabase, fetchDeviceChannels } from '../lib/supabase'
 import { latestAtom } from '../state/atoms'
 import type { Device, DeviceChannels } from '../lib/types'
-import DashboardLayout from '../components/DashboardLayout'
-import HeaderBar from '../components/HeaderBar'
 import type { ReactNode } from 'react'
 
 type Tab = 'sensors' | 'virtual' | 'battery' | 'relays'
@@ -337,65 +335,31 @@ export default function ChannelsPage() {
     })
   }
 
-  function handleNavigate(path: string) { navigate(path) }
-  function handleSignOut() { supabase.auth.signOut(); navigate('/login') }
-
-async function startLiveTelemetrySafe(store: any, deviceKey: string) {
-  const { startLiveTelemetry } = await import('../state/services/telemetryService')
-  startLiveTelemetry(store, deviceKey)
-}
-
-async function stopLiveTelemetrySafe() {
-  const { stopLiveTelemetry } = await import('../state/services/telemetryService')
-  stopLiveTelemetry()
-}
-
-  const header = ({ onMenuClick }: { onMenuClick: () => void }) => (
-    <HeaderBar
-      devices={devices}
-      selectedDeviceId={selectedDevice?.id ?? null}
-      onSelectDevice={setSelectedDevice}
-      isOnline={selectedDevice?.is_online ?? false}
-      onMenuClick={onMenuClick}
-    />
-  )
-
   if (loadingDevices) {
     return <div className="flex items-center justify-center h-screen text-slate-500">Loading...</div>
   }
 
+  if (!selectedDevice) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-slate-600 mb-4">No device selected.</p>
+        <p className="text-sm text-slate-400">Select a device from the dropdown above to view channels.</p>
+      </div>
+    )
+  }
+
   return (
-    <DashboardLayout
-      currentPath="/channels"
-      onNavigate={handleNavigate}
-      onSignOut={handleSignOut}
-      header={header}
-      deviceName={selectedDevice?.device_name}
-    >
-      {!selectedDevice ? (
-        <div className="text-center py-12">
-          <p className="text-slate-600 mb-4">No device selected.</p>
-          <p className="text-sm text-slate-400">Select a device from the dropdown above to view channels.</p>
-        </div>
-      ) : devices.length === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-slate-600">No devices registered.</p>
-          <a href="/admin" className="text-brand-600 hover:underline mt-2 inline-block">Add a Device</a>
-        </div>
-      ) : (
-        <div className="space-y-6">
-          <ChannelsPageInner
-            selectedDevice={selectedDevice}
-            deviceChannels={deviceChannels}
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            payload={payload}
-            relayStates={relayStates}
-            relayLoaded={relayLoaded}
-            onToggleRelay={toggleRelay}
-          />
-        </div>
-      )}
-    </DashboardLayout>
+    <div className="space-y-6">
+      <ChannelsPageInner
+        selectedDevice={selectedDevice}
+        deviceChannels={deviceChannels}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        payload={payload}
+        relayStates={relayStates}
+        relayLoaded={relayLoaded}
+        onToggleRelay={toggleRelay}
+      />
+    </div>
   )
 }

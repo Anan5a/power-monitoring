@@ -2,8 +2,6 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import type { Device, DeviceChannels, RelayRule, VirtualChannelConfig, BatteryConfig } from '../lib/types'
-import DashboardLayout from '../components/DashboardLayout'
-import HeaderBar from '../components/HeaderBar'
 
 const EMPTY_CHANNELS: DeviceChannels = {
   device_key: '',
@@ -105,34 +103,11 @@ export default function SettingsPage() {
 
   const tabs = ['network', 'supabase', 'relays', 'batteries', 'calibration', 'sensors', 'virtual', 'groups', 'names', 'system']
 
-  function handleNavigate(path: string) { navigate(path) }
-  function handleSignOut() { supabase.auth.signOut(); navigate('/login') }
-
-  const header = ({ onMenuClick }: { onMenuClick: () => void }) => (
-    <HeaderBar
-      devices={devices}
-      selectedDeviceId={selectedDeviceId}
-      onSelectDevice={(d) => {
-        setSelectedDeviceId(d.id)
-        setSelectedKey(d.device_key)
-      }}
-      isOnline={selectedDevice?.is_online ?? false}
-      onMenuClick={onMenuClick}
-    />
-  )
-
   if (loadingDevices) {
     return <div className="flex items-center justify-center h-screen text-slate-500">Loading...</div>
   }
 
   return (
-    <DashboardLayout
-      currentPath="/settings"
-      onNavigate={handleNavigate}
-      onSignOut={handleSignOut}
-      header={header}
-      deviceName={selectedDevice?.device_name}
-    >
       <div className="space-y-6">
         {selectedKey && (
           <>
@@ -450,7 +425,6 @@ export default function SettingsPage() {
           </>
         )}
       </div>
-    </DashboardLayout>
   )
 }
 

@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import type { Device } from '../lib/types'
-import DashboardLayout from '../components/DashboardLayout'
-import HeaderBar from '../components/HeaderBar'
 
 export default function AdminPage() {
   const navigate = useNavigate()
@@ -55,34 +53,12 @@ export default function AdminPage() {
     loadDevices()
   }
 
-  async function copyKey(key: string) {
-    await navigator.clipboard.writeText(key)
+  function copyKey(key: string) {
+    navigator.clipboard.writeText(key)
   }
 
-  function handleNavigate(path: string) { navigate(path) }
-  function handleSignOut() { supabase.auth.signOut(); navigate('/login') }
-
-  const header = ({ onMenuClick }: { onMenuClick: () => void }) => (
-    <HeaderBar
-      devices={allDevices}
-      selectedDeviceId={selectedDeviceId}
-      onSelectDevice={(d) => {
-        setSelectedDeviceId(d.id)
-        navigate('/dashboard')
-      }}
-      isOnline={false}
-      onMenuClick={onMenuClick}
-    />
-  )
-
   return (
-    <DashboardLayout
-      currentPath="/admin"
-      onNavigate={handleNavigate}
-      onSignOut={handleSignOut}
-      header={header}
-    >
-      <div className="space-y-6">
+    <div className="space-y-6">
         {/* Register new device */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
           <h2 className="text-lg font-semibold mb-4 text-slate-800">Register New Device</h2>
@@ -168,6 +144,5 @@ export default function AdminPage() {
           )}
         </div>
       </div>
-    </DashboardLayout>
-  )
-}
+    )
+  }
