@@ -13,27 +13,38 @@ export default function SemiGauge({
   size = 80,
   stroke = 10,
 }: SemiGaugeProps) {
-  const r = (size - stroke) / 2
+  const r = (size - stroke * 2) / 2
   const cx = size / 2
-  const cy = size / 2
-  const arc = Math.PI * r
-  const offset = arc - (Math.min(value, max) / max) * arc
+  const cy = size - stroke
+  const pct = Math.min(value, max) / max
+
+  // Build a semi-circle arc path from bottom-left to bottom-right
+  const arcPath = [
+    `M ${cx - r} ${cy}`,
+    `A ${r} ${r} 0 0 1 ${cx + r} ${cy}`,
+  ].join(' ')
+
+  // Arc length = π * r (half circumference)
+  const arcLen = Math.PI * r
+  const offset = arcLen * (1 - pct)
 
   return (
-    <svg width={size} height={size / 2 + 4}>
+    <svg width={size} height={size / 2 + stroke} viewBox={`0 0 ${size} ${size / 2 + stroke}`}>
+      {/* Background track */}
       <path
-        d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+        d={arcPath}
         fill="none"
         stroke="#e5e7eb"
         strokeWidth={stroke}
         strokeLinecap="round"
       />
+      {/* Filled arc */}
       <path
-        d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+        d={arcPath}
         fill="none"
         stroke={color}
         strokeWidth={stroke}
-        strokeDasharray={arc}
+        strokeDasharray={arcLen}
         strokeDashoffset={offset}
         strokeLinecap="round"
         className="transition-all duration-700"
