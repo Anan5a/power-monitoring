@@ -18,9 +18,12 @@
     "chartjs-plugin-zoom": "^2.2.0",
     "date-fns": "^4.4.0",
     "jotai": "^2.20.0",
+    "lodash": "^4.18.1",
+    "prop-types": "^15.8.1",
     "react": "^18.2.0",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^18.2.0",
+    "react-gauge-chart": "^0.5.1",
     "react-router-dom": "^6.21.0",
     "uplot": "^1.6.32"
   },
