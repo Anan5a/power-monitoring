@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useAtomValue, useStore } from 'jotai'
 import { supabase, fetchDeviceChannels } from '../lib/supabase'
-import { latestAtom } from '../state/atoms'
-import type { Device, DeviceChannels } from '../lib/types'
+import { latestAtom, selectedDeviceAtom } from '../state/atoms'
+import type { DeviceChannels, Device } from '../lib/types'
 import type { ReactNode } from 'react'
 
 type Tab = 'sensors' | 'virtual' | 'battery' | 'relays'
@@ -260,25 +259,12 @@ function ChannelsPageInner({
 }
 
 export default function ChannelsPage() {
-  const navigate = useNavigate()
   const store = useStore()
-  const [devices, setDevices] = useState<Device[]>([])
-  const [selectedDevice, setSelectedDevice] = useState<Device | null>(null)
+  const selectedDevice = useAtomValue(selectedDeviceAtom)
   const [deviceChannels, setDeviceChannels] = useState<DeviceChannels | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>('sensors')
-  const [loadingDevices, setLoadingDevices] = useState(true)
   const [relayStates, setRelayStates] = useState<Array<{relay_index:number,gpio_pin:number,is_energized:boolean,active_high?:boolean,last_tripped_at?:string}>>([])
   const [relayLoaded, setRelayLoaded] = useState(false)
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) return
-      supabase.from('devices').select('*').order('device_name').then(({ data }) => {
-        if (data) setDevices(data)
-        setLoadingDevices(false)
-      })
-    })
-  }, [])
 
   useEffect(() => {
     if (!selectedDevice) { setDeviceChannels(null); return }
@@ -322,6 +308,16 @@ export default function ChannelsPage() {
   const latestReading = useAtomValue(latestAtom)
   const payload = latestReading?.payload as Record<string, number> | null
 
+  async function startLiveTelemetrySafe(store: any, deviceKey: string) {
+    const { startLiveTelemetry } = await import('../state/services/telemetryService')
+    startLiveTelemetry(store, deviceKey)
+  }
+
+  async function stopLiveTelemetrySafe() {
+    const { stopLiveTelemetry } = await import('../state/services/telemetryService')
+    stopLiveTelemetry()
+  }
+
   const toggleRelay = async (idx: number) => {
     if (!selectedDevice) return
     const rs = relayStates.find(r => r.relay_index === idx)
@@ -333,10 +329,6 @@ export default function ChannelsPage() {
       payload: { idx, is_energized: !isOn, active_high: activeHigh, enabled: true, overcurrent_A: 0, undervoltage_V: 0, soc_low_pct: 0, soc_high_pct: 100, trip_delay_ms: 500, reset_delay_ms: 5000 },
       status: 'pending',
     })
-  }
-
-  if (loadingDevices) {
-    return <div className="flex items-center justify-center h-screen text-slate-500">Loading...</div>
   }
 
   if (!selectedDevice) {

@@ -1,7 +1,6 @@
-import { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import type { Device, DeviceChannels, RelayRule, VirtualChannelConfig, BatteryConfig } from '../lib/types'
+import type { DeviceChannels, RelayRule, VirtualChannelConfig, BatteryConfig } from '../lib/types'
 
 const EMPTY_CHANNELS: DeviceChannels = {
   device_key: '',
@@ -11,17 +10,12 @@ const EMPTY_CHANNELS: DeviceChannels = {
 }
 
 export default function SettingsPage() {
-  const navigate = useNavigate()
-  const [devices, setDevices] = useState<Device[]>([])
   const [selectedKey, setSelectedKey] = useState<string>('')
   const [deviceChannels, setDeviceChannels] = useState<DeviceChannels>(EMPTY_CHANNELS)
   const [activeTab, setActiveTab] = useState('network')
   const [message, setMessage] = useState('')
   const [loadingDevices, setLoadingDevices] = useState(true)
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
 
-  // Keep selectedKey and selectedDeviceId in sync.
-  const selectedDevice = useMemo(() => devices.find(d => d.device_key === selectedKey) ?? null, [devices, selectedKey])
 
   // Command form states per tab
   const [wifi, setWifi] = useState({ ssid: '', pass: '', pin: '' })
@@ -36,12 +30,8 @@ export default function SettingsPage() {
       if (!session) return
       const { data } = await supabase.from('devices').select('*').order('device_name')
       if (data) {
-        setDevices(data)
         const first = data[0]
-        if (first) {
-          setSelectedDeviceId(first.id)
-          setSelectedKey(first.device_key)
-        }
+        if (first) setSelectedKey(first.device_key)
       }
       setLoadingDevices(false)
     }

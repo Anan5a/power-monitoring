@@ -1,17 +1,13 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import type { Device } from '../lib/types'
 
 export default function AdminPage() {
-  const navigate = useNavigate()
   const [devices, setDevices] = useState<Device[]>([])
   const [loading, setLoading] = useState(true)
   const [newDeviceName, setNewDeviceName] = useState('')
   const [newDeviceType, setNewDeviceType] = useState('generic')
   const [creating, setCreating] = useState(false)
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
-  const [allDevices, setAllDevices] = useState<Device[]>([])
 
   useEffect(() => {
     loadDevices()
@@ -19,10 +15,7 @@ export default function AdminPage() {
 
   async function loadDevices() {
     const { data } = await supabase.from('devices').select('*').order('created_at', { ascending: false })
-    if (data) {
-      setDevices(data)
-      setAllDevices(data)
-    }
+    if (data) setDevices(data)
     setLoading(false)
   }
 
