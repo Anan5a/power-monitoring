@@ -46,6 +46,31 @@ async function fetchAllPages(
   return rows
 }
 
+// Fetch a time range by splitting into smaller time chunks (default 6h).
+// Each chunk is fast because it covers a narrow window, avoiding timeouts
+// even on large overall ranges like 30d.
+async function fetchTimeChunks(
+  deviceKey: string,
+  since: Date,
+  onBatch: (batch: any[]) => void,
+  chunkHours: number = 6,
+): Promise<void> {
+  const now = new Date()
+  let chunkStart = new Date(since)
+  while (chunkStart < now) {
+    const chunkEnd = new Date(Math.min(chunkStart.getTime() + chunkHours * 3600_000, now.getTime()))
+    const base = supabase
+      .from('telemetry_computed')
+      .select('*')
+      .eq('device_key', deviceKey)
+      .gte('recorded_at', chunkStart.toISOString())
+      .lt('recorded_at', chunkEnd.toISOString())
+      .order('recorded_at', { ascending: true })
+    await fetchAllPages(base, 50000, onBatch)
+    chunkStart = chunkEnd
+  }
+}
+
 // --- Streaming state per query ---
 
 export interface HistoryStreamState {
@@ -71,12 +96,12 @@ export const startHistoryStreamAtom = atom(null, async (get, set, k: HistoryKey)
     const hours = RANGE_HOURS[k.range]
 
     if (k.range === '1h') {
-      const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
+      const since = new Date(Date.now() - hours * 3600 * 1000)
       const base = supabase
         .from('telemetry_computed')
         .select('*')
         .eq('device_key', k.deviceKey)
-        .gte('recorded_at', since)
+        .gte('recorded_at', since.toISOString())
         .order('recorded_at', { ascending: true })
       await fetchAllPages(base, RANGE_LIMITS[k.range], (page) => {
         const points = page.map((row: any): TelemetryPoint => ({
@@ -96,15 +121,9 @@ export const startHistoryStreamAtom = atom(null, async (get, set, k: HistoryKey)
         p_metric: k.metric,
       })
       if (error) {
-        console.error('get_aggregated_telemetry failed, falling back to raw paginated query', error)
-        const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
-        const base = supabase
-          .from('telemetry_computed')
-          .select('*')
-          .eq('device_key', k.deviceKey)
-          .gte('recorded_at', since)
-          .order('recorded_at', { ascending: true })
-        await fetchAllPages(base, RANGE_LIMITS[k.range] ?? 5000, (page) => {
+        console.error('get_aggregated_telemetry failed, falling back to time-chunked raw query', error)
+        const since = new Date(Date.now() - hours * 3600 * 1000)
+        await fetchTimeChunks(k.deviceKey, since, (page) => {
           const points = page.map((row: any): TelemetryPoint => ({
             id: row.id,
             device_id: row.device_key,
@@ -154,24 +173,41 @@ export const startDrilldownStreamAtom = atom(null, async (get, set, k: Drilldown
   set(drilldownStreamAtomFamily(key), { data: [], loading: true, error: null })
 
   try {
-    const base = supabase
-      .from('telemetry_computed')
-      .select('*')
-      .eq('device_key', k.deviceKey)
-      .gte('recorded_at', new Date(k.tStart).toISOString())
-      .lte('recorded_at', new Date(k.tEnd).toISOString())
-      .order('recorded_at', { ascending: true })
-    await fetchAllPages(base, 20000, (page) => {
-      const points = page.map((row: any): TelemetryPoint => ({
-        id: row.id,
-        device_id: row.device_key,
-        recorded_at: row.recorded_at,
-        payload: reconstructPayload(row),
-        metadata: {},
-      }))
-      const prev = get(drilldownStreamAtomFamily(key))
-      set(drilldownStreamAtomFamily(key), { ...prev, data: [...prev.data, ...points] })
-    })
+    const spanHours = (k.tEnd - k.tStart) / 3600_000
+    // For drilldowns wider than 6h, use time-chunked fetching to avoid timeouts
+    if (spanHours > 6) {
+      const since = new Date(k.tStart)
+      await fetchTimeChunks(k.deviceKey, since, (page) => {
+        const points = page.map((row: any): TelemetryPoint => ({
+          id: row.id,
+          device_id: row.device_key,
+          recorded_at: row.recorded_at,
+          payload: reconstructPayload(row),
+          metadata: {},
+        }))
+        const prev = get(drilldownStreamAtomFamily(key))
+        set(drilldownStreamAtomFamily(key), { ...prev, data: [...prev.data, ...points] })
+      }, 6)
+    } else {
+      const base = supabase
+        .from('telemetry_computed')
+        .select('*')
+        .eq('device_key', k.deviceKey)
+        .gte('recorded_at', new Date(k.tStart).toISOString())
+        .lte('recorded_at', new Date(k.tEnd).toISOString())
+        .order('recorded_at', { ascending: true })
+      await fetchAllPages(base, 20000, (page) => {
+        const points = page.map((row: any): TelemetryPoint => ({
+          id: row.id,
+          device_id: row.device_key,
+          recorded_at: row.recorded_at,
+          payload: reconstructPayload(row),
+          metadata: {},
+        }))
+        const prev = get(drilldownStreamAtomFamily(key))
+        set(drilldownStreamAtomFamily(key), { ...prev, data: [...prev.data, ...points] })
+      })
+    }
     set(drilldownStreamAtomFamily(key), (prev) => ({ ...prev, loading: false }))
   } catch (err) {
     set(drilldownStreamAtomFamily(key), { data: [], loading: false, error: String(err) })
