@@ -5,7 +5,6 @@ import { selectedDeviceAtom, devicesAtom, devicesLoadingAtom } from '../state/at
 import { supabase } from '../lib/supabase'
 import { loadChannels } from '../state/services/channelsService'
 import { loadLayout } from '../state/services/layoutService'
-import type { Device } from '../lib/types'
 import WidgetGrid from '../widgets/WidgetGrid'
 import DashboardLayout from '../components/DashboardLayout'
 import HeaderBar from '../components/HeaderBar'
