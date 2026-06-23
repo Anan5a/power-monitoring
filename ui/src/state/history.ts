@@ -11,9 +11,30 @@ export type HistoryMetric = 'power' | 'voltage' | 'current'
 export const RANGE_HOURS: Record<HistoryRange, number> = {
   '1h': 1, '6h': 6, '24h': 24, '7d': 168, '30d': 720,
 }
+
+// Supabase REST enforces a hard 1000-row limit per request.
+// For ranges that need more, we paginate with .range().
+const PAGE_SIZE = 1000
 const RANGE_LIMITS: Record<HistoryRange, number> = {
-  // 1h keeps raw 1-sec data; raise limit to cover the full hour.
   '1h': 4000, '6h': 1000, '24h': 20000, '7d': 50000, '30d': 50000,
+}
+
+async function fetchAllPages(
+  query: ReturnType<typeof supabase.from<string>>['select'],
+  limit: number,
+): Promise<any[]> {
+  const rows: any[] = []
+  const pages = Math.ceil(limit / PAGE_SIZE)
+  for (let i = 0; i < pages; i++) {
+    const from = i * PAGE_SIZE
+    const to = from + PAGE_SIZE - 1
+    const { data, error } = await query.range(from, to)
+    if (error) throw error
+    if (!data || data.length === 0) break
+    rows.push(...data)
+    if (data.length < PAGE_SIZE) break // last page
+  }
+  return rows
 }
 
 interface HistoryKey {
@@ -33,14 +54,13 @@ function historyFetcher(k: HistoryKey) {
     const hours = RANGE_HOURS[k.range]
     if (k.range === '1h') {
       const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
-      const { data, error } = await supabase
+      const base = supabase
         .from('telemetry_computed')
         .select('*')
         .eq('device_key', k.deviceKey)
         .gte('recorded_at', since)
         .order('recorded_at', { ascending: true })
-        .limit(RANGE_LIMITS[k.range])
-      if (error) throw error
+      const data = await fetchAllPages(base, RANGE_LIMITS[k.range])
       return (data ?? []).map((row: any): TelemetryPoint => ({
         id: row.id,
         device_id: row.device_key,
@@ -84,15 +104,14 @@ export const drilldownLoadableAtom: any = atomFamily(
 function drilldownFetcher(k: DrilldownKey) {
   return atom(async (get) => {
     get(refreshTriggerAtom)
-    const { data, error } = await supabase
+    const base = supabase
       .from('telemetry_computed')
       .select('*')
       .eq('device_key', k.deviceKey)
       .gte('recorded_at', new Date(k.tStart).toISOString())
       .lte('recorded_at', new Date(k.tEnd).toISOString())
       .order('recorded_at', { ascending: true })
-      .limit(20000)
-    if (error) throw error
+    const data = await fetchAllPages(base, 20000)
     return (data ?? []).map((row: any): TelemetryPoint => ({
       id: row.id,
       device_id: row.device_key,
