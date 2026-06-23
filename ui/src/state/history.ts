@@ -1,6 +1,5 @@
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai/utils'
-import { loadable } from 'jotai/utils'
 import { supabase } from '../lib/supabase'
 import { refreshTriggerAtom } from './atoms'
 import type { TelemetryPoint } from '../lib/types'
@@ -19,9 +18,14 @@ const RANGE_LIMITS: Record<HistoryRange, number> = {
   '1h': 4000, '6h': 1000, '24h': 20000, '7d': 50000, '30d': 50000,
 }
 
+// --- Streaming state per query ---
+
+const PAGE_SIZE = 1000
+
 async function fetchAllPages(
   query: any,
   limit: number,
+  onBatch?: (batch: any[]) => void,
 ): Promise<any[]> {
   const rows: any[] = []
   const pages = Math.ceil(limit / PAGE_SIZE)
@@ -32,26 +36,36 @@ async function fetchAllPages(
     if (error) throw error
     if (!data || data.length === 0) break
     rows.push(...data)
-    if (data.length < PAGE_SIZE) break // last page
+    if (onBatch) onBatch(data)
+    if (data.length < PAGE_SIZE) break
   }
   return rows
 }
 
-interface HistoryKey {
-  deviceKey: string
-  range: HistoryRange
-  metric: HistoryMetric
+// --- Streaming state per query ---
+
+export interface HistoryStreamState {
+  data: TelemetryPoint[]
+  loading: boolean
+  error: string | null
 }
 
-export const historyAtomFamily: any = atomFamily(
-  (k: HistoryKey) => loadable(historyFetcher(k)),
+const initialStreamState: HistoryStreamState = { data: [], loading: false, error: null }
+
+// Writable atom that accumulates data incrementally as pages arrive.
+export const historyStreamAtomFamily = atomFamily(
+  (_k: HistoryKey) => atom<HistoryStreamState>(initialStreamState),
   (a: HistoryKey, b: HistoryKey) => a.deviceKey === b.deviceKey && a.range === b.range && a.metric === b.metric,
 )
 
-function historyFetcher(k: HistoryKey) {
-  return atom(async (get) => {
-    get(refreshTriggerAtom)
+// Trigger atom: starts fetching and appends to historyStreamAtomFamily per page.
+export const startHistoryStreamAtom = atom(null, async (get, set, k: HistoryKey) => {
+  const key = k
+  set(historyStreamAtomFamily(key), { data: [], loading: true, error: null })
+
+  try {
     const hours = RANGE_HOURS[k.range]
+
     if (k.range === '1h') {
       const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
       const base = supabase
@@ -60,66 +74,82 @@ function historyFetcher(k: HistoryKey) {
         .eq('device_key', k.deviceKey)
         .gte('recorded_at', since)
         .order('recorded_at', { ascending: true })
-      const data = await fetchAllPages(base, RANGE_LIMITS[k.range])
-      return (data ?? []).map((row: any): TelemetryPoint => ({
-        id: row.id,
-        device_id: row.device_key,
-        recorded_at: row.recorded_at,
-        payload: reconstructPayload(row),
-        metadata: {},
-      }))
-    }
-    const { data, error } = await supabase.rpc('get_aggregated_telemetry', {
-      p_device_key: k.deviceKey,
-      p_hours: hours,
-      p_metric: k.metric,
-    })
-    if (error) {
-      console.error('get_aggregated_telemetry failed, falling back to raw paginated query', error)
-      // Fallback: fetch raw data with pagination when RPC times out or fails.
-      // The chart downsamples to ~1500 points, so we don't need all rows.
-      const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
-      const base = supabase
-        .from('telemetry_computed')
-        .select('*')
-        .eq('device_key', k.deviceKey)
-        .gte('recorded_at', since)
-        .order('recorded_at', { ascending: true })
-      const raw = await fetchAllPages(base, RANGE_LIMITS[k.range] ?? 5000)
-      return (raw ?? []).map((row: any): TelemetryPoint => ({
-        id: row.id,
-        device_id: row.device_key,
-        recorded_at: row.recorded_at,
-        payload: reconstructPayload(row),
-        metadata: {},
-      }))
-    }
-    return (data ?? []).map((row: any): TelemetryPoint => {
-      const payload: Record<string, number> = {}
-      for (const [key, val] of Object.entries(row)) {
-        if (key === 'bucket') continue
-        if (val != null && typeof val === 'number') payload[key] = val
+      await fetchAllPages(base, RANGE_LIMITS[k.range], (page) => {
+        const points = page.map((row: any): TelemetryPoint => ({
+          id: row.id,
+          device_id: row.device_key,
+          recorded_at: row.recorded_at,
+          payload: reconstructPayload(row),
+          metadata: {},
+        }))
+        const prev = get(historyStreamAtomFamily(key))
+        set(historyStreamAtomFamily(key), { ...prev, data: [...prev.data, ...points] })
+      })
+    } else {
+      const { data, error } = await supabase.rpc('get_aggregated_telemetry', {
+        p_device_key: k.deviceKey,
+        p_hours: hours,
+        p_metric: k.metric,
+      })
+      if (error) {
+        console.error('get_aggregated_telemetry failed, falling back to raw paginated query', error)
+        const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
+        const base = supabase
+          .from('telemetry_computed')
+          .select('*')
+          .eq('device_key', k.deviceKey)
+          .gte('recorded_at', since)
+          .order('recorded_at', { ascending: true })
+        await fetchAllPages(base, RANGE_LIMITS[k.range] ?? 5000, (page) => {
+          const points = page.map((row: any): TelemetryPoint => ({
+            id: row.id,
+            device_id: row.device_key,
+            recorded_at: row.recorded_at,
+            payload: reconstructPayload(row),
+            metadata: {},
+          }))
+          const prev = get(historyStreamAtomFamily(key))
+          set(historyStreamAtomFamily(key), { ...prev, data: [...prev.data, ...points] })
+        })
+      } else {
+        const points = (data ?? []).map((row: any): TelemetryPoint => {
+          const payload: Record<string, number> = {}
+          for (const [key, val] of Object.entries(row)) {
+            if (key === 'bucket') continue
+            if (val != null && typeof val === 'number') payload[key] = val
+          }
+          return { id: 0, device_id: k.deviceKey, recorded_at: row.bucket as string, payload, metadata: {} }
+        })
+        const prev = get(historyStreamAtomFamily(key))
+        set(historyStreamAtomFamily(key), { ...prev, data: [...prev.data, ...points] })
       }
-      return { id: 0, device_id: k.deviceKey, recorded_at: row.bucket as string, payload, metadata: {} }
-    })
-  })
-}
+    }
 
-interface DrilldownKey {
+    set(historyStreamAtomFamily(key), (prev) => ({ ...prev, loading: false }))
+  } catch (err) {
+    set(historyStreamAtomFamily(key), { data: [], loading: false, error: String(err) })
+  }
+})
+
+// --- Drilldown streaming ---
+
+export interface DrilldownKey {
   deviceKey: string
   tStart: number
   tEnd: number
   metric: HistoryMetric
 }
 
-export const drilldownLoadableAtom: any = atomFamily(
-  (k: DrilldownKey) => loadable(drilldownFetcher(k)),
+export const drilldownStreamAtomFamily = atomFamily(
+  (_k: DrilldownKey) => atom<HistoryStreamState>(initialStreamState),
   (a: DrilldownKey, b: DrilldownKey) => a.deviceKey === b.deviceKey && a.tStart === b.tStart && a.tEnd === b.tEnd && a.metric === b.metric,
 )
 
-function drilldownFetcher(k: DrilldownKey) {
-  return atom(async (get) => {
-    get(refreshTriggerAtom)
+export const startDrilldownStreamAtom = atom(null, async (get, set, k: DrilldownKey) => {
+  const key = k
+  set(drilldownStreamAtomFamily(key), { data: [], loading: true, error: null })
+
+  try {
     const base = supabase
       .from('telemetry_computed')
       .select('*')
@@ -127,16 +157,22 @@ function drilldownFetcher(k: DrilldownKey) {
       .gte('recorded_at', new Date(k.tStart).toISOString())
       .lte('recorded_at', new Date(k.tEnd).toISOString())
       .order('recorded_at', { ascending: true })
-    const data = await fetchAllPages(base, 20000)
-    return (data ?? []).map((row: any): TelemetryPoint => ({
-      id: row.id,
-      device_id: row.device_key,
-      recorded_at: row.recorded_at,
-      payload: reconstructPayload(row),
-      metadata: {},
-    }))
-  })
-}
+    await fetchAllPages(base, 20000, (page) => {
+      const points = page.map((row: any): TelemetryPoint => ({
+        id: row.id,
+        device_id: row.device_key,
+        recorded_at: row.recorded_at,
+        payload: reconstructPayload(row),
+        metadata: {},
+      }))
+      const prev = get(drilldownStreamAtomFamily(key))
+      set(drilldownStreamAtomFamily(key), { ...prev, data: [...prev.data, ...points] })
+    })
+    set(drilldownStreamAtomFamily(key), (prev) => ({ ...prev, loading: false }))
+  } catch (err) {
+    set(drilldownStreamAtomFamily(key), { data: [], loading: false, error: String(err) })
+  }
+})
 
 function reconstructPayload(row: any): Record<string, number> {
   const p: Record<string, number> = {}

@@ -18,11 +18,14 @@ import 'chartjs-adapter-date-fns'
 import zoomPlugin from 'chartjs-plugin-zoom'
 import { Line } from 'react-chartjs-2'
 import {
-  historyAtomFamily,
-  drilldownLoadableAtom,
+  historyStreamAtomFamily,
+  startHistoryStreamAtom,
+  drilldownStreamAtomFamily,
+  startDrilldownStreamAtom,
   RANGE_HOURS,
   type HistoryRange,
   type HistoryMetric,
+  type HistoryStreamState,
 } from '../state/history'
 import { extractKeys, keyToLabel, suggestDrilldown, bucketToWindow, buildChannelLabelMap, withSystemCurrents, addGridPower, SYSTEM_CURRENT_KEYS } from '../state/services/historyService'
 import {
@@ -143,17 +146,24 @@ function HistoryChartWidget({ deviceKey }: Props) {
   useEffect(() => { breadcrumbRef.current = breadcrumb })
 
   const drilldown = breadcrumb.length > 0 ? breadcrumb[breadcrumb.length - 1] : null
-  const loadable: any = drilldown
-    ? useAtomValue(drilldownLoadableAtom({ deviceKey, tStart: drilldown.tStart, tEnd: drilldown.tEnd, metric }))
-    : useAtomValue(historyAtomFamily({ deviceKey, range, metric }))
+  const streamState: HistoryStreamState = drilldown
+    ? useAtomValue(drilldownStreamAtomFamily({ deviceKey, tStart: drilldown.tStart, tEnd: drilldown.tEnd, metric }))
+    : useAtomValue(historyStreamAtomFamily({ deviceKey, range, metric }))
+  const startStream = useSetAtom(drilldown ? startDrilldownStreamAtom : startHistoryStreamAtom)
 
-  // Build the time series from RPC output
+  // Trigger fetch when params change; re-fetch on manual refresh
+  const trigger = useAtomValue(refreshTriggerAtom)
   useEffect(() => {
-    if (loadable.state !== 'hasData') {
-      setSeries({ points: [], keys: [] })
-      return
+    if (drilldown) {
+      startStream({ deviceKey, tStart: drilldown.tStart, tEnd: drilldown.tEnd, metric })
+    } else {
+      startStream({ deviceKey, range, metric })
     }
-    const data = loadable.data as any[]
+  }, [deviceKey, range, metric, drilldown, startStream, trigger])
+
+  // Build the time series from streamed data (renders incrementally as pages arrive)
+  useEffect(() => {
+    const data = streamState.data
     if (data.length === 0) {
       setSeries({ points: [], keys: [] })
       return
@@ -188,7 +198,7 @@ function HistoryChartWidget({ deviceKey }: Props) {
       points.push({ t, v })
     }
     setSeries({ points, keys })
-  }, [loadable.state, loadable.data, metric, channels?.channel_groups])
+  }, [streamState.data, metric, channels?.channel_groups])
 
   // Live-append latest sample, then setSeries re-renders the chart
   useEffect(() => {
@@ -413,8 +423,8 @@ function HistoryChartWidget({ deviceKey }: Props) {
 
   // visibleKeys removed (was only used by the deleted custom tooltip)
 
-  const isLoading = loadable.state === 'loading'
-  const error = loadable.state === 'hasError' ? String((loadable as any).error) : null
+  const isLoading = streamState.loading && streamState.data.length === 0
+  const error = streamState.error
 
   return (
     <div className="h-full w-full bg-white rounded-2xl shadow-sm border border-slate-100 p-2 sm:p-4">
