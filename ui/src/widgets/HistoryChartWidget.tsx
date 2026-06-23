@@ -155,9 +155,9 @@ function HistoryChartWidget({ deviceKey }: Props) {
   const trigger = useAtomValue(refreshTriggerAtom)
   useEffect(() => {
     if (drilldown) {
-      startStream({ deviceKey, tStart: drilldown.tStart, tEnd: drilldown.tEnd, metric })
+      startStream({ deviceKey, tStart: drilldown.tStart, tEnd: drilldown.tEnd, metric } as any)
     } else {
-      startStream({ deviceKey, range, metric })
+      startStream({ deviceKey, range, metric } as any)
     }
   }, [deviceKey, range, metric, drilldown, startStream, trigger])
 

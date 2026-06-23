@@ -1,7 +1,6 @@
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai/utils'
 import { supabase } from '../lib/supabase'
-import { refreshTriggerAtom } from './atoms'
 import type { TelemetryPoint } from '../lib/types'
 
 export type HistoryRange = '1h' | '6h' | '24h' | '7d' | '30d'
@@ -13,16 +12,19 @@ export const RANGE_HOURS: Record<HistoryRange, number> = {
 
 // Supabase REST enforces a hard 1000-row limit per request.
 // For ranges that need more, we paginate with .range().
-const PAGE_SIZE = 1000
 const RANGE_LIMITS: Record<HistoryRange, number> = {
   '1h': 4000, '6h': 1000, '24h': 20000, '7d': 50000, '30d': 50000,
 }
 
 // --- Streaming state per query ---
 
-const PAGE_SIZE = 1000
+export interface HistoryKey {
+  deviceKey: string
+  range: HistoryRange
+  metric: HistoryMetric
+}
 
-async function fetchAllPages(
+const PAGE_SIZE = 1000
   query: any,
   limit: number,
   onBatch?: (batch: any[]) => void,
