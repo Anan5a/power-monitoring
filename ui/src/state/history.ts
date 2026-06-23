@@ -25,6 +25,8 @@ export interface HistoryKey {
 }
 
 const PAGE_SIZE = 1000
+
+async function fetchAllPages(
   query: any,
   limit: number,
   onBatch?: (batch: any[]) => void,
