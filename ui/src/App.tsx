@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { supabase } from './lib/supabase'
 import type { Session } from '@supabase/supabase-js'
@@ -20,6 +20,7 @@ import ShellWrap from './components/ShellWrap'
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
+  const location = useLocation()
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
@@ -31,7 +32,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
       <div className="text-lg text-gray-600">Loading...</div>
     </div>
   )
-  return session ? <>{children}</> : <Navigate to="/login" replace />
+  return session ? <>{children}</> : <Navigate to="/login" state={{ from: location }} replace />
 }
 
 export default function App() {

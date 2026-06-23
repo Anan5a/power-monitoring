@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAtom, useAtomValue } from 'jotai'
-import { selectedDeviceAtom, connectionStateAtom, devicesAtom } from '../state/atoms'
+import { selectedDeviceAtom, connectionStateAtom, devicesAtom, devicesLoadingAtom } from '../state/atoms'
 import { computedTelemetryAtom, liveBufferAtom, secondsAgoAtom } from '../state/derived'
 import { supabase } from '../lib/supabase'
 import { APP_VERSION } from '../lib/version'
@@ -22,6 +22,7 @@ type Range = 'day' | 'month' | 'year' | 'total'
 export default function SolisOverviewPage() {
   const navigate = useNavigate()
   const devices = useAtomValue(devicesAtom)
+  const devicesLoading = useAtomValue(devicesLoadingAtom)
   const [selectedDevice, setSelectedDevice] = useAtom(selectedDeviceAtom)
   const telemetry = useAtomValue(computedTelemetryAtom)
   const buffer = useAtomValue(liveBufferAtom)
@@ -45,6 +46,25 @@ export default function SolisOverviewPage() {
   function handleNavigate(path: string) { navigate(path) }
   function handleSignOut() { supabase.auth.signOut().then(() => navigate('/login')) }
   function handleRefresh() { window.location.reload() }
+
+  if (devicesLoading) {
+    return (
+      <DashboardShell
+        currentPath="/dashboard"
+        onNavigate={handleNavigate}
+        onSignOut={handleSignOut}
+        devices={devices}
+        selectedDeviceId={null}
+        onSelectDevice={setSelectedDevice}
+        isOnline={false}
+        version={APP_VERSION}
+        lastUpdated={secondsAgo != null ? `${secondsAgo}s ago` : undefined}
+        onRefresh={handleRefresh}
+      >
+        <div className="text-center py-20 text-gray-500">Loading devices...</div>
+      </DashboardShell>
+    )
+  }
 
   if (!selectedDevice) {
     return (

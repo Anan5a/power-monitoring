@@ -1,5 +1,5 @@
 import { atom } from 'jotai'
-import { atomFamily, atomWithReducer } from 'jotai/utils'
+import { atomFamily, atomWithReducer, atomWithStorage } from 'jotai/utils'
 import type { TelemetryPoint, DeviceChannels, RelayState, LayoutDoc, Device } from '../lib/types'
 
 // --- Connection / time ---
@@ -58,11 +58,12 @@ export const hoveredPointAtom = atom<{ time: string; values: Record<string, numb
 
 // --- Selected device (global, so widgets can read it) ---
 
-export const selectedDeviceAtom = atom<Device | null>(null)
+export const selectedDeviceAtom = atomWithStorage<Device | null>('iot-selected-device', null)
 
 // --- Devices list (loaded once, shared across pages) ---
 
 export const devicesAtom = atom<Device[]>([])
+export const devicesLoadingAtom = atom<boolean>(true)
 
 // --- Aggregates (RPC-backed) ---
 

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAtom, useAtomValue } from 'jotai'
-import { selectedDeviceAtom, devicesAtom } from '../state/atoms'
+import { selectedDeviceAtom, devicesAtom, devicesLoadingAtom } from '../state/atoms'
 import { liveBufferAtom, secondsAgoAtom } from '../state/derived'
 import { supabase } from '../lib/supabase'
 import { APP_VERSION } from '../lib/version'
@@ -43,6 +43,7 @@ const GROUPS = [
 export default function SolisAnalysisPage() {
   const navigate = useNavigate()
   const devices = useAtomValue(devicesAtom)
+  const devicesLoading = useAtomValue(devicesLoadingAtom)
   const [selectedDevice, setSelectedDevice] = useAtom(selectedDeviceAtom)
   const buffer = useAtomValue(liveBufferAtom)
   const secondsAgo = useAtomValue(secondsAgoAtom)
@@ -55,6 +56,25 @@ export default function SolisAnalysisPage() {
   function handleNavigate(path: string) { navigate(path) }
   function handleSignOut() { supabase.auth.signOut().then(() => navigate('/login')) }
   function handleRefresh() { window.location.reload() }
+
+  if (devicesLoading) {
+    return (
+      <DashboardShell
+        currentPath="/dashboard/analysis"
+        onNavigate={handleNavigate}
+        onSignOut={handleSignOut}
+        devices={devices}
+        selectedDeviceId={null}
+        onSelectDevice={setSelectedDevice}
+        isOnline={false}
+        version={APP_VERSION}
+        lastUpdated={secondsAgo != null ? `${secondsAgo}s ago` : undefined}
+        onRefresh={handleRefresh}
+      >
+        <div className="text-center py-20 text-gray-500">Loading devices...</div>
+      </DashboardShell>
+    )
+  }
 
   if (!selectedDevice) {
     return (

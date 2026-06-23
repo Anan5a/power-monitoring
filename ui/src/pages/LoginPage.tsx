@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
 export default function LoginPage() {
@@ -10,6 +10,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const navigate = useNavigate()
+  const location = useLocation()
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -24,7 +25,8 @@ export default function LoginPage() {
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
-        navigate('/dashboard')
+        const from = (location.state as any)?.from?.pathname || '/dashboard'
+        navigate(from)
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'An error occurred')

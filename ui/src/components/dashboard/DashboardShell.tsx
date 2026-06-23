@@ -31,6 +31,7 @@ export default function DashboardShell({
   onRefresh,
 }: DashboardShellProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [isCollapsed, setIsCollapsed] = useState(false)
 
   return (
     <div className="min-h-screen bg-page flex flex-col">
@@ -42,18 +43,20 @@ export default function DashboardShell({
         lastUpdated={lastUpdated}
         version={version}
         onMenuClick={() => setMobileMenuOpen(true)}
+        onCollapseToggle={() => setIsCollapsed(!isCollapsed)}
         onRefresh={onRefresh}
         onSignOut={onSignOut}
       />
 
       <div className="flex flex-1 overflow-hidden">
         {/* Desktop sidebar */}
-        <div className="hidden lg:block">
+        <div className={`hidden lg:block transition-all duration-300 ${isCollapsed ? 'w-16' : 'w-sidebar'}`}>
           <DashboardSidebar
             currentPath={currentPath}
             onNavigate={onNavigate}
             onSignOut={onSignOut}
             version={version}
+            isCollapsed={isCollapsed}
           />
         </div>
 
@@ -70,6 +73,7 @@ export default function DashboardShell({
                 onNavigate={(path) => { onNavigate(path); setMobileMenuOpen(false) }}
                 onSignOut={() => { setMobileMenuOpen(false); onSignOut() }}
                 version={version}
+                isCollapsed={false}
               />
             </div>
           </>

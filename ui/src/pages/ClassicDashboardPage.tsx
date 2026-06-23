@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAtom, useStore } from 'jotai'
-import { selectedDeviceAtom } from '../state/atoms'
+import { useAtom, useStore, useAtomValue } from 'jotai'
+import { selectedDeviceAtom, devicesAtom, devicesLoadingAtom } from '../state/atoms'
 import { supabase } from '../lib/supabase'
 import { loadChannels } from '../state/services/channelsService'
 import { loadLayout } from '../state/services/layoutService'
@@ -13,24 +13,20 @@ import HeaderBar from '../components/HeaderBar'
 export default function ClassicDashboardPage() {
   const navigate = useNavigate()
   const store = useStore()
-  const [devices, setDevices] = useState<Device[]>([])
+  const devices = useAtomValue(devicesAtom)
+  const devicesLoading = useAtomValue(devicesLoadingAtom)
   const [selectedDevice, setSelectedDevice] = useAtom(selectedDeviceAtom)
   const [userId, setUserId] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let mounted = true
-    async function load() {
+    async function loadUser() {
       const { data: { session } } = await supabase.auth.getSession()
-      if (!session || !mounted) return
-      setUserId(session.user.id)
-      const { data } = await supabase.from('devices').select('*').order('device_name')
-      if (mounted) {
-        if (data) setDevices(data)
-        setLoading(false)
+      if (mounted && session) {
+        setUserId(session.user.id)
       }
     }
-    load()
+    loadUser()
     return () => { mounted = false }
   }, [])
 
@@ -51,8 +47,8 @@ export default function ClassicDashboardPage() {
   function handleNavigate(path: string) { navigate(path) }
   function handleSignOut() { supabase.auth.signOut().then(() => navigate('/login')) }
 
-  if (loading) {
-    return <div className="flex items-center justify-center h-screen text-slate-500">Loading...</div>
+  if (devicesLoading) {
+    return <div className="flex items-center justify-center h-screen text-slate-500">Loading devices...</div>
   }
 
   const header = ({ onMenuClick }: { onMenuClick: () => void }) => (

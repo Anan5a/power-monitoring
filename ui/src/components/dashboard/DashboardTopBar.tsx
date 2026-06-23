@@ -10,6 +10,7 @@ interface DashboardTopBarProps {
   lastUpdated?: string
   version?: string
   onMenuClick: () => void
+  onCollapseToggle?: () => void
   onRefresh?: () => void
   onSignOut?: () => void
 }
@@ -22,6 +23,7 @@ export default function DashboardTopBar({
   lastUpdated,
   version,
   onMenuClick,
+  onCollapseToggle,
   onRefresh,
   onSignOut,
 }: DashboardTopBarProps) {
@@ -31,7 +33,17 @@ export default function DashboardTopBar({
   return (
     <header className="h-14 bg-topbar text-white flex items-center justify-between px-4 shrink-0">
       <div className="flex items-center gap-4">
-        <button type="button" onClick={onMenuClick} className="lg:hidden p-1 rounded hover:bg-white/10">
+        <button
+          type="button"
+          onClick={() => {
+            if (window.innerWidth >= 1024) {
+              onCollapseToggle?.()
+            } else {
+              onMenuClick()
+            }
+          }}
+          className="p-1 rounded hover:bg-white/10"
+        >
           <Bars3Icon className="h-6 w-6" />
         </button>
         <h1 className="text-base font-medium hidden sm:block">{selected?.device_name ?? 'Select device'}</h1>
