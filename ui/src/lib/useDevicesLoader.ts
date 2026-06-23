@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { useAtomValue, useSetAtom, useStore } from 'jotai'
+import { useSetAtom, useStore } from 'jotai'
 import { devicesAtom, selectedDeviceAtom, devicesLoadingAtom } from '../state/atoms'
 import { supabase } from './supabase'
 import type { Device } from './types'
@@ -9,15 +9,19 @@ export function useDevicesLoader() {
   const setDevices = useSetAtom(devicesAtom)
   const setSelectedDevice = useSetAtom(selectedDeviceAtom)
   const setDevicesLoading = useSetAtom(devicesLoadingAtom)
-  const selectedDevice = useAtomValue(selectedDeviceAtom)
   const fetchedRef = useRef(false)
 
   useEffect(() => {
     if (fetchedRef.current) return
     fetchedRef.current = true
 
-    supabase.from('devices').select('*').order('device_name')
-      .then(({ data, error }) => {
+    ;(async () => {
+      try {
+        const { data, error } = await supabase
+          .from('devices')
+          .select('*')
+          .order('device_name')
+
         if (error) {
           console.error('useDevicesLoader: query error', error)
           setDevicesLoading(false)
@@ -34,11 +38,11 @@ export function useDevicesLoader() {
           setSelectedDevice(data[0] as Device)
         }
         setDevicesLoading(false)
-      })
-      .catch((err) => {
+      } catch (err) {
         console.error('useDevicesLoader: unexpected error', err)
         setDevicesLoading(false)
-      })
+      }
+    })()
     // Intentionally run once — fetchedRef guards against re-execution.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setDevices, setSelectedDevice, setDevicesLoading, store])
