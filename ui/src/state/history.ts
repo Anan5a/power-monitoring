@@ -20,7 +20,7 @@ const RANGE_LIMITS: Record<HistoryRange, number> = {
 }
 
 async function fetchAllPages(
-  query: ReturnType<typeof supabase.from<string>>['select'],
+  query: any,
   limit: number,
 ): Promise<any[]> {
   const rows: any[] = []
