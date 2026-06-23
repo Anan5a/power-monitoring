@@ -63,6 +63,10 @@ function QuickStatsWidget() {
   const totalPower = Math.abs(inverter) + computed.dc_load_power
   const style = STATUS_STYLES[status]
   const gridImport = grid > 0.5
+  // Split inverter and grid so they don't double-report the same flow:
+  // Inverter chip shows only export (DC→AC), Grid chip shows only import (AC→DC).
+  const inverterExport = inverter > 0.5 ? inverter : 0
+  const gridImportPower = grid > 0.5 ? grid : 0
 
   if (!latest) {
     return (
@@ -99,11 +103,11 @@ function QuickStatsWidget() {
       <div className="grid grid-cols-4 gap-2 sm:flex sm:items-center sm:gap-0 sm:contents">
         <Chip label="PV" value={pv} unit="W" color="text-amber-500" icon={<SunIcon className="w-5 h-5" />} />
         <div className="hidden sm:block h-12 w-px bg-slate-200" />
-        <Directional label="Inverter" value={inverter} unit="W" />
+        <Directional label="Inverter" value={inverterExport} unit="W" />
         <div className="hidden sm:block h-12 w-px bg-slate-200" />
         <Directional label="Battery" value={battery} unit="W" />
         <div className="hidden sm:block h-12 w-px bg-slate-200" />
-        <Directional label="Grid" value={grid} unit="W" />
+        <Directional label="Grid" value={gridImportPower} unit="W" />
       </div>
     </div>
   )
