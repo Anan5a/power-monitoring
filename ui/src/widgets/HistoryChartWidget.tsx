@@ -24,7 +24,7 @@ import {
   type HistoryRange,
   type HistoryMetric,
 } from '../state/history'
-import { extractKeys, keyToLabel, suggestDrilldown, bucketToWindow, buildChannelLabelMap, withSystemCurrents, SYSTEM_CURRENT_KEYS } from '../state/services/historyService'
+import { extractKeys, keyToLabel, suggestDrilldown, bucketToWindow, buildChannelLabelMap, withSystemCurrents, addGridPower, SYSTEM_CURRENT_KEYS } from '../state/services/historyService'
 import {
   zoomRangeAtom,
   drilldownBreadcrumbAtom,
@@ -81,6 +81,7 @@ function colorForKey(k: string, metric: 'power' | 'voltage' | 'current', index: 
   if (k === 'inverter_power' || k === 'inverter_current') return '#3b82f6' // blue for inverter
   if (k === 'battery_power' || k === 'battery_current') return '#10b981' // emerald for battery
   if (k === 'dc_load_power' || k === 'dc_load_current') return '#ef4444' // red for DC load
+  if (k === 'grid_power') return '#f43f5e' // rose for grid
   if (k === 'soc_pct0') return '#a855f7' // purple for SoC
   // For raw channel keys (ch0_V, ch0_P, etc.), the first one is usually PV.
   // We can't tell PV from a generic chN_V without channel_names, so use PV color
@@ -179,7 +180,9 @@ function HistoryChartWidget({ deviceKey }: Props) {
       // the per-point `keys.map(...)` lookup below.
       const payload = metric === 'current'
         ? withSystemCurrents(pt.payload as Record<string, number>, channelGroups)
-        : (pt.payload as Record<string, number>)
+        : metric === 'power'
+          ? addGridPower(pt.payload as Record<string, number>)
+          : (pt.payload as Record<string, number>)
       const v: Record<string, number> = {}
       for (const k of keys) v[k] = payload[k] ?? null
       points.push({ t, v })
@@ -196,7 +199,9 @@ function HistoryChartWidget({ deviceKey }: Props) {
     if (series.keys.length === 0) return
     const payload = metric === 'current'
       ? withSystemCurrents(latest.payload as Record<string, number>, channels?.channel_groups)
-      : (latest.payload as Record<string, number>)
+      : metric === 'power'
+        ? addGridPower(latest.payload as Record<string, number>)
+        : (latest.payload as Record<string, number>)
     const v: Record<string, number> = {}
     for (const k of series.keys) v[k] = payload[k] ?? null
     setSeries(s => ({ ...s, points: [...s.points, { t, v }] }))

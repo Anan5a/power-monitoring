@@ -18,7 +18,7 @@ const METRIC_REGEX: Record<HistoryMetric, RegExp> = {
   current: /^ch\d_i$/i,
 }
 // Pre-compiled alternations for the more specific system/INA keys
-const POWER_EXTRA = /^(ina226_p|ina3221_p\d|inverter_power|pv_power|battery_power|dc_load_power)$/i
+const POWER_EXTRA = /^(ina226_p|ina3221_p\d|inverter_power|pv_power|battery_power|dc_load_power|grid_power)$/i
 const VOLTAGE_EXTRA = /^(ina226_v|ina3221_v\d)$/i
 const CURRENT_EXTRA = /^(ina226_i|ina3221_i\d|inverter_current)$/i
 const EXTRA_REGEX: Record<HistoryMetric, RegExp> = {
@@ -27,7 +27,7 @@ const EXTRA_REGEX: Record<HistoryMetric, RegExp> = {
   current: CURRENT_EXTRA,
 }
 
-const SYSTEM_POWER_KEYS = ['pv_power', 'battery_power', 'inverter_power', 'dc_load_power']
+const SYSTEM_POWER_KEYS = ['pv_power', 'battery_power', 'inverter_power', 'dc_load_power', 'grid_power']
 export const SYSTEM_CURRENT_KEYS = ['pv_current', 'battery_current', 'inverter_current', 'dc_load_current']
 // Channel-to-system mapping for current, derived the same way the trigger
 // derives system power. We sum the *signed* ch_i value (no Math.abs) so
@@ -74,6 +74,14 @@ export function withSystemCurrents(
   const derived = computeSystemCurrents(payload, channelGroups)
   if (Object.keys(derived).length === 0) return payload
   return { ...payload, ...derived }
+}
+
+// Compute grid_power from inverter_power: positive = importing from grid,
+// negative = exporting to grid. Used to surface grid flow on the power chart.
+export function addGridPower(payload: Record<string, number>): Record<string, number> {
+  const inv = payload['inverter_power'] ?? payload['inverter_P']
+  if (inv == null) return payload
+  return { ...payload, grid_power: -inv }
 }
 
 export function extractKeys(
@@ -239,6 +247,7 @@ export function keyToLabel(
   if (k === 'battery_current') return 'Battery Current'
   if (k === 'dc_load_power') return 'DC Load'
   if (k === 'dc_load_current') return 'DC Load Current'
+  if (k === 'grid_power') return 'Grid'
   if (k === 'soc_pct0') return 'Battery SOC'
   const ina = k.match(/^ina3221_([pvi])(\d)$/)
   if (ina) {

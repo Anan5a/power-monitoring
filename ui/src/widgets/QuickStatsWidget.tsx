@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { useAtomValue } from 'jotai'
-import { SunIcon, ArrowUpIcon, ArrowDownIcon } from '@heroicons/react/24/outline'
-import { computedTelemetryAtom, pvPowerAtom, batteryPowerAtom, inverterPowerAtom, systemStatusAtom } from '../state/derived'
+import { SunIcon, ArrowUpIcon, ArrowDownIcon, BoltIcon } from '@heroicons/react/24/outline'
+import { computedTelemetryAtom, pvPowerAtom, batteryPowerAtom, inverterPowerAtom, gridPowerAtom, systemStatusAtom } from '../state/derived'
 import { latestAtom } from '../state/atoms'
 
 const STATUS_STYLES: Record<string, { dot: string; text: string; label: string }> = {
@@ -57,10 +57,12 @@ function QuickStatsWidget() {
   const pv = useAtomValue(pvPowerAtom)
   const battery = useAtomValue(batteryPowerAtom)
   const inverter = useAtomValue(inverterPowerAtom)
+  const grid = useAtomValue(gridPowerAtom)
   const status = useAtomValue(systemStatusAtom)
   const latest = useAtomValue(latestAtom)
   const totalPower = Math.abs(inverter) + computed.dc_load_power
   const style = STATUS_STYLES[status]
+  const gridImport = grid > 0.5
 
   if (!latest) {
     return (
@@ -80,6 +82,12 @@ function QuickStatsWidget() {
           </span>
         </div>
         <div className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-slate-50 shrink-0 sm:ml-auto">
+          {gridImport && (
+            <span className="flex items-center gap-1 text-xs font-semibold text-rose-600">
+              <BoltIcon className="w-3.5 h-3.5" />
+              Grid
+            </span>
+          )}
           <span className={`w-3 h-3 rounded-full ${style.dot} ${status !== 'unknown' && status !== 'balanced' ? 'animate-pulse' : ''}`} />
           <span className={`text-xs font-semibold ${style.text}`}>{style.label}</span>
         </div>
@@ -87,13 +95,15 @@ function QuickStatsWidget() {
       {/* Mobile: horizontal divider between the total/status row and the 3-chip grid */}
       <div className="h-px bg-slate-200 sm:hidden" />
       <div className="hidden sm:block h-12 w-px bg-slate-200" />
-      {/* Three directional chips: 3-column grid on mobile, inline on sm+ */}
-      <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center sm:gap-0 sm:contents">
+      {/* Three directional chips: 4-column grid on mobile, inline on sm+ */}
+      <div className="grid grid-cols-4 gap-2 sm:flex sm:items-center sm:gap-0 sm:contents">
         <Chip label="PV" value={pv} unit="W" color="text-amber-500" icon={<SunIcon className="w-5 h-5" />} />
         <div className="hidden sm:block h-12 w-px bg-slate-200" />
         <Directional label="Inverter" value={inverter} unit="W" />
         <div className="hidden sm:block h-12 w-px bg-slate-200" />
         <Directional label="Battery" value={battery} unit="W" />
+        <div className="hidden sm:block h-12 w-px bg-slate-200" />
+        <Directional label="Grid" value={grid} unit="W" />
       </div>
     </div>
   )

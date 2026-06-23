@@ -53,3 +53,9 @@ export const inverterPowerAtom = atom((get) => get(computedTelemetryAtom).invert
 export const pvPowerAtom = atom((get) => get(computedTelemetryAtom).pv_power)
 export const batteryPowerAtom = atom((get) => get(computedTelemetryAtom).battery_power)
 export const systemStatusAtom = atom((get) => get(computedTelemetryAtom).system_status)
+
+// Grid power: positive = importing from grid (DC deficit), negative = exporting to grid
+export const gridPowerAtom = atom((get) => {
+  const inverter = get(inverterPowerAtom)
+  return -inverter
+})

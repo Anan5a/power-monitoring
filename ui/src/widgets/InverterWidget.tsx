@@ -38,7 +38,7 @@ function InverterWidget() {
       <div className="mt-2 text-sm font-medium transition-colors duration-200" style={{ color: 'inherit' }}>
         <span className={valueColor}>
           {active && 'Supplying inverter'}
-          {deficit && 'DC deficit'}
+          {deficit && 'Charging from grid'}
           {balanced && 'Idle'}
         </span>
       </div>
