@@ -75,8 +75,24 @@ function historyFetcher(k: HistoryKey) {
       p_metric: k.metric,
     })
     if (error) {
-      console.error('get_aggregated_telemetry failed', error)
-      return []
+      console.error('get_aggregated_telemetry failed, falling back to raw paginated query', error)
+      // Fallback: fetch raw data with pagination when RPC times out or fails.
+      // The chart downsamples to ~1500 points, so we don't need all rows.
+      const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
+      const base = supabase
+        .from('telemetry_computed')
+        .select('*')
+        .eq('device_key', k.deviceKey)
+        .gte('recorded_at', since)
+        .order('recorded_at', { ascending: true })
+      const raw = await fetchAllPages(base, RANGE_LIMITS[k.range] ?? 5000)
+      return (raw ?? []).map((row: any): TelemetryPoint => ({
+        id: row.id,
+        device_id: row.device_key,
+        recorded_at: row.recorded_at,
+        payload: reconstructPayload(row),
+        metadata: {},
+      }))
     }
     return (data ?? []).map((row: any): TelemetryPoint => {
       const payload: Record<string, number> = {}
