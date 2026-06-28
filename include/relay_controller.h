@@ -4,7 +4,7 @@
 #include "sensor_manager.h"
 
 void init_relays();
-void evaluate_relays(const SensorData& data);
+void evaluate_relays(const SensorSnapshot& data);
 void relay_set_auto(bool enabled);
 void relay_set(uint8_t idx, bool is_energized);
 bool get_relay_state(uint8_t idx);

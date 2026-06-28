@@ -2,7 +2,6 @@
 #include "settings_manager.h"
 #include "config.h"
 #include <Wire.h>
-#include <algorithm>
 
 #if ENABLE_INA3221
 #include <Adafruit_INA3221.h>
@@ -39,12 +38,45 @@ static ChannelCalibration cal = {
     .curr_gain = {CAL_CURR_GAIN_CH0, CAL_CURR_GAIN_CH1, CAL_CURR_GAIN_CH2},
 };
 
-// Burst sample metadata — accessible by connectivity_manager for calibration status
-SampleMeta g_meta[8] = {{0,false},{0,false},{0,false},{0,false},{0,false},{0,false},{0,false},{0,false}};
-float baseline_stddev[8] = {0};
-uint8_t baseline_count = 0;
+// Burst sample metadata — indexed by logical channel
+static SampleMeta g_meta[MAX_LOGICAL_CHANNELS] = {};
+static float baseline_stddev[MAX_LOGICAL_CHANNELS] = {0};
+static uint8_t baseline_count = 0;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Pod registry ───────────────────────────────────────────────────────────────
+
+typedef void (*PodReadFn)(PodState* pod);
+
+struct PodDriver {
+    PodState state;
+    PodReadFn read_fn;
+};
+
+static PodDriver g_pods[MAX_PODS];
+static uint8_t g_pod_count = 0;
+static uint8_t g_logical_count = 0;
+
+static bool register_pod(PodType type, const char* name, uint8_t num_channels, PodReadFn read_fn) {
+    if (g_pod_count >= MAX_PODS || num_channels == 0 || num_channels > MAX_CHANNELS_PER_POD || !read_fn) {
+        return false;
+    }
+    PodState* s = &g_pods[g_pod_count].state;
+    s->id = g_pod_count;
+    s->type = type;
+    strlcpy(s->name, name, sizeof(s->name));
+    s->num_channels = num_channels;
+    for (uint8_t c = 0; c < num_channels; c++) {
+        s->channels[c] = PhysicalChannel{};
+        s->channels[c].pod_id = g_pod_count;
+        s->channels[c].pod_channel = c;
+    }
+    g_pods[g_pod_count].read_fn = read_fn;
+    g_pod_count++;
+    g_logical_count += num_channels;
+    return true;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 static float median_of(float arr[], int n) {
     // Bubble sort for n=4 — no heap allocation, deterministic
@@ -73,7 +105,68 @@ static float max_deviation(float arr[], int n, float med) {
     return m;
 }
 
-// ── Init ─────────────────────────────────────────────────────────────────────
+// ── INA3221 legacy pod driver ──────────────────────────────────────────────────
+// Each INA3221 logical channel is registered as a single-channel pod.
+// The pod id equals the hardware channel index because these pods are registered first.
+
+#if ENABLE_INA3221 || ENABLE_INA3221_VOLT
+static void pod_ina3221_read(PodState* pod) {
+    uint8_t hw_ch = pod->id;
+    PhysicalChannel* ch = &pod->channels[0];
+    float samples[BURST_N];
+
+#if ENABLE_INA3221
+    for (int i = 0; i < BURST_N; i++) {
+        samples[i] = ina3221.getCurrentAmps(hw_ch) * 1000.0f; // mA
+    }
+    float med = median_of(samples, BURST_N);
+    float sd = stddev_of(samples, BURST_N, med);
+    float max_dev = max_deviation(samples, BURST_N, med);
+    bool spike = false;
+#if ENABLE_BASELINE_CALIBRATION
+    spike = baseline_count >= BASELINE_TICKS &&
+            sd > SPIKE_STDDEV_MULT * baseline_stddev[hw_ch] &&
+            max_dev > SPIKE_DEVIATION_MA;
+#endif
+    g_meta[hw_ch] = {sd, spike};
+
+    float cal_ma = (med - cal.curr_offset_ma[hw_ch]) * cal.curr_gain[hw_ch];
+    if (fabsf(cal_ma) < 5.0f) cal_ma = 0.0f; // dead-zone
+    float curr_a = cal_ma / 1000.0f;
+    if (cal.invert_curr[hw_ch]) curr_a = -curr_a;
+    ch->current = curr_a;
+#else
+    ch->current = 0.0f;
+    g_meta[hw_ch] = {0.0f, false};
+#endif
+
+#if ENABLE_INA3221_VOLT
+    for (int i = 0; i < BURST_N; i++) {
+        samples[i] = ina3221_volt.getBusVoltage(hw_ch) * 1000.0f; // mV
+    }
+    float v_med = median_of(samples, BURST_N);
+    float cal_mv = (v_med + cal.volt_offset_mv[hw_ch]) * cal.volt_gain[hw_ch];
+    ch->voltage = cal_mv / 1000.0f * volt_ratios[hw_ch];
+#else
+    ch->voltage = 0.0f;
+#endif
+
+    ch->power = ch->voltage * ch->current;
+}
+#endif
+
+// ── INA226 pod driver ──────────────────────────────────────────────────────────
+
+#if ENABLE_INA226
+static void pod_ina226_read(PodState* pod) {
+    PhysicalChannel* ch = &pod->channels[0];
+    ch->voltage = ina226.getBusVoltage() + INA226_V_OFFSET;
+    ch->current = ina226.getCurrent() * INA226_I_GAIN;
+    ch->power   = ina226.getPower();
+}
+#endif
+
+// ── Init ───────────────────────────────────────────────────────────────────────
 
 void init_sensors() {
     if (!wire_started) {
@@ -133,6 +226,19 @@ void init_sensors() {
 #else
     Serial.println("ADS1115 disabled");
 #endif
+
+    // Register pods: INA3221 channels first so pod id == hardware channel.
+#if ENABLE_INA3221 || ENABLE_INA3221_VOLT
+    for (uint8_t ch = 0; ch < 3; ch++) {
+        char name[16];
+        snprintf(name, sizeof(name), "CH%d", ch);
+        register_pod(POD_INA226, name, 1, pod_ina3221_read);
+    }
+#endif
+
+#if ENABLE_INA226
+    register_pod(POD_INA226, "INA226", 1, pod_ina226_read);
+#endif
 }
 
 void reinit_sensors() {
@@ -158,95 +264,24 @@ void reinit_sensors() {
 #endif
 }
 
-// ── Read with burst sampling ──────────────────────────────────────────────────
+// ── Read with burst sampling ───────────────────────────────────────────────────
 
-SensorData read_sensors() {
-    SensorData d = {0};
-    float samples[BURST_N];
+SensorSnapshot read_sensors() {
+    SensorSnapshot snap = {0};
+    snap.timestamp_ms = millis();
 
-    // ── INA3221 current (0x40) ─────────────────────────────────
-#if ENABLE_INA3221
-    for (uint8_t ch = 0; ch < 3; ch++) {
-        for (int i = 0; i < BURST_N; i++) {
-            samples[i] = ina3221.getCurrentAmps(ch) * 1000.0f; // mA
-        }
-        float med = median_of(samples, BURST_N);
-        float sd = stddev_of(samples, BURST_N, med);
-        float max_dev = max_deviation(samples, BURST_N, med);
-        bool spike = false;
-#if ENABLE_BASELINE_CALIBRATION
-        spike = baseline_count >= BASELINE_TICKS &&
-                sd > SPIKE_STDDEV_MULT * baseline_stddev[ch] &&
-                max_dev > SPIKE_DEVIATION_MA;
-#endif
-        g_meta[ch] = {sd, spike};
-
-        float cal_ma = (med - cal.curr_offset_ma[ch]) * cal.curr_gain[ch];
-        if (fabsf(cal_ma) < 5.0f) cal_ma = 0.0f; // dead-zone
-        float curr_a = cal_ma / 1000.0f;
-        if (cal.invert_curr[ch]) curr_a = -curr_a;
-        d.ina3221_current[ch] = curr_a;
+    for (uint8_t i = 0; i < g_pod_count; i++) {
+        g_pods[i].read_fn(&g_pods[i].state);
+        snap.pods[i] = g_pods[i].state;
     }
-#else
-    for (uint8_t ch = 0; ch < 3; ch++) {
-        g_meta[ch] = {0, false};
-        d.ina3221_current[ch] = 0;
-    }
-#endif
-
-    // ── INA3221 voltage (0x42) ─────────────────────────────────
-#if ENABLE_INA3221_VOLT
-    for (uint8_t ch = 0; ch < 3; ch++) {
-        for (int i = 0; i < BURST_N; i++) {
-            samples[i] = ina3221_volt.getBusVoltage(ch) * 1000.0f; // mV
-        }
-        float med = median_of(samples, BURST_N);
-        float sd = stddev_of(samples, BURST_N, med);
-        float max_dev = max_deviation(samples, BURST_N, med);
-        bool spike = false;
-#if ENABLE_BASELINE_CALIBRATION
-        spike = baseline_count >= BASELINE_TICKS &&
-                sd > SPIKE_STDDEV_MULT * baseline_stddev[ch + 3] &&
-                max_dev > SPIKE_DEVIATION_MV;
-#endif
-        g_meta[ch + 3] = {sd, spike};
-
-        float cal_mv = (med + cal.volt_offset_mv[ch]) * cal.volt_gain[ch];
-        d.ina3221_busV[ch] = cal_mv / 1000.0f * volt_ratios[ch];
-        d.ads1115_volts[ch] = d.ina3221_busV[ch];
-    }
-#else
-    for (uint8_t ch = 0; ch < 3; ch++) {
-        g_meta[ch + 3] = {0, false};
-        d.ads1115_volts[ch] = 0;
-    }
-#endif
-
-    // ── INA226 (single read, already filtered by HW) ────────────
-#if ENABLE_INA226
-    d.ina226_busV    = ina226.getBusVoltage() + INA226_V_OFFSET;
-    d.ina226_current = ina226.getCurrent() * INA226_I_GAIN;
-    d.ina226_power   = ina226.getPower();
-    g_meta[6] = {0, false};
-#endif
-
-    // ── ADS1115 ───────────────────────────────────────────────
-#if ENABLE_ADS1115
-    for (uint8_t ch = 0; ch < 4; ch++) {
-        for (int i = 0; i < BURST_N; i++) {
-            int16_t raw = ads1115.readADC_SingleEnded(ch);
-            samples[i] = ads1115.computeVolts(raw);
-        }
-        float med = median_of(samples, BURST_N);
-        d.ads1115_volts[ch] = med;
-    }
-#endif
+    snap.num_pods = g_pod_count;
+    snap.total_logical_channels = g_logical_count;
 
     // Baseline calibration: accumulate stddev for first BASELINE_TICKS
 #if ENABLE_BASELINE_CALIBRATION
     if (baseline_count < BASELINE_TICKS) {
         baseline_count++;
-        for (int i = 0; i < 6; i++) { // ch 0-5 (INA3221 current + voltage)
+        for (int i = 0; i < 3 && i < (int)g_logical_count; i++) {
             baseline_stddev[i] += g_meta[i].stddev / (float)BASELINE_TICKS;
         }
         if (baseline_count >= BASELINE_TICKS) {
@@ -256,25 +291,87 @@ SensorData read_sensors() {
     }
 #endif
 
-    return d;
+    return snap;
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Logical channel accessors ──────────────────────────────────────────────────
 
-SampleMeta sensor_get_meta(uint8_t ch) {
-    if (ch >= 8) return {0, false};
-    return g_meta[ch];
+const PhysicalChannel* sensor_get_logical_channel(uint8_t logical_ch) {
+    if (logical_ch >= g_logical_count) return nullptr;
+    uint8_t logical = 0;
+    for (uint8_t pod_idx = 0; pod_idx < g_pod_count; pod_idx++) {
+        uint8_t n = g_pods[pod_idx].state.num_channels;
+        if (logical_ch < logical + n) {
+            return &g_pods[pod_idx].state.channels[logical_ch - logical];
+        }
+        logical += n;
+    }
+    return nullptr;
 }
 
-// burst sample metadata — accessible by connectivity_manager for calibration status reporting
-extern SampleMeta g_meta[8];
-extern float baseline_stddev[8];
-extern uint8_t baseline_count;
+uint8_t sensor_get_logical_channel_count() {
+    return g_logical_count;
+}
+
+SampleMeta sensor_get_meta(uint8_t logical_ch) {
+    const PhysicalChannel* pc = sensor_get_logical_channel(logical_ch);
+    if (!pc) return {0.0f, false};
+    return pc->meta;
+}
+
+float get_channel_voltage(uint8_t ch) {
+    const PhysicalChannel* pc = sensor_get_logical_channel(ch);
+    return pc ? pc->voltage : 0.0f;
+}
+
+float get_channel_current(uint8_t ch) {
+    const PhysicalChannel* pc = sensor_get_logical_channel(ch);
+    return pc ? pc->current : 0.0f;
+}
+
+float get_channel_power(uint8_t ch) {
+    const PhysicalChannel* pc = sensor_get_logical_channel(ch);
+    return pc ? pc->power : 0.0f;
+}
+
+static const PhysicalChannel* logical_channel_from_snapshot(const SensorSnapshot* snap, uint8_t logical_ch) {
+    if (!snap || logical_ch >= snap->total_logical_channels) return nullptr;
+    uint8_t logical = 0;
+    for (uint8_t i = 0; i < snap->num_pods; i++) {
+        uint8_t n = snap->pods[i].num_channels;
+        if (logical_ch < logical + n) {
+            return &snap->pods[i].channels[logical_ch - logical];
+        }
+        logical += n;
+    }
+    return nullptr;
+}
+
+const PhysicalChannel* sensor_get_logical_channel(const SensorSnapshot& snap, uint8_t logical_ch) {
+    return logical_channel_from_snapshot(&snap, logical_ch);
+}
+
+float get_channel_voltage(const SensorSnapshot& snap, uint8_t ch) {
+    const PhysicalChannel* pc = logical_channel_from_snapshot(&snap, ch);
+    return pc ? pc->voltage : 0.0f;
+}
+
+float get_channel_current(const SensorSnapshot& snap, uint8_t ch) {
+    const PhysicalChannel* pc = logical_channel_from_snapshot(&snap, ch);
+    return pc ? pc->current : 0.0f;
+}
+
+float get_channel_power(const SensorSnapshot& snap, uint8_t ch) {
+    const PhysicalChannel* pc = logical_channel_from_snapshot(&snap, ch);
+    return pc ? pc->power : 0.0f;
+}
+
+// ── Calibration / baseline API ─────────────────────────────────────────────────
 
 void sensor_calibrate_baseline() {
 #if ENABLE_BASELINE_CALIBRATION
     baseline_count = 0;
-    for (int i = 0; i < 8; i++) baseline_stddev[i] = 0;
+    for (int i = 0; i < MAX_LOGICAL_CHANNELS; i++) baseline_stddev[i] = 0;
     Serial.println("Baseline recalibration started");
 #else
     Serial.println("Baseline calibration disabled at compile time");
@@ -284,7 +381,7 @@ void sensor_calibrate_baseline() {
 void sensor_get_baseline_progress(float* stddev_out, uint8_t* tick_count_out) {
     *tick_count_out = baseline_count;
     if (stddev_out) {
-        for (int i = 0; i < 8; i++) stddev_out[i] = baseline_stddev[i];
+        for (int i = 0; i < MAX_LOGICAL_CHANNELS; i++) stddev_out[i] = baseline_stddev[i];
     }
 }
 
@@ -313,19 +410,17 @@ float ina226_getShuntVoltage() {
 #endif
 }
 
-#if !ENABLE_INA3221
-float ina3221_getShuntVoltage(uint8_t) { return 0.0f; }
-#endif
-
-#if !ENABLE_INA3221_VOLT
-float ina3221_getVoltModuleBusVoltage(uint8_t) { return 0.0f; }
-#else
 float ina3221_getVoltModuleBusVoltage(uint8_t ch) {
+#if ENABLE_INA3221_VOLT
     return ina3221_volt.getBusVoltage(ch);
-}
+#else
+    (void)ch;
+    return 0.0f;
 #endif
+}
 
 void sensor_set_calibration(uint8_t ch, uint8_t type, float value) {
+    if (ch >= 3) return;
     switch (type) {
         case 0: cal.volt_offset_mv[ch] = value; break;
         case 1: cal.volt_gain[ch] = value; break;
@@ -337,6 +432,7 @@ void sensor_set_calibration(uint8_t ch, uint8_t type, float value) {
 }
 
 void sensor_get_calibration(uint8_t ch, float* volt_offset_mv, float* volt_gain, float* curr_offset_mv, float* curr_gain) {
+    if (ch >= 3) ch = 0; // guard, though callers should validate
     *volt_offset_mv = cal.volt_offset_mv[ch];
     *volt_gain = cal.volt_gain[ch];
     *curr_offset_mv = cal.curr_offset_ma[ch];
@@ -344,6 +440,7 @@ void sensor_get_calibration(uint8_t ch, float* volt_offset_mv, float* volt_gain,
 }
 
 void sensor_reset_calibration(uint8_t ch) {
+    if (ch >= 3) return;
     cal.volt_offset_mv[ch] = 0.0f;
     cal.volt_gain[ch] = 1.0f;
     cal.curr_offset_ma[ch] = 0.0f;
@@ -353,11 +450,13 @@ void sensor_reset_calibration(uint8_t ch) {
 }
 
 void sensor_set_invert_curr(uint8_t ch, bool invert) {
+    if (ch >= 3) return;
     cal.invert_curr[ch] = invert;
     settings_save_channel_calibration(&cal);
 }
 
 void sensor_reset_invert_curr(uint8_t ch) {
+    if (ch >= 3) return;
     cal.invert_curr[ch] = false;
     settings_save_channel_calibration(&cal);
 }

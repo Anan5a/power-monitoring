@@ -6,12 +6,12 @@ QueueHandle_t g_cmd_queue = nullptr;
 SemaphoreHandle_t g_relay_mutex = nullptr;
 
 void init_core_shared() {
-    g_sensor_queue = xQueueCreate(16, sizeof(SensorData));
+    g_sensor_queue = xQueueCreate(16, sizeof(SensorSnapshot));
     g_cmd_queue = xQueueCreate(8, 128);
     g_relay_mutex = xSemaphoreCreateMutex();
 }
 
-void push_sensor_data(const SensorData& data) {
+void push_sensor_data(const SensorSnapshot& data) {
     if (!g_sensor_queue) return;
     xQueueSend(g_sensor_queue, &data, 0);
 }

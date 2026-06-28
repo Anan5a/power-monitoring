@@ -63,7 +63,7 @@ static bool     g_deferred_relay_state = false;
 #define BATCH_SIZE 5
 #define BATCH_DRAIN_THRESHOLD 2   // send up to BATCH_DRAIN entries when g_batch_count >= this
 #define BATCH_DRAIN_MAX 5         // cap burst at 5 entries
-static SensorData g_batch[BATCH_SIZE];
+static SensorSnapshot g_batch[BATCH_SIZE];
 static uint8_t    g_batch_count = 0;
 
 // sync_device_channels_to_supabase is static and not in header — forward declare
@@ -233,21 +233,23 @@ static int supabase_get(const char* url_path, const char* supabase_url, const ch
 }
 
 // src: 0=none, 1=ina3221_volt(0x42), 2=ina3221_curr(0x40), 3=ina226, 4=ads1115
-float get_sensor_voltage(uint8_t src, uint8_t idx, const SensorData& data) {
-    if (src == 1) return data.ina3221_busV[idx < 3 ? idx : 0];       // INA3221 voltage module 0x42
-    if (src == 2) return data.ads1115_volts[idx < 4 ? idx : 0];       // ADS1115 standalone ADC
-    if (src == 3) return data.ina226_busV;                            // INA226
-    if (src == 4) return 0.0f;                                        // reserved
+// These legacy source IDs are mapped onto the new flat logical-channel view.
+float get_sensor_voltage(uint8_t src, uint8_t idx, const SensorSnapshot& data) {
+    (void)data;
+    if (src == 1 || src == 2) return get_channel_voltage(idx < 4 ? idx : 0);   // logical channel voltage
+    if (src == 3) return get_channel_voltage(3);                                // INA226 logical channel
+    if (src == 4) return 0.0f;                                                  // reserved
     return 0.0f;
 }
-float get_sensor_current(uint8_t src, uint8_t idx, const SensorData& data) {
-    if (src == 1) return data.ina3221_current[idx < 3 ? idx : 0];     // INA3221 current module 0x40
-    if (src == 2) return 0.0f;                                        // ADS1115 current N/A
-    if (src == 3) return data.ina226_current;                         // INA226
+float get_sensor_current(uint8_t src, uint8_t idx, const SensorSnapshot& data) {
+    (void)data;
+    if (src == 1 || src == 2) return get_channel_current(idx < 4 ? idx : 0);   // logical channel current
+    if (src == 3) return get_channel_current(3);                                // INA226 logical channel
     return 0.0f;
 }
-float get_sensor_power(uint8_t src, uint8_t idx, const SensorData& data) {
-    if (src == 3) return data.ina226_power;                           // INA226 has built-in power
+float get_sensor_power(uint8_t src, uint8_t idx, const SensorSnapshot& data) {
+    (void)data;
+    if (src == 3) return get_channel_power(3);                                  // INA226 logical channel
     return 0.0f;
 }
 
@@ -366,7 +368,7 @@ static void print_http_error(HTTPClient& http, int rc) {
     }
 }
 
-void publish_data_http(const SensorData& data, const char* json_buffer, size_t json_len) {
+void publish_data_http(const SensorSnapshot& data, const char* json_buffer, size_t json_len) {
     (void)data;
     if (ESP.getFreeHeap() < 4096) return;
     if (!settings_load_http_enabled()) return;
@@ -774,7 +776,7 @@ void publish_log_batch_supabase() {
 
 static JsonDocument g_pub_doc;
 
-void publish_data(const SensorData& data) {
+void publish_data(const SensorSnapshot& data) {
     if (skip_network) return;
 
     g_pub_doc.clear();
@@ -782,20 +784,20 @@ void publish_data(const SensorData& data) {
     JsonArray ina3221Arr = g_pub_doc["ina3221"].to<JsonArray>();
     for (uint8_t i = 0; i < 3; i++) {
         JsonObject ch = ina3221Arr.add<JsonObject>();
-        ch["v"] = data.ina3221_busV[i];
-        ch["i"] = data.ina3221_current[i];
+        ch["v"] = get_channel_voltage(i);
+        ch["i"] = get_channel_current(i);
     }
 
 #if ENABLE_INA226
     JsonObject ina226Obj = g_pub_doc["ina226"].to<JsonObject>();
-    ina226Obj["v"] = data.ina226_busV;
-    ina226Obj["i"] = data.ina226_current;
-    ina226Obj["p"] = data.ina226_power;
+    ina226Obj["v"] = get_channel_voltage(3);
+    ina226Obj["i"] = get_channel_current(3);
+    ina226Obj["p"] = get_channel_power(3);
 #endif
 
     JsonArray adcArr = g_pub_doc["ads1115"].to<JsonArray>();
     for (uint8_t i = 0; i < 4; i++) {
-        adcArr.add(data.ads1115_volts[i]);
+        adcArr.add(get_channel_voltage(i));
     }
 
     g_pub_doc["log_entries"] = log_entries_count();
@@ -829,17 +831,15 @@ void publish_data(const SensorData& data) {
                 }
             }
         } else if (ch < 3) {
-            // Default fallback when no VC configured — voltage from INA3221 voltage module (0x42),
-            // current from INA3221 current module (0x40). ads1115_volts[] is where sensor_manager
-            // stores the INA3221 voltage module reading (see sensor_manager.cpp:214).
-            v = data.ads1115_volts[ch];
-            i = data.ina3221_current[ch];
+            // Default fallback when no VC configured — logical channel voltage/current
+            v = get_channel_voltage(ch);
+            i = get_channel_current(ch);
             p = v * i;
         } else {
-            // ch == 3 → INA226
-            v = data.ina226_busV;
-            i = data.ina226_current;
-            p = data.ina226_power;
+            // ch == 3 → INA226 logical channel
+            v = get_channel_voltage(3);
+            i = get_channel_current(3);
+            p = get_channel_power(3);
         }
 
         snprintf(key, sizeof(key), "ch%d_V", ch);
@@ -871,7 +871,7 @@ void publish_data(const SensorData& data) {
     vTaskDelay(pdMS_TO_TICKS(25));  // space out notifies — avoids BLE stack crowding / UX jitter
 }
 
-void publish_data_supabase(const SensorData& data) {
+void publish_data_supabase(const SensorSnapshot& data) {
     if (skip_network) return;
     if (ESP.getFreeHeap() < 13000) {
         static unsigned long last_warn = 0;
@@ -911,7 +911,7 @@ void publish_data_supabase(const SensorData& data) {
     JsonArray arr = g_supa_doc.to<JsonArray>();
 
     for (uint8_t r = 0; r < to_send; r++) {
-        const SensorData& d = g_batch[r];
+        const SensorSnapshot& d = g_batch[r];
         JsonObject elem = arr.add<JsonObject>();
         elem["p_device_key"] = device_key;
         elem["p_device_api_key"] = api_key;
@@ -921,14 +921,14 @@ void publish_data_supabase(const SensorData& data) {
         for (uint8_t i = 0; i < 3; i++) {
             char key[16];
             snprintf(key, sizeof(key), "ina3221_v%d", i);
-            payload[key] = d.ina3221_busV[i];
+            payload[key] = get_channel_voltage(d, i);
             snprintf(key, sizeof(key), "ina3221_i%d", i);
-            payload[key] = d.ina3221_current[i];
+            payload[key] = get_channel_current(d, i);
         }
 #if ENABLE_INA226
-        payload["ina226_v"] = d.ina226_busV;
-        payload["ina226_i"] = d.ina226_current;
-        payload["ina226_p"] = d.ina226_power;
+        payload["ina226_v"] = get_channel_voltage(d, 3);
+        payload["ina226_i"] = get_channel_current(d, 3);
+        payload["ina226_p"] = get_channel_power(d, 3);
 #endif
         for (uint8_t i = 0; i < 4; i++) {
             char key[16];
@@ -971,13 +971,13 @@ void publish_data_supabase(const SensorData& data) {
                     else if (vc.voltage_src > 0) p = v * i;
                 }
             } else if (ch < 3) {
-                v = d.ads1115_volts[ch];
-                i = d.ina3221_current[ch];
+                v = get_channel_voltage(d, ch);
+                i = get_channel_current(d, ch);
                 p = v * i;
             } else {
-                v = d.ina226_busV;
-                i = d.ina226_current;
-                p = d.ina226_power;
+                v = get_channel_voltage(d, 3);
+                i = get_channel_current(d, 3);
+                p = get_channel_power(d, 3);
             }
             snprintf(key, sizeof(key), "ch%d_V", ch); payload[key] = v;
             snprintf(key, sizeof(key), "ch%d_I", ch); payload[key] = i;

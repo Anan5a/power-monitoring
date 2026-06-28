@@ -32,7 +32,7 @@ struct LogSnapshot {
 };
 
 void init_data_logger();
-void log_sample(const SensorData& data, uint32_t timestamp_ms);
+void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms);
 void log_set_epoch(time_t epoch);
 time_t log_to_epoch(uint32_t timestamp_ms);
 

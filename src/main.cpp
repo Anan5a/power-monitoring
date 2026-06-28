@@ -15,16 +15,17 @@
 #include "serial1_manager.h"
 #include "core_shared.h"
 
-static void print_sensor_data(const SensorData& data) {
+static void print_sensor_data(const SensorSnapshot& data) {
+    (void)data;
     for (int i = 0; i < 3; i++) {
-        Serial.printf("CH%d: %.2fV %.3fA (cal)\n", i, data.ina3221_busV[i], data.ina3221_current[i]);
+        Serial.printf("CH%d: %.2fV %.3fA (cal)\n", i, get_channel_voltage(i), get_channel_current(i));
     }
     Serial.printf("Raw INA3221 volt module (0x42): ");
     for (int i = 0; i < 3; i++) {
         Serial.printf("CH%d=%.2fmV ", i, ina3221_getVoltModuleBusVoltage(i) * 1000.0f);
     }
     Serial.println();
-    Serial.printf("INA226: %.2fV %.3fA %.2fW\n", data.ina226_busV, data.ina226_current, data.ina226_power);
+    Serial.printf("INA226: %.2fV %.3fA %.2fW\n", get_channel_voltage(3), get_channel_current(3), get_channel_power(3));
 }
 
 static void print_status() {
@@ -61,7 +62,7 @@ static void networkTask(void* param) {
     start_ble_advertising();
     init_connectivity();
 
-    SensorData data;
+    SensorSnapshot data;
 
     for (;;) {
         loop_connectivity();
@@ -115,7 +116,7 @@ static void sensorTask(void* param) {
     (void)param;
     Serial.println("[Sensor] task started on Core 1");
 
-    SensorData data;
+    SensorSnapshot data;
     TickType_t last_wake = xTaskGetTickCount();
 
     for (;;) {
@@ -322,8 +323,8 @@ static void handle_serial_cli() {
             } else if (strncmp(line, "test sensor ", 12) == 0) {
                 int ch;
                 if (sscanf(line, "test sensor %d", &ch) == 1 && ch >= 0 && ch <= 2) {
-                    SensorData d = read_sensors();
-                    Serial.printf("Sensor CH%d: %.3fV, %.3fA\n", ch, d.ads1115_volts[ch], d.ina3221_current[ch]);
+                    SensorSnapshot d = read_sensors();
+                    Serial.printf("Sensor CH%d: %.3fV, %.3fA\n", ch, get_channel_voltage(ch), get_channel_current(ch));
                     Serial.printf("  raw shunt voltage: %.2fmV\n", ina3221_getShuntVoltage(ch) * 1000.0f);
                 } else {
                     Serial.println("Usage: test sensor 0-2");
@@ -351,10 +352,9 @@ static void handle_serial_cli() {
                     Serial.println("Usage: virtual_channel show | virtual_channel N | virtual_channel N vs vidx cs cidx");
                 }
             } else if (strncmp(line, "display ", 8) == 0) {
-                SensorData d = read_sensors();
+                SensorSnapshot d = read_sensors();
                 float total_power = 0;
-                for (int ch = 0; ch < 3; ch++) total_power += d.ina3221_busV[ch] * d.ina3221_current[ch];
-                total_power += d.ina226_power;
+                for (int ch = 0; ch < 4; ch++) total_power += get_channel_power(ch);
                 if (strcmp(line, "display all") == 0) {
                     for (int p = 0; p < 5; p++) {
                         Serial.printf("=== Display page %d ===\n", p);
@@ -371,8 +371,8 @@ static void handle_serial_cli() {
                                 else if (ch == 1) strlcpy(name, "Solar", sizeof(name));
                                 else strlcpy(name, "Output", sizeof(name));
                             }
-                            float v = d.ads1115_volts[ch];
-                            float i = d.ina3221_current[ch];
+                            float v = get_channel_voltage(ch);
+                            float i = get_channel_current(ch);
                             float pw = v * i;
                             Serial.printf("  Ch%d (%s): %.2fV %.3fA %.2fW\n", ch, name, v, i, pw);
                             float mAh = get_coulomb_mAh(ch);
@@ -388,7 +388,7 @@ static void handle_serial_cli() {
                             }
                         }
                     }
-                    Serial.printf("INA226: %.2fV %.3fA %.2fW\n", d.ina226_busV, d.ina226_current, d.ina226_power);
+                    Serial.printf("INA226: %.2fV %.3fA %.2fW\n", get_channel_voltage(3), get_channel_current(3), get_channel_power(3));
                 } else {
                     int pn;
                     if (sscanf(line, "display page %d", &pn) == 1 && pn >= 0 && pn <= 4) {
@@ -406,8 +406,8 @@ static void handle_serial_cli() {
                                 else if (ch == 1) strlcpy(name, "Solar", sizeof(name));
                                 else strlcpy(name, "Output", sizeof(name));
                             }
-                            float v = d.ads1115_volts[ch];
-                            float i = d.ina3221_current[ch];
+                            float v = get_channel_voltage(ch);
+                            float i = get_channel_current(ch);
                             float pw = v * i;
                             Serial.printf("  Ch%d (%s): %.2fV %.3fA %.2fW\n", ch, name, v, i, pw);
                             float mAh = get_coulomb_mAh(ch);
@@ -436,7 +436,7 @@ static void handle_serial_cli() {
                 Serial.printf("CPU temperature: %.1f C\n", temperatureRead());
                 Serial.printf("PSRAM: %u bytes\n", ESP.getPsramSize());
             } else if (strcmp(line, "sensors") == 0) {
-                SensorData data = read_sensors();
+                SensorSnapshot data = read_sensors();
                 print_sensor_data(data);
             } else if (strcmp(line, "relay status") == 0) {
                 uint8_t count = settings_load_relay_count();
@@ -479,16 +479,16 @@ static void handle_serial_cli() {
                 }
                 Serial.println("All relays tested.");
             } else if (strcmp(line, "test all sensors") == 0) {
-                SensorData d = read_sensors();
+                SensorSnapshot d = read_sensors();
                 Serial.println("All sensor channels:");
                 for (int i = 0; i < 3; i++) {
-                    Serial.printf("  CH%d: %.3fV  %.3fA\n", i, d.ads1115_volts[i], d.ina3221_current[i]);
+                    Serial.printf("  CH%d: %.3fV  %.3fA\n", i, get_channel_voltage(i), get_channel_current(i));
                 }
             } else if (strcmp(line, "test display") == 0) {
                 Serial.println("Display test: OLED should show cycling pages");
                 extern void init_display();
-                extern void update_display(const SensorData&, const char*, float);
-                SensorData d = read_sensors();
+                extern void update_display(const SensorSnapshot&, const char*, float);
+                SensorSnapshot d = read_sensors();
                 for (int i = 0; i < 5; i++) {
                     update_display(d, "192.168.1.1", 123.4f);
                     vTaskDelay(pdMS_TO_TICKS(1000));

@@ -67,14 +67,15 @@ static void draw_status_page(const char* ip_str, float total_power, float temp_c
 
 // ─── Channel page ───────────────────────────────────────────────
 
-static void draw_channel_page(uint8_t ch, const SensorData& data) {
+static void draw_channel_page(uint8_t ch, const SensorSnapshot& data) {
+    (void)data;
     float v = 0.0f, i = 0.0f, p = 0.0f;
-    
+
     // Moved to static allocation to protect the FreeRTOS stack from overflow
-    static char name[24]; 
+    static char name[24];
     static VirtualChannelConfig vc;
     static BatteryConfig bat;
-    
+
     name[0] = '\0';
     bool has_vc = settings_load_virtual_channel(ch, &vc);
 
@@ -94,9 +95,9 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
             snprintf(name, sizeof(name), "CH%d", ch);
         }
     } else if (ch < 3) {
-        // Default: hardcoded mapping for backward compat
-        v = data.ads1115_volts[ch];
-        i = data.ina3221_current[ch];
+        // Default: logical channel mapping for backward compat
+        v = get_channel_voltage(ch);
+        i = get_channel_current(ch);
         p = v * i;
         settings_load_channel_name(ch, name, sizeof(name));
         if (!name[0]) {
@@ -105,7 +106,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
             else strlcpy(name, "Output", sizeof(name));
         }
     } else {
-        v = data.ina226_busV; i = data.ina226_current; p = data.ina226_power;
+        v = get_channel_voltage(3); i = get_channel_current(3); p = get_channel_power(3);
         strlcpy(name, "INA226", sizeof(name));
     }
 
@@ -176,7 +177,7 @@ static void draw_channel_page(uint8_t ch, const SensorData& data) {
 
 // ─── Main display loop ───────────────────────────────────────────
 
-void update_display(const SensorData& data, const char* ip_str, float total_power) {
+void update_display(const SensorSnapshot& data, const char* ip_str, float total_power) {
     if (!display) return; // Guard clause against unallocated pointer references
     
     unsigned long now = millis();
@@ -242,5 +243,5 @@ void init_display() {
 
 #else
 void init_display() {}
-void update_display(const SensorData&, const char*, float) {}
+void update_display(const SensorSnapshot&, const char*, float) {}
 #endif

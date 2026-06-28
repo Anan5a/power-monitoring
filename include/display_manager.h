@@ -5,6 +5,6 @@
 #include <Arduino.h>
 
 void init_display();
-void update_display(const SensorData& data, const char* ip_str, float total_power);
+void update_display(const SensorSnapshot& data, const char* ip_str, float total_power);
 
 #endif

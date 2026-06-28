@@ -90,14 +90,17 @@ void init_relays() {
     }
 }
 
-void evaluate_relays(const SensorData& data) {
+void evaluate_relays(const SensorSnapshot& data) {
+    (void)data;
     // Auto-trip disabled until user enables via 'relay auto on'
     if (!relay_auto_enabled) return;
     float voltages[4] = {
-        data.ads1115_volts[0], data.ads1115_volts[1], data.ads1115_volts[2], data.ina226_busV
+        get_channel_voltage(0), get_channel_voltage(1),
+        get_channel_voltage(2), get_channel_voltage(3)
     };
     float currents[4] = {
-        data.ina3221_current[0], data.ina3221_current[1], data.ina3221_current[2], data.ina226_current
+        get_channel_current(0), get_channel_current(1),
+        get_channel_current(2), get_channel_current(3)
     };
 
     uint8_t count = settings_load_relay_count();

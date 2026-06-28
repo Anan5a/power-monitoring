@@ -8,12 +8,12 @@
 
 void init_connectivity();
 void loop_connectivity();
-void publish_data(const SensorData& data);
+void publish_data(const SensorSnapshot& data);
 const char* get_local_ip_str();
 time_t get_epoch_time();
 bool try_sync_epoch_time();
-void publish_data_http(const SensorData& data, const char* json_buffer, size_t json_len);
-void publish_data_supabase(const SensorData& data);
+void publish_data_http(const SensorSnapshot& data, const char* json_buffer, size_t json_len);
+void publish_data_supabase(const SensorSnapshot& data);
 void publish_log_batch();
 void publish_log_batch_supabase();
 void sync_calibration_to_supabase();
@@ -23,9 +23,9 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len);
 
 // Virtual channel helpers: get sensor values by source type
 // src: 0=none, 1=ina3221_volt(0x42), 2=ina3221_curr(0x40), 3=ina226, 4=ads1115
-float get_sensor_voltage(uint8_t src, uint8_t idx, const SensorData& data);
-float get_sensor_current(uint8_t src, uint8_t idx, const SensorData& data);
-float get_sensor_power(uint8_t src, uint8_t idx, const SensorData& data);
+float get_sensor_voltage(uint8_t src, uint8_t idx, const SensorSnapshot& data);
+float get_sensor_current(uint8_t src, uint8_t idx, const SensorSnapshot& data);
+float get_sensor_power(uint8_t src, uint8_t idx, const SensorSnapshot& data);
 
 // Settings commands: ESP32 polls Supabase for pending config changes
 void check_settings_commands();

@@ -108,24 +108,25 @@ void init_data_logger() {
     }
 }
 
-void log_sample(const SensorData& data, uint32_t timestamp_ms) {
+void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms) {
+    (void)data;
     int16_t v[4] = {
-        (int16_t)(data.ina3221_busV[0] * 1000),
-        (int16_t)(data.ina3221_busV[1] * 1000),
-        (int16_t)(data.ina3221_busV[2] * 1000),
-        (int16_t)(data.ina226_busV * 1000)
+        (int16_t)(get_channel_voltage(0) * 1000),
+        (int16_t)(get_channel_voltage(1) * 1000),
+        (int16_t)(get_channel_voltage(2) * 1000),
+        (int16_t)(get_channel_voltage(3) * 1000)
     };
     int16_t i[4] = {
-        (int16_t)(data.ina3221_current[0] * 1000),
-        (int16_t)(data.ina3221_current[1] * 1000),
-        (int16_t)(data.ina3221_current[2] * 1000),
-        (int16_t)(data.ina226_current * 1000)
+        (int16_t)(get_channel_current(0) * 1000),
+        (int16_t)(get_channel_current(1) * 1000),
+        (int16_t)(get_channel_current(2) * 1000),
+        (int16_t)(get_channel_current(3) * 1000)
     };
     int16_t p[4] = {
-        (int16_t)(data.ina3221_busV[0] * data.ina3221_current[0]),
-        (int16_t)(data.ina3221_busV[1] * data.ina3221_current[1]),
-        (int16_t)(data.ina3221_busV[2] * data.ina3221_current[2]),
-        (int16_t)(data.ina226_power)
+        (int16_t)(get_channel_power(0)),
+        (int16_t)(get_channel_power(1)),
+        (int16_t)(get_channel_power(2)),
+        (int16_t)(get_channel_power(3))
     };
 
     bool is_base;

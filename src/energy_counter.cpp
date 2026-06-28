@@ -14,7 +14,8 @@ void init_energy_counter() {
     last_persist_ms = millis();
 }
 
-void update_energy_counter(const SensorData& data, float dt_seconds) {
+void update_energy_counter(const SensorSnapshot& data, float dt_seconds) {
+    (void)data;
     for (uint8_t vc = 0; vc < 4; vc++) {
         VirtualChannelConfig vc_cfg;
         float power;
@@ -25,12 +26,8 @@ void update_energy_counter(const SensorData& data, float dt_seconds) {
             float i = get_sensor_current(vc_cfg.current_src, vc_cfg.current_idx, data);
             power = v * i;
         } else {
-            // Fall back to physical channels: VC0→CH0, VC1→CH1, VC2→CH2, VC3→INA226
-            if (vc < 3) {
-                power = data.ina3221_busV[vc] * data.ina3221_current[vc];
-            } else {
-                power = data.ina226_power;
-            }
+            // Fall back to legacy logical channels 0..3
+            power = get_channel_power(vc);
         }
 
         accumulated_Wh[vc] += power * dt_seconds / 3600.0f;
