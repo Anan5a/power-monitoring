@@ -128,10 +128,19 @@ static void handle_button_event(uint8_t idx, bool short_press, bool long_press, 
             default: break;
         }
     }
-    if (long_press && idx == 3) {
-        Serial.println("[UI] factory reset requested via button");
-        settings_factory_reset();
-        ESP.restart();
+    if (long_press) {
+        switch (idx) {
+            case 2:
+                Serial.println("[UI] sensor re-discovery via button");
+                discover_sensors();
+                break;
+            case 3:
+                Serial.println("[UI] factory reset requested via button");
+                settings_factory_reset();
+                ESP.restart();
+                break;
+            default: break;
+        }
     }
 }
 

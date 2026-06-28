@@ -146,4 +146,19 @@ void settings_save_virtual_channel(uint8_t ch, const VirtualChannelConfig* in);
 
 void settings_factory_reset();           // wipe all NVS keys
 
+// Auto-discovered sensor config
+uint8_t settings_load_discovered_ina_count();
+void settings_save_discovered_ina_count(uint8_t count);
+bool settings_load_discovered_ina_addr(uint8_t idx, uint8_t* addr);
+void settings_save_discovered_ina_addr(uint8_t idx, uint8_t addr);
+bool settings_load_discovered_ina_shunt(uint8_t idx, float* shunt);
+void settings_save_discovered_ina_shunt(uint8_t idx, float shunt);
+bool settings_load_discovered_ina_vratio(uint8_t idx, float* ratio);
+void settings_save_discovered_ina_vratio(uint8_t idx, float ratio);
+uint8_t settings_load_discovered_bl_count();
+void settings_save_discovered_bl_count(uint8_t count);
+bool settings_load_discovered_bl_addr(uint8_t idx, uint8_t* addr);
+void settings_save_discovered_bl_addr(uint8_t idx, uint8_t addr);
+void settings_clear_discovered();  // wipe all discovery keys
+
 #endif

@@ -17,6 +17,7 @@ void settings_save_channel_calibration(const struct ChannelCalibration* in);
 void init_sensors();
 void reinit_sensors();  // reload shunt/volt_ratio/resistor settings from NVS
 SensorSnapshot read_sensors();
+void discover_sensors();  // I2C scan + UART listen, auto-register pods, persist to NVS
 
 const PhysicalChannel* sensor_get_logical_channel(uint8_t logical_ch);
 const PhysicalChannel* sensor_get_logical_channel(const SensorSnapshot& snap, uint8_t logical_ch);

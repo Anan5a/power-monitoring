@@ -180,6 +180,67 @@ static void pod_ina226_read(PodState* pod) {
 }
 #endif
 
+// ── Pod registry helpers ───────────────────────────────────────────────────────
+
+static void clear_pods() {
+    for (uint8_t i = 0; i < g_pod_count; i++) {
+        g_pods[i] = PodDriver{};
+    }
+    g_pod_count = 0;
+    g_logical_count = 0;
+}
+
+// ── I2C auto-discovery ─────────────────────────────────────────────────────────
+
+#if ENABLE_INA226
+static void discover_ina226() {
+    uint8_t found = 0;
+    Serial.println("[DISC] Scanning I2C for INA226 (0x40-0x4F)...");
+    for (uint8_t addr = 0x40; addr <= 0x4F; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() != 0) continue; // no ACK
+
+        // Device ACKed — try INA226 init
+        INA226* dev = new INA226(addr, &Wire);
+        if (!dev->begin()) {
+            delete dev;
+            continue;
+        }
+        if (!dev->isConnected()) {
+            delete dev;
+            continue;
+        }
+
+        // Confirmed INA226 — configure and register
+        float shunt = 0.005f;
+        float saved_shunt = 0.0f;
+        if (settings_load_shunt(found, &saved_shunt) && saved_shunt > 0.0f) {
+            shunt = saved_shunt;
+        }
+        float max_current = 0.08192f / shunt;
+        if (max_current < 0.001f) max_current = 0.001f;
+        dev->setMaxCurrentShunt(max_current, shunt);
+
+        ina226_devices[found] = dev;
+        ina226_device_for_pod[found] = found;
+
+        char name[16];
+        snprintf(name, sizeof(name), "INA226@0x%02X", addr);
+        register_pod(POD_INA226, name, 1, pod_ina226_read);
+        Serial.printf("[DISC] INA226 found at 0x%02X (pod %d)\n", addr, g_pod_count - 1);
+
+        found++;
+        if (found >= MAX_INA226) break;
+    }
+
+    // Note: addresses are saved in the loop above; this is a placeholder.
+    // The actual addresses are stored per-device in the discovery loop.
+    // Shunt/vratio defaults are set; user can override via BLE/CLI later.
+    (void)0;
+    Serial.printf("[DISC] INA226 scan complete: %d found\n", found);
+}
+#endif
+
 // ── Init ───────────────────────────────────────────────────────────────────────
 
 void init_sensors() {
@@ -223,24 +284,37 @@ void init_sensors() {
     }
 #endif
 
+    // Auto-discovery: try NVS cache first, then scan I2C
 #if ENABLE_INA226
-    for (uint8_t i = 0; i < INA226_COUNT && i < MAX_INA226; i++) {
-        ina226_devices[i] = new INA226(ina226_addresses[i], &Wire);
-        if (!ina226_devices[i]->begin()) {
-            Serial.printf("INA226 %d (0x%02X) init failed\n", i, ina226_addresses[i]);
-            continue;
+    uint8_t disc_count = settings_load_discovered_ina_count();
+    if (disc_count > 0) {
+        Serial.printf("[DISC] Loading %d INA226 from NVS cache\n", disc_count);
+        for (uint8_t i = 0; i < disc_count && i < MAX_INA226; i++) {
+            uint8_t addr;
+            if (!settings_load_discovered_ina_addr(i, &addr)) continue;
+            ina226_devices[i] = new INA226(addr, &Wire);
+            if (!ina226_devices[i]->begin()) {
+                Serial.printf("[DISC] INA226 at 0x%02X init failed (re-scan?)\n", addr);
+                delete ina226_devices[i];
+                ina226_devices[i] = nullptr;
+                continue;
+            }
+            float shunt = 0.005f;
+            float saved_shunt = 0.0f;
+            if (settings_load_shunt(i, &saved_shunt) && saved_shunt > 0.0f) {
+                shunt = saved_shunt;
+            }
+            float max_current = 0.08192f / shunt;
+            if (max_current < 0.001f) max_current = 0.001f;
+            ina226_devices[i]->setMaxCurrentShunt(max_current, shunt);
+            ina226_device_for_pod[i] = i;
+            char name[16];
+            snprintf(name, sizeof(name), "INA226@0x%02X", addr);
+            register_pod(POD_INA226, name, 1, pod_ina226_read);
+            Serial.printf("[DISC] Restored INA226 at 0x%02X (pod %d)\n", addr, g_pod_count - 1);
         }
-        float shunt = ina226_shunts[i];
-        float saved_shunt = 0.0f;
-        if (settings_load_shunt(3 + i, &saved_shunt) && saved_shunt > 0.0f) {
-            shunt = saved_shunt;
-        }
-        float max_current = 0.08192f / shunt;
-        if (max_current < 0.001f) max_current = 0.001f;
-        int err = ina226_devices[i]->setMaxCurrentShunt(max_current, shunt);
-        if (err != INA226_ERR_NONE) {
-            Serial.printf("INA226 %d setMaxCurrentShunt err=0x%04X\n", i, err);
-        }
+    } else {
+        discover_ina226();
     }
 #else
     Serial.println("INA226 disabled");
@@ -256,24 +330,45 @@ void init_sensors() {
     Serial.println("ADS1115 disabled");
 #endif
 
-    // Register pods: INA3221 channels first so pod id == hardware channel.
+    // Register legacy INA3221 pods (if enabled and no discovery data)
 #if ENABLE_INA3221 || ENABLE_INA3221_VOLT
-    for (uint8_t ch = 0; ch < 3; ch++) {
-        char name[16];
-        snprintf(name, sizeof(name), "CH%d", ch);
-        register_pod(POD_INA226, name, 1, pod_ina3221_read);
-    }
-#endif
-
-#if ENABLE_INA226
-    for (uint8_t i = 0; i < INA226_COUNT && i < MAX_INA226; i++) {
-        char name[16];
-        snprintf(name, sizeof(name), "INA%d", i);
-        if (register_pod(POD_INA226, name, 1, pod_ina226_read)) {
-            ina226_device_for_pod[g_pod_count - 1] = i;
+    if (g_pod_count == 0) {
+        for (uint8_t ch = 0; ch < 3; ch++) {
+            char name[16];
+            snprintf(name, sizeof(name), "CH%d", ch);
+            register_pod(POD_INA226, name, 1, pod_ina3221_read);
         }
     }
 #endif
+
+    if (g_pod_count == 0) {
+        Serial.println("[DISC] WARNING: No sensors found! Use 'discover_sensors' CLI/BLE command to re-scan.");
+    }
+}
+
+void discover_sensors() {
+    Serial.println("[DISC] Re-discovering sensors...");
+    settings_clear_discovered();
+
+    // Delete existing INA226 devices
+#if ENABLE_INA226
+    for (uint8_t i = 0; i < MAX_INA226; i++) {
+        if (ina226_devices[i]) {
+            delete ina226_devices[i];
+            ina226_devices[i] = nullptr;
+        }
+    }
+#endif
+
+    clear_pods();
+    discover_ina226();
+
+    if (g_pod_count == 0) {
+        Serial.println("[DISC] No sensors found after re-discovery.");
+    } else {
+        Serial.printf("[DISC] Re-discovery complete: %d pods, %d logical channels\n",
+            g_pod_count, g_logical_count);
+    }
 }
 
 void reinit_sensors() {

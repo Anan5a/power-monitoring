@@ -124,3 +124,8 @@ bool Preferences::clear() {
     g_store.clear();
     return true;
 }
+
+bool Preferences::remove(const char* key) {
+    g_store.erase(std::string(key));
+    return true;
+}

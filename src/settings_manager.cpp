@@ -331,6 +331,83 @@ void settings_save_virtual_channel(uint8_t ch, const VirtualChannelConfig* in) {
     prefs.putBytes(key, in, sizeof(VirtualChannelConfig));
 }
 
+// ── Auto-discovered sensor config ─────────────────────────────────────────────
+
+uint8_t settings_load_discovered_ina_count() {
+    return prefs.getUChar("disc_ina_cnt", 0);
+}
+void settings_save_discovered_ina_count(uint8_t count) {
+    prefs.putUChar("disc_ina_cnt", count);
+}
+bool settings_load_discovered_ina_addr(uint8_t idx, uint8_t* addr) {
+    char key[16];
+    snprintf(key, sizeof(key), "dina_a_%d", idx);
+    if (!prefs.isKey(key)) return false;
+    *addr = prefs.getUChar(key, 0);
+    return true;
+}
+void settings_save_discovered_ina_addr(uint8_t idx, uint8_t addr) {
+    char key[16];
+    snprintf(key, sizeof(key), "dina_a_%d", idx);
+    prefs.putUChar(key, addr);
+}
+bool settings_load_discovered_ina_shunt(uint8_t idx, float* shunt) {
+    char key[16];
+    snprintf(key, sizeof(key), "dina_sh_%d", idx);
+    if (!prefs.isKey(key)) return false;
+    *shunt = prefs.getFloat(key, 0.005f);
+    return true;
+}
+void settings_save_discovered_ina_shunt(uint8_t idx, float shunt) {
+    char key[16];
+    snprintf(key, sizeof(key), "dina_sh_%d", idx);
+    prefs.putFloat(key, shunt);
+}
+bool settings_load_discovered_ina_vratio(uint8_t idx, float* ratio) {
+    char key[16];
+    snprintf(key, sizeof(key), "dina_vr_%d", idx);
+    if (!prefs.isKey(key)) return false;
+    *ratio = prefs.getFloat(key, 1.0f);
+    return true;
+}
+void settings_save_discovered_ina_vratio(uint8_t idx, float ratio) {
+    char key[16];
+    snprintf(key, sizeof(key), "dina_vr_%d", idx);
+    prefs.putFloat(key, ratio);
+}
+uint8_t settings_load_discovered_bl_count() {
+    return prefs.getUChar("disc_bl_cnt", 0);
+}
+void settings_save_discovered_bl_count(uint8_t count) {
+    prefs.putUChar("disc_bl_cnt", count);
+}
+bool settings_load_discovered_bl_addr(uint8_t idx, uint8_t* addr) {
+    char key[16];
+    snprintf(key, sizeof(key), "dbl_a_%d", idx);
+    if (!prefs.isKey(key)) return false;
+    *addr = prefs.getUChar(key, 0);
+    return true;
+}
+void settings_save_discovered_bl_addr(uint8_t idx, uint8_t addr) {
+    char key[16];
+    snprintf(key, sizeof(key), "dbl_a_%d", idx);
+    prefs.putUChar(key, addr);
+}
+void settings_clear_discovered() {
+    prefs.remove("disc_ina_cnt");
+    prefs.remove("disc_bl_cnt");
+    for (uint8_t i = 0; i < MAX_INA226; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "dina_a_%d", i); prefs.remove(key);
+        snprintf(key, sizeof(key), "dina_sh_%d", i); prefs.remove(key);
+        snprintf(key, sizeof(key), "dina_vr_%d", i); prefs.remove(key);
+    }
+    for (uint8_t i = 0; i < MAX_BL0939; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "dbl_a_%d", i); prefs.remove(key);
+    }
+}
+
 void settings_factory_reset() {
     prefs.clear();
 }

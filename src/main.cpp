@@ -481,6 +481,8 @@ static void handle_serial_cli() {
                     }
                 }
                 Serial.println("done");
+            } else if (strcmp(line, "discover_sensors") == 0) {
+                discover_sensors();
             } else if (strcmp(line, "test all switches") == 0 || strcmp(line, "test all relays") == 0) {
                 Serial.println("Testing all switches in sequence...");
                 uint8_t count = settings_load_switch_count();
@@ -595,6 +597,7 @@ static void handle_serial_cli() {
                 Serial.println("  reset energy N      — reset energy counter CH N");
                 Serial.println("  flush log           — flush RAM log buffer");
                 Serial.println("  i2c_scan            — scan I2C bus for devices");
+                Serial.println("  discover_sensors    — auto-detect INA226/BL0939 sensors");
                 Serial.println("  shunt N ohms        — set shunt resistance for CH N (0 clears)");
                 Serial.println("  shunt show          — show current shunt settings");
                 Serial.println("  vratio N ratio      — set voltage divider ratio for CH N (0 clears)");

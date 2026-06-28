@@ -35,6 +35,7 @@ public:
     size_t putUInt(const char* key, uint32_t value);
 
     bool clear();
+    bool remove(const char* key);
 };
 
 #endif

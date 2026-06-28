@@ -213,6 +213,10 @@ static void handle_command(const char* json) {
         if (!check_pin(doc)) return;
         sensor_calibrate_baseline();
         send_response("{\"ok\":true,\"msg\":\"baseline_calibration_started\"}");
+    } else if (strcmp(cmd, "discover_sensors") == 0) {
+        if (!check_pin(doc)) return;
+        discover_sensors();
+        send_response("{\"ok\":true,\"msg\":\"discovery_complete\"}");
     } else if (strcmp(cmd, "get_switch") == 0 || strcmp(cmd, "get_relay") == 0) {
         if (!check_pin(doc)) return;
         uint8_t idx = doc["idx"] | 0;
@@ -682,6 +686,9 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         sensor_calibrate_baseline();
         sync_calibration_to_supabase();
         Serial.println("[CMD] baseline calibration started");
+    } else if (strcmp(cmd_type, "discover_sensors") == 0) {
+        discover_sensors();
+        Serial.println("[CMD] sensor discovery complete");
     } else if (strcmp(cmd_type, "factory_reset") == 0) {
         settings_factory_reset();
         Serial.println("[CMD] factory_reset done — rebooting");
