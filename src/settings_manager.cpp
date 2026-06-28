@@ -111,6 +111,54 @@ void settings_save_relay(uint8_t idx, const RelayRule* in) {
     if (idx >= count) prefs.putUChar("relay_count", idx + 1);
 }
 
+uint8_t settings_load_switch_count() {
+    return prefs.getUChar("switch_count", 0);
+}
+bool settings_load_switch(uint8_t idx, SwitchChannel* out) {
+    char key[24];
+    snprintf(key, sizeof(key), "sw_ch_%d", idx);
+    if (!prefs.isKey(key)) return false;
+    size_t len = prefs.getBytesLength(key);
+    if (len != sizeof(SwitchChannel)) {
+        if (len < sizeof(SwitchChannel)) {
+            memset(out, 0, sizeof(SwitchChannel));
+            prefs.getBytes(key, out, len);
+            return true;
+        }
+        return false;
+    }
+    prefs.getBytes(key, out, sizeof(SwitchChannel));
+    return true;
+}
+void settings_save_switch(uint8_t idx, const SwitchChannel* in) {
+    char key[24];
+    snprintf(key, sizeof(key), "sw_ch_%d", idx);
+    prefs.putBytes(key, in, sizeof(SwitchChannel));
+    uint8_t count = settings_load_switch_count();
+    if (idx >= count) prefs.putUChar("switch_count", idx + 1);
+}
+bool settings_load_switch_rule(uint8_t idx, SwitchRule* out) {
+    char key[24];
+    snprintf(key, sizeof(key), "sw_rule_%d", idx);
+    if (!prefs.isKey(key)) return false;
+    size_t len = prefs.getBytesLength(key);
+    if (len != sizeof(SwitchRule)) {
+        if (len < sizeof(SwitchRule)) {
+            memset(out, 0, sizeof(SwitchRule));
+            prefs.getBytes(key, out, len);
+            return true;
+        }
+        return false;
+    }
+    prefs.getBytes(key, out, sizeof(SwitchRule));
+    return true;
+}
+void settings_save_switch_rule(uint8_t idx, const SwitchRule* in) {
+    char key[24];
+    snprintf(key, sizeof(key), "sw_rule_%d", idx);
+    prefs.putBytes(key, in, sizeof(SwitchRule));
+}
+
 bool settings_load_calibration(Calibration* out) {
     if (!prefs.isKey("cal")) return false;
     prefs.getBytes("cal", out, sizeof(Calibration));

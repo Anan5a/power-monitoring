@@ -15,7 +15,13 @@ static Adafruit_INA3221 ina3221_volt;
 
 #if ENABLE_INA226
 #include <INA226.h>
-static INA226 ina226;
+static INA226* ina226_devices[MAX_INA226];
+static uint8_t ina226_device_for_pod[MAX_INA226];
+static const uint8_t  ina226_addresses[MAX_INA226]    = INA226_ADDRESSES;
+static const float    ina226_shunts[MAX_INA226]      = INA226_SHUNTS;
+static const float    ina226_volt_ratios[MAX_INA226] = INA226_VOLT_RATIOS;
+static const float    ina226_i_gains[MAX_INA226]     = INA226_I_GAINS;
+static const float    ina226_v_offsets[MAX_INA226]   = INA226_V_OFFSETS;
 #endif
 
 #if ENABLE_ADS1115
@@ -160,9 +166,17 @@ static void pod_ina3221_read(PodState* pod) {
 #if ENABLE_INA226
 static void pod_ina226_read(PodState* pod) {
     PhysicalChannel* ch = &pod->channels[0];
-    ch->voltage = ina226.getBusVoltage() + INA226_V_OFFSET;
-    ch->current = ina226.getCurrent() * INA226_I_GAIN;
-    ch->power   = ina226.getPower();
+    uint8_t dev_idx = ina226_device_for_pod[pod->id];
+    if (dev_idx >= INA226_COUNT || !ina226_devices[dev_idx]) {
+        ch->voltage = ch->current = ch->power = 0.0f;
+        return;
+    }
+    float v = ina226_devices[dev_idx]->getBusVoltage();
+    float i_a = ina226_devices[dev_idx]->getCurrent();
+    float p = ina226_devices[dev_idx]->getPower();
+    ch->voltage = v * ina226_volt_ratios[dev_idx] + ina226_v_offsets[dev_idx];
+    ch->current = i_a * ina226_i_gains[dev_idx];
+    ch->power   = p;
 }
 #endif
 
@@ -210,8 +224,23 @@ void init_sensors() {
 #endif
 
 #if ENABLE_INA226
-    if (!ina226.begin()) {
-        Serial.println("INA226 disabled");
+    for (uint8_t i = 0; i < INA226_COUNT && i < MAX_INA226; i++) {
+        ina226_devices[i] = new INA226(ina226_addresses[i], &Wire);
+        if (!ina226_devices[i]->begin()) {
+            Serial.printf("INA226 %d (0x%02X) init failed\n", i, ina226_addresses[i]);
+            continue;
+        }
+        float shunt = ina226_shunts[i];
+        float saved_shunt = 0.0f;
+        if (settings_load_shunt(3 + i, &saved_shunt) && saved_shunt > 0.0f) {
+            shunt = saved_shunt;
+        }
+        float max_current = 0.08192f / shunt;
+        if (max_current < 0.001f) max_current = 0.001f;
+        int err = ina226_devices[i]->setMaxCurrentShunt(max_current, shunt);
+        if (err != INA226_ERR_NONE) {
+            Serial.printf("INA226 %d setMaxCurrentShunt err=0x%04X\n", i, err);
+        }
     }
 #else
     Serial.println("INA226 disabled");
@@ -237,7 +266,13 @@ void init_sensors() {
 #endif
 
 #if ENABLE_INA226
-    register_pod(POD_INA226, "INA226", 1, pod_ina226_read);
+    for (uint8_t i = 0; i < INA226_COUNT && i < MAX_INA226; i++) {
+        char name[16];
+        snprintf(name, sizeof(name), "INA%d", i);
+        if (register_pod(POD_INA226, name, 1, pod_ina226_read)) {
+            ina226_device_for_pod[g_pod_count - 1] = i;
+        }
+    }
 #endif
 }
 
@@ -404,10 +439,11 @@ float ina3221_getShuntVoltage(uint8_t ch) {
 
 float ina226_getShuntVoltage() {
 #if ENABLE_INA226
-    return ina226.getShuntVoltage();
-#else
-    return 0.0f;
+    for (uint8_t i = 0; i < INA226_COUNT && i < MAX_INA226; i++) {
+        if (ina226_devices[i]) return ina226_devices[i]->getShuntVoltage();
+    }
 #endif
+    return 0.0f;
 }
 
 float ina3221_getVoltModuleBusVoltage(uint8_t ch) {

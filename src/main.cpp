@@ -9,7 +9,8 @@
 #include "data_logger.h"
 #include "coulomb_counter.h"
 #include "energy_counter.h"
-#include "relay_controller.h"
+#include "switch_controller.h"
+#include "ui_manager.h"
 #include "settings_manager.h"
 #include "ble_provisioner.h"
 #include "serial1_manager.h"
@@ -68,6 +69,16 @@ static void networkTask(void* param) {
         loop_connectivity();
         loop_ble_provisioner();
 
+        // Feed UI with network/cloud status
+        static bool last_wifi = false, last_cloud = false;
+        bool wifi_now = (WiFi.status() == WL_CONNECTED);
+        bool cloud_now = wifi_now && is_cloud_connected(); // best-effort cloud indicator
+        if (wifi_now != last_wifi || cloud_now != last_cloud) {
+            last_wifi = wifi_now;
+            last_cloud = cloud_now;
+            ui_set_network_status(wifi_now, cloud_now);
+        }
+
         // Process at most 1 sensor reading per tick to avoid burst POSTs
         static unsigned long last_display_update = 0;
         if (xQueueReceive(g_sensor_queue, &data, 0) == pdTRUE) {
@@ -79,10 +90,9 @@ static void networkTask(void* param) {
             if (millis() - last_display_update >= 5000) {
                 last_display_update = millis();
                 float total_power = 0;
-                for (int ch = 0; ch < 3; ch++) {
-                    total_power += data.ina3221_busV[ch] * data.ina3221_current[ch];
+                for (int ch = 0; ch < 4 && ch < (int)data.total_logical_channels; ch++) {
+                    total_power += get_channel_power(data, ch);
                 }
-                total_power += data.ina226_power;
                 update_display(data, get_local_ip_str(), total_power);
             }
         }
@@ -109,8 +119,21 @@ static void networkTask(void* param) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Core 1 — UI Task
+// Handles: button debounce, LED patterns, display page cycling
+// ─────────────────────────────────────────────────────────────────────────────
+static void uiTask(void* param) {
+    (void)param;
+    Serial.println("[UI] task started on Core 1");
+    for (;;) {
+        loop_ui();
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Core 1 — Sensor Task
-// Handles: I2C reads, logging, coulomb, relay eval
+// Handles: I2C reads, logging, coulomb, switch/relay eval
 // ─────────────────────────────────────────────────────────────────────────────
 static void sensorTask(void* param) {
     (void)param;
@@ -125,7 +148,7 @@ static void sensorTask(void* param) {
         log_sample(data, millis());
         update_coulomb_counter(data, 1.0f);
         update_energy_counter(data, 1.0f);
-        evaluate_relays(data);
+        evaluate_switches(data);
 
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000));
     }
@@ -153,15 +176,15 @@ static void handle_serial_cli() {
             }
 
             // Commands that use the line buffer directly (for startsWith / contains checks)
-            if (strncmp(line, "relay ", 6) == 0) {
+            if (strncmp(line, "switch ", 7) == 0 || strncmp(line, "relay ", 6) == 0) {
                 int idx, st;
-                if (sscanf(line, "relay %d %d", &idx, &st) == 2) {
-                    RelayRule rt;
-                    if (settings_load_relay(idx, &rt)) {
-                        digitalWrite(rt.gpio_pin, st ? HIGH : LOW);
-                        Serial.printf("Relay %d set to %d\n", idx, st);
+                char cmd[8];
+                if (sscanf(line, "%7s %d %d", cmd, &idx, &st) == 3) {
+                    if (idx >= 0 && idx < 8) {
+                        switch_set((uint8_t)idx, st ? true : false);
+                        Serial.printf("Switch %d set to %d\n", idx, st);
                     } else {
-                        Serial.println("Relay not found");
+                        Serial.println("Switch index out of range (0-7)");
                     }
                 }
             } else if (strncmp(line, "reset coulomb ", 14) == 0) {
@@ -176,22 +199,14 @@ static void handle_serial_cli() {
                     reset_energy_counter(ch);
                     Serial.printf("Energy counter ch%d reset\n", ch);
                 }
-            } else if (strncmp(line, "test relay ", 11) == 0) {
+            } else if (strncmp(line, "test switch ", 12) == 0 || strncmp(line, "test relay ", 11) == 0) {
                 int idx;
-                if (sscanf(line, "test relay %d", &idx) == 1 && idx >= 0 && idx <= 3) {
-                    RelayRule rt;
-                    if (settings_load_relay(idx, &rt)) {
-                        Serial.printf("Testing relay %d on GPIO %d...\n", idx, rt.gpio_pin);
-                        Serial.println("Activating 3s...");
-                        digitalWrite(rt.gpio_pin, HIGH);
-                        vTaskDelay(pdMS_TO_TICKS(3000));
-                        digitalWrite(rt.gpio_pin, LOW);
-                        Serial.println("Relay deactivated.");
-                    } else {
-                        Serial.println("Not configured. Use 'relay N 0/1' to manual override.");
-                    }
+                char cmd[8];
+                if ((sscanf(line, "test %7s %d", cmd, &idx) == 2) && idx >= 0 && idx < 8) {
+                    Serial.printf("Testing switch %d for 3s...\n", idx);
+                    switch_pulse((uint8_t)idx, 3000);
                 } else {
-                    Serial.println("Usage: test relay 0-3");
+                    Serial.println("Usage: test switch/relay 0-7");
                 }
             } else if (strcmp(line, "shunt show") == 0) {
                 for (int ch = 0; ch < 3; ch++) {
@@ -438,13 +453,14 @@ static void handle_serial_cli() {
             } else if (strcmp(line, "sensors") == 0) {
                 SensorSnapshot data = read_sensors();
                 print_sensor_data(data);
-            } else if (strcmp(line, "relay status") == 0) {
-                uint8_t count = settings_load_relay_count();
-                for (uint8_t i = 0; i < count; i++) {
-                    RelayRule rt;
-                    if (settings_load_relay(i, &rt)) {
-                        int state = digitalRead(rt.gpio_pin);
-                        Serial.printf("Relay %d: ch=%d pin=%d state=%d\n", i, rt.channel, rt.gpio_pin, state);
+            } else if (strcmp(line, "switch status") == 0 || strcmp(line, "relay status") == 0) {
+                uint8_t count = settings_load_switch_count();
+                for (uint8_t i = 0; i < count && i < 8; i++) {
+                    SwitchChannel ch;
+                    if (settings_load_switch(i, &ch)) {
+                        int state = digitalRead(ch.gpio_pin);
+                        Serial.printf("Switch %d: type=%d pin=%d state=%d name=%s\n",
+                            i, ch.type, ch.gpio_pin, state, ch.name);
                     }
                 }
             } else if (strcmp(line, "flush log") == 0) {
@@ -465,19 +481,18 @@ static void handle_serial_cli() {
                     }
                 }
                 Serial.println("done");
-            } else if (strcmp(line, "test all relays") == 0) {
-                Serial.println("Testing all relays in sequence...");
-                for (int i = 0; i < 4; i++) {
-                    RelayRule rt;
-                    if (settings_load_relay(i, &rt)) {
-                        Serial.printf("Relay %d (GPIO %d)...\n", i, rt.gpio_pin);
-                        digitalWrite(rt.gpio_pin, HIGH);
-                        vTaskDelay(pdMS_TO_TICKS(1000));
-                        digitalWrite(rt.gpio_pin, LOW);
+            } else if (strcmp(line, "test all switches") == 0 || strcmp(line, "test all relays") == 0) {
+                Serial.println("Testing all switches in sequence...");
+                uint8_t count = settings_load_switch_count();
+                for (int i = 0; i < count && i < 8; i++) {
+                    SwitchChannel ch;
+                    if (settings_load_switch(i, &ch)) {
+                        Serial.printf("Switch %d (GPIO %d)...\n", i, ch.gpio_pin);
+                        switch_pulse((uint8_t)i, 1000);
                         vTaskDelay(pdMS_TO_TICKS(500));
                     }
                 }
-                Serial.println("All relays tested.");
+                Serial.println("All switches tested.");
             } else if (strcmp(line, "test all sensors") == 0) {
                 SensorSnapshot d = read_sensors();
                 Serial.println("All sensor channels:");
@@ -494,12 +509,12 @@ static void handle_serial_cli() {
                     vTaskDelay(pdMS_TO_TICKS(1000));
                 }
                 Serial.println("Display test done.");
-            } else if (strcmp(line, "relay auto on") == 0) {
-                relay_set_auto(true);
-                Serial.println("Relay auto-trip ENABLED");
-            } else if (strcmp(line, "relay auto off") == 0) {
-                relay_set_auto(false);
-                Serial.println("Relay auto-trip DISABLED");
+            } else if (strcmp(line, "switch auto on") == 0 || strcmp(line, "relay auto on") == 0) {
+                switch_set_auto(true);
+                Serial.println("Switch auto-trip ENABLED");
+            } else if (strcmp(line, "switch auto off") == 0 || strcmp(line, "relay auto off") == 0) {
+                switch_set_auto(false);
+                Serial.println("Switch auto-trip DISABLED");
             } else if (strcmp(line, "factory_reset") == 0) {
                 Serial.println("Wiping NVS and rebooting...");
                 vTaskDelay(pdMS_TO_TICKS(500));
@@ -564,17 +579,17 @@ static void handle_serial_cli() {
                 Serial.println("  status              — IP, log entries, coulomb/energy/SoC");
                 Serial.println("  mem                 — free heap bytes, CPU temperature");
                 Serial.println("  sensors             — all sensor readings");
-                Serial.println("  relay status        — relay GPIO states");
-                Serial.println("  relay N 0/1         — manual override relay N (0=off, 1=on)");
-                Serial.println("  test relay N        — pulse relay N for 3s (auto-reset)");
-                Serial.println("  test all relays     — pulse each relay 1s in sequence");
+                Serial.println("  switch/relay status  — switch GPIO states");
+                Serial.println("  switch/relay N 0/1   — manual override switch N (0=off, 1=on)");
+                Serial.println("  test switch/relay N  — pulse switch N for 3s (auto-reset)");
+                Serial.println("  test all switches/relays — pulse each switch 1s in sequence");
                 Serial.println("  test sensor N       — read sensor CH N once (0-2)");
                 Serial.println("  test all sensors    — read all sensor channels");
                 Serial.println("  test display        — cycle OLED pages 5x");
                 Serial.println("  display page N     — print display page N (0-4)");
                 Serial.println("  display all         — print all display pages");
-                Serial.println("  relay auto on       — enable auto-trip (off by default)");
-                Serial.println("  relay auto off      — disable auto-trip");
+                Serial.println("  switch/relay auto on  — enable auto-trip (off by default)");
+                Serial.println("  switch/relay auto off — disable auto-trip");
                 Serial.println("  factory_reset       — wipe all NVS settings, reboot");
                 Serial.println("  reset coulomb N     — reset coulomb counter CH N");
                 Serial.println("  reset energy N      — reset energy counter CH N");
@@ -626,7 +641,9 @@ void setup() {
     init_data_logger();
     init_coulomb_counter();
     init_energy_counter();
-    init_relays();
+    init_switches();
+    init_ui();
+    ui_set_heartbeat(true);
     init_core_shared();
 
     Serial.printf("Free heap before BLE: %u bytes\n", ESP.getFreeHeap());
@@ -636,6 +653,7 @@ void setup() {
 
     xTaskCreatePinnedToCore(networkTask, "Network", 12288, NULL, 3, NULL, 0);
     xTaskCreatePinnedToCore(sensorTask,    "Sensor",   4096, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(uiTask,        "UI",       2048, NULL, 2, NULL, 1);
 
     Serial.println("Type 'help' for serial commands");
 }

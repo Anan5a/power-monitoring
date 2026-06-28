@@ -1,5 +1,5 @@
 CXX ?= g++
-CXXFLAGS ?= -std=c++17 -Wall -Wextra -Wno-format -Wno-missing-field-initializers -Ishims -Ihal -Imock -I../include -DHAS_DISPLAY=0
+CXXFLAGS ?= -std=c++17 -Wall -Wextra -Wno-format -Wno-missing-field-initializers -Ishims -Ihal -Imock -I../include -DHAS_DISPLAY=0 -DBOARD_ESP32C3=1
 BUILD_DIR ?= build
 TARGET ?= $(BUILD_DIR)/power_monitor_sim
 

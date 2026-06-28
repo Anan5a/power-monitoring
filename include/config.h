@@ -31,13 +31,18 @@
 #define BLYNK_AUTH_TOKEN    "YOUR_BLYNK_TOKEN"
 
 // Hardware enable/disable
-#define ENABLE_INA3221         1   // current module 0x40
-#define ENABLE_INA3221_VOLT    1   // voltage module 0x42
-#define ENABLE_INA226          0
+#define ENABLE_INA3221         0   // legacy 3-channel current/voltage module (kept for migration only)
+#define ENABLE_INA3221_VOLT    0   // legacy voltage module
+#define ENABLE_INA226          1   // primary DC measurement (multiple modules via I2C)
 #define ENABLE_ADS1115        0
 #ifndef HAS_DISPLAY
 #define HAS_DISPLAY           1   // SSD1306 OLED on I2C
 #endif
+
+// Maximum number of sensor pods supported at compile time
+#define MAX_INA226          8
+#define MAX_BL0939          4
+#define MAX_BL0939_CHANNELS (MAX_BL0939 * 2)
 
 // === Voltage divider ratios (hardware fixed) ===
 // ratio = (R_high + R_low) / R_low

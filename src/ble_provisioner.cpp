@@ -7,7 +7,7 @@
 #include "sensor_manager.h"
 #include "data_logger.h"
 #include "coulomb_counter.h"
-#include "relay_controller.h"
+#include "switch_controller.h"
 #include "connectivity_manager.h"
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -130,25 +130,34 @@ static void handle_command(const char* json) {
         settings_save_http_endpoint(doc["url"], doc["token"]);
         settings_save_http_enabled(doc["enabled"] | true);
         send_response("{\"ok\":true,\"msg\":\"http_saved\"}");
-    } else if (strcmp(cmd, "set_relay") == 0) {
+    } else if (strcmp(cmd, "set_switch") == 0 || strcmp(cmd, "set_relay") == 0) {
         if (!check_pin(doc)) return;
-        RelayRule rt = {};
-        rt.channel = doc["idx"] | 0;
-        rt.overcurrent_A = doc["overcurrent_A"] | 0.0f;
-        rt.undervoltage_V = doc["undervoltage_V"] | 0.0f;
-        rt.soc_low_pct = doc["soc_low_pct"] | 0.0f;
-        rt.soc_high_pct = doc["soc_high_pct"] | 0.0f;
-        rt.trip_delay_ms = doc["trip_delay_ms"] | 1000;
-        rt.reset_delay_ms = doc["reset_delay_ms"] | 5000;
         uint8_t idx = doc["idx"] | 0;
-        uint8_t default_relay_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
-        rt.gpio_pin = default_relay_pins[idx];  // use board default, not hardcoded 25
-        rt.active_high = doc["active_high"] | false;
-        rt.enabled = doc["enabled"] | true;
-        rt.is_energized = get_relay_state(idx);  // preserve current state
-        settings_save_relay(idx, &rt);
-        publish_relay_state(idx, rt.is_energized);  // sync to Supabase
-        send_response("{\"ok\":true,\"msg\":\"relay_saved\"}");
+        uint8_t default_switch_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
+        SwitchChannel ch = {};
+        ch.idx = idx;
+        ch.type = doc["type"] | SW_RELAY;
+        ch.gpio_pin = doc["gpio_pin"] | default_switch_pins[idx];
+        ch.active_high = doc["active_high"] | true;
+        ch.enabled = doc["enabled"] | true;
+        ch.is_energized = get_switch_state(idx);
+        snprintf(ch.name, sizeof(ch.name), "Switch %u", (unsigned)idx);
+        settings_save_switch(idx, &ch);
+
+        SwitchRule rule = {};
+        rule.switch_idx = idx;
+        rule.channel = doc["channel"] | idx;
+        rule.overcurrent_A = doc["overcurrent_A"] | 0.0f;
+        rule.undervoltage_V = doc["undervoltage_V"] | 0.0f;
+        rule.soc_low_pct = doc["soc_low_pct"] | 0.0f;
+        rule.soc_high_pct = doc["soc_high_pct"] | 0.0f;
+        rule.trip_delay_ms = doc["trip_delay_ms"] | 1000;
+        rule.reset_delay_ms = doc["reset_delay_ms"] | 5000;
+        rule.enabled = doc["rule_enabled"] | true;
+        settings_save_switch_rule(idx, &rule);
+
+        publish_switch_state(idx, ch.is_energized);
+        send_response("{\"ok\":true,\"msg\":\"switch_saved\"}");
     } else if (strcmp(cmd, "set_battery") == 0) {
         if (!check_pin(doc)) return;
         BatteryConfig bat = {};
@@ -191,7 +200,7 @@ static void handle_command(const char* json) {
         resp["entries"] = log_entries_count();
         resp["buffer_kb"] = log_buffer_capacity() / 1024;
         resp["overflow"] = log_has_overflow_file();
-        resp["relay_count"] = settings_load_relay_count();
+        resp["switch_count"] = settings_load_switch_count();
         char buf[256];
         serializeJson(resp, buf);
         send_response(buf);
@@ -204,27 +213,30 @@ static void handle_command(const char* json) {
         if (!check_pin(doc)) return;
         sensor_calibrate_baseline();
         send_response("{\"ok\":true,\"msg\":\"baseline_calibration_started\"}");
-    } else if (strcmp(cmd, "get_relay") == 0) {
+    } else if (strcmp(cmd, "get_switch") == 0 || strcmp(cmd, "get_relay") == 0) {
         if (!check_pin(doc)) return;
         uint8_t idx = doc["idx"] | 0;
-        RelayRule rt;
+        SwitchChannel ch;
+        SwitchRule rule;
         JsonDocument resp;
-        if (settings_load_relay(idx, &rt)) {
+        if (settings_load_switch(idx, &ch) && settings_load_switch_rule(idx, &rule)) {
             resp["ok"] = true;
             resp["idx"] = idx;
-            resp["channel"] = rt.channel;
-            resp["overcurrent_A"] = rt.overcurrent_A;
-            resp["undervoltage_V"] = rt.undervoltage_V;
-            resp["soc_low_pct"] = rt.soc_low_pct;
-            resp["soc_high_pct"] = rt.soc_high_pct;
-            resp["trip_delay_ms"] = rt.trip_delay_ms;
-            resp["reset_delay_ms"] = rt.reset_delay_ms;
-            resp["gpio_pin"] = rt.gpio_pin;
-            resp["active_high"] = rt.active_high;
-            resp["enabled"] = rt.enabled;
+            resp["type"] = ch.type;
+            resp["gpio_pin"] = ch.gpio_pin;
+            resp["active_high"] = ch.active_high;
+            resp["enabled"] = ch.enabled;
+            resp["is_energized"] = ch.is_energized;
+            resp["channel"] = rule.channel;
+            resp["overcurrent_A"] = rule.overcurrent_A;
+            resp["undervoltage_V"] = rule.undervoltage_V;
+            resp["soc_low_pct"] = rule.soc_low_pct;
+            resp["soc_high_pct"] = rule.soc_high_pct;
+            resp["trip_delay_ms"] = rule.trip_delay_ms;
+            resp["reset_delay_ms"] = rule.reset_delay_ms;
         } else {
             resp["ok"] = false;
-            resp["error"] = "relay_not_found";
+            resp["error"] = "switch_not_found";
         }
         char buf[384];
         serializeJson(resp, buf);
@@ -571,22 +583,30 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         uint8_t ch = doc["channel"] | 0;
         settings_save_resistors(ch, doc["r_high"] | 0.0f, doc["r_low"] | 0.0f);
         Serial.println("[CMD] resistors saved");
-    } else if (strcmp(cmd_type, "set_relay") == 0) {
-        RelayRule rt = {};
-        rt.channel = doc["channel"] | 0;  // which VC (0-3) this relay controls
-        rt.overcurrent_A = doc["overcurrent_A"] | 0.0f;
-        rt.undervoltage_V = doc["undervoltage_V"] | 0.0f;
-        rt.soc_low_pct = doc["soc_low_pct"] | 0.0f;
-        rt.soc_high_pct = doc["soc_high_pct"] | 100.0f;
-        rt.trip_delay_ms = doc["trip_delay_ms"] | 1000;
-        rt.reset_delay_ms = doc["reset_delay_ms"] | 5000;
-        uint8_t default_relay_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
+    } else if (strcmp(cmd_type, "set_switch") == 0 || strcmp(cmd_type, "set_relay") == 0) {
         uint8_t idx = doc["idx"] | 0;
-        rt.gpio_pin = default_relay_pins[idx];  // always use board-specific default — don't accept gpio_pin from Supabase
-        rt.active_high = doc["active_high"] | true;
-        rt.enabled = doc["enabled"] | true;
-        settings_save_relay(doc["idx"] | 0, &rt);
-        Serial.println("[CMD] relay saved");
+        uint8_t default_switch_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
+        SwitchChannel ch = {};
+        ch.idx = idx;
+        ch.type = doc["type"] | SW_RELAY;
+        ch.gpio_pin = default_switch_pins[idx];
+        ch.active_high = doc["active_high"] | true;
+        ch.enabled = doc["enabled"] | true;
+        snprintf(ch.name, sizeof(ch.name), "Switch %u", (unsigned)idx);
+        settings_save_switch(idx, &ch);
+
+        SwitchRule rule = {};
+        rule.switch_idx = idx;
+        rule.channel = doc["channel"] | 0;
+        rule.overcurrent_A = doc["overcurrent_A"] | 0.0f;
+        rule.undervoltage_V = doc["undervoltage_V"] | 0.0f;
+        rule.soc_low_pct = doc["soc_low_pct"] | 0.0f;
+        rule.soc_high_pct = doc["soc_high_pct"] | 100.0f;
+        rule.trip_delay_ms = doc["trip_delay_ms"] | 1000;
+        rule.reset_delay_ms = doc["reset_delay_ms"] | 5000;
+        rule.enabled = doc["enabled"] | true;
+        settings_save_switch_rule(idx, &rule);
+        Serial.println("[CMD] switch saved");
     } else if (strcmp(cmd_type, "set_battery") == 0) {
         BatteryConfig bat = {};
         bat.channel = doc["channel"] | 0;

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "switch_controller.h"
 
 enum BatteryChemistry { BAT_LEAD_ACID = 0, BAT_LIPO, BAT_LIION, BAT_NIMH, BAT_LIFEPO4, BAT_AGM, BAT_FLA };
 
@@ -86,6 +87,12 @@ void settings_save_supabase_api_key(const char* key);
 uint8_t settings_load_relay_count();
 bool settings_load_relay(uint8_t idx, RelayRule* out);
 void settings_save_relay(uint8_t idx, const RelayRule* in);
+
+uint8_t settings_load_switch_count();
+bool settings_load_switch(uint8_t idx, SwitchChannel* out);
+void settings_save_switch(uint8_t idx, const SwitchChannel* in);
+bool settings_load_switch_rule(uint8_t idx, SwitchRule* out);
+void settings_save_switch_rule(uint8_t idx, const SwitchRule* in);
 
 bool settings_load_calibration(Calibration* out);
 void settings_save_calibration(const Calibration* in);

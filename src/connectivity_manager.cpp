@@ -8,7 +8,7 @@
 #include "coulomb_counter.h"
 #include "energy_counter.h"
 #include "sensor_manager.h"
-#include "relay_controller.h"
+#include "switch_controller.h"
 #include <WiFi.h>
 #include <esp_system.h>
 #include <WiFiClientSecure.h>
@@ -482,7 +482,7 @@ void loop_connectivity() {
     }
     if (g_deferred_requests & 4) {
         g_deferred_requests &= ~4u;
-        publish_relay_state(g_deferred_relay_idx, g_deferred_relay_state);
+        publish_switch_state(g_deferred_relay_idx, g_deferred_relay_state);
         return;
     }
     if (g_deferred_requests & 8) {
@@ -508,6 +508,12 @@ static void base64_encode(const uint8_t* in, size_t in_len, char* out) {
     size_t pad = (3 - (in_len % 3)) % 3;
     for (size_t k = 0; k < pad; k++) out[j - 1 - k] = '=';
     out[j] = '\0';
+}
+
+bool is_cloud_connected() {
+    char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
+    if (!settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) return false;
+    return mqtt.connected();
 }
 
 void publish_log_batch() {
@@ -606,7 +612,7 @@ static void send_log_entry(uint32_t timestamp_ms, const int16_t* v, const int16_
     for (uint8_t ch = 0; ch < 4; ch++) {
         char key[16];
         snprintf(key, sizeof(key), "relay%d", ch);
-        payload[key] = get_relay_state(ch);
+        payload[key] = get_switch_state(ch);
     }
 
     elem["p_recorded_at"] = (uint32_t)log_to_epoch(timestamp_ms);
@@ -809,7 +815,7 @@ void publish_data(const SensorSnapshot& data) {
     for (uint8_t i = 0; i < 4; i++) {
         char key[16];
         snprintf(key, sizeof(key), "relay%d", i);
-        g_pub_doc[key] = get_relay_state(i);
+        g_pub_doc[key] = get_switch_state(i);
     }
 
     // Virtual channels: compute V, I, P per channel from configured sources
@@ -955,7 +961,7 @@ void publish_data_supabase(const SensorSnapshot& data) {
         for (uint8_t i = 0; i < 4; i++) {
             char key[16];
             snprintf(key, sizeof(key), "relay%d", i);
-            payload[key] = get_relay_state(i);
+            payload[key] = get_switch_state(i);
         }
 
         for (uint8_t ch = 0; ch < 4; ch++) {
@@ -1225,38 +1231,41 @@ void sync_ble_pin_to_supabase() {
     }
 }
 
-void publish_relay_state(uint8_t idx, bool is_energized) {
-    if (skip_network) { Serial.println("[RELAY] skip: offline mode"); return; }
-    if (ESP.getFreeHeap() < 3072) { Serial.printf("[RELAY] skip: heap %d < 3072\n", ESP.getFreeHeap()); return; }
+void publish_switch_state(uint8_t idx, bool is_energized) {
+    if (skip_network) { Serial.println("[SWITCH] skip: offline mode"); return; }
+    if (ESP.getFreeHeap() < 3072) { Serial.printf("[SWITCH] skip: heap %d < 3072\n", ESP.getFreeHeap()); return; }
     telemetry_http_reset();
     vTaskDelay(pdMS_TO_TICKS(50));
     char supabase_url[128], anon_key[128], device_key[64];
-    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) { Serial.println("[RELAY] skip: no supabase url"); return; }
-    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) { Serial.println("[RELAY] skip: no anon key"); return; }
-    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) { Serial.println("[RELAY] skip: no device key"); return; }
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) { Serial.println("[SWITCH] skip: no supabase url"); return; }
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) { Serial.println("[SWITCH] skip: no anon key"); return; }
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) { Serial.println("[SWITCH] skip: no device key"); return; }
 
-    RelayRule rt;
-    if (!settings_load_relay(idx, &rt)) { Serial.printf("[RELAY] skip: no relay config idx=%d\n", idx); return; }
+    SwitchChannel ch;
+    SwitchRule rule;
+    if (!settings_load_switch(idx, &ch)) { Serial.printf("[SWITCH] skip: no switch config idx=%d\n", idx); return; }
+    settings_load_switch_rule(idx, &rule);
 
     // Use security definer RPC to bypass RLS
     JsonDocument rpc_doc;
     rpc_doc["p_device_key"] = device_key;
-    rpc_doc["p_relay_index"] = idx;
-    rpc_doc["p_gpio_pin"] = rt.gpio_pin;
+    rpc_doc["p_switch_index"] = idx;
+    rpc_doc["p_gpio_pin"] = ch.gpio_pin;
     rpc_doc["p_is_energized"] = is_energized;
-    rpc_doc["p_active_high"] = rt.active_high;
+    rpc_doc["p_active_high"] = ch.active_high;
+    rpc_doc["p_switch_type"] = ch.type;
     rpc_doc["p_last_tripped_at"] = "now";
-    rpc_doc["p_channel"] = rt.channel;
+    rpc_doc["p_channel"] = rule.channel;
 
     static char buffer[256];
     size_t len = serializeJson(rpc_doc, buffer);
     char path[256];
-    snprintf(path, sizeof(path), "/rest/v1/rpc/sync_relay_state");
+    snprintf(path, sizeof(path), "/rest/v1/rpc/sync_switch_state");
     int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
-        Serial.printf("[RELAY] synced: idx=%d energized=%d\n", idx, is_energized);
+        Serial.printf("[SWITCH] synced: idx=%d energized=%d\n", idx, is_energized);
     } else {
-        Serial.printf("[RELAY] sync FAILED: HTTP %d\n", rc);
+        Serial.printf("[SWITCH] sync FAILED: HTTP %d\n", rc);
     }
 }
 
@@ -1485,12 +1494,12 @@ void check_settings_commands() {
                     idx, !obj["is_energized"].isNull(), obj["is_energized"].as<int>());
                 if (!obj["is_energized"].isNull()) {
                     energize = obj["is_energized"].as<bool>();
-                    relay_set(idx, energize);  // toggles GPIO + publishes to Supabase
-                    g_deferred_requests &= ~4; // skip deferred sync (relay_set already published)
+                    switch_set(idx, energize);  // toggles GPIO + publishes to Supabase
+                    g_deferred_requests &= ~4; // skip deferred sync (switch_set already published)
                 } else {
                     g_deferred_relay_idx = idx;
-                    g_deferred_relay_state = get_relay_state(idx);
-                    g_deferred_requests |= 4;  // sync relay state via deferred path
+                    g_deferred_relay_state = get_switch_state(idx);
+                    g_deferred_requests |= 4;  // sync switch state via deferred path
                 }
             }
         }

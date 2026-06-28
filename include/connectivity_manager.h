@@ -18,8 +18,9 @@ void publish_log_batch();
 void publish_log_batch_supabase();
 void sync_calibration_to_supabase();
 void sync_ble_pin_to_supabase();
-void publish_relay_state(uint8_t idx, bool is_energized);
+void publish_switch_state(uint8_t idx, bool is_energized);
 bool get_ble_pin_from_supabase(char* pin_str, size_t len);
+bool is_cloud_connected();
 
 // Virtual channel helpers: get sensor values by source type
 // src: 0=none, 1=ina3221_volt(0x42), 2=ina3221_curr(0x40), 3=ina226, 4=ads1115
@@ -33,6 +34,6 @@ void publish_calibration_status();  // writes sensor_calibration_status table du
 void apply_settings_posthook(const char* cmd_type);  // reconnect WiFi/MQTT, reset Supabase client after settings change
 
 // Relay state publishing
-void publish_relay_state(uint8_t idx, bool is_energized);
+void publish_switch_state(uint8_t idx, bool is_energized);
 
 #endif
