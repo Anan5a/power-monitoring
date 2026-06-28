@@ -7,6 +7,32 @@
 
 static const uint8_t default_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
 
+static bool is_safe_relay_pin(int pin) {
+    if (pin < 0 || pin >= GPIO_NUM_MAX) return false;
+    if (!GPIO_IS_VALID_OUTPUT_GPIO((gpio_num_t)pin)) return false;
+    // Reject common strapping, UART, and SPI/flash pins across ESP32 variants.
+    switch (pin) {
+        case 0:   // strapping / BOOT
+        case 1:   // UART0 TX
+        case 3:   // UART0 RX
+        case 6:   // SPI flash CLK (classic ESP32)
+        case 7:   // SPI flash SD0
+        case 8:   // SPI flash SD1
+        case 9:   // SPI flash SD2
+        case 10:  // SPI flash SD3
+        case 11:  // SPI flash CMD
+        case 12:  // strapping / flash
+        case 15:  // strapping / flash
+        case 16:  // flash (ESP32-C3)
+        case 17:  // flash (ESP32-C3)
+        case 20:  // flash CS / UART0 TX (ESP32-C3)
+        case 21:  // flash CLK / UART0 RX (ESP32-C3)
+            return false;
+        default:
+            return true;
+    }
+}
+
 struct RelayState {
     bool energized;
     bool was_energized;  // track prior state for change detection
@@ -25,6 +51,12 @@ void init_relays() {
         for (uint8_t ch = 0; ch < 4; ch++) {
             RelayRule rt = { ch, 5.0f, 0.0f, 0.0f, 0.0f, 1000, 5000, default_pins[ch], true, true };
             settings_save_relay(ch, &rt);
+            if (!is_safe_relay_pin(default_pins[ch])) {
+                Serial.printf("[RELAY] ERROR: default pin %d for relay %d is invalid/unsafe — skipping\n",
+                    default_pins[ch], ch);
+                relay_states[ch] = { false, false, 0, false };
+                continue;
+            }
             pinMode(default_pins[ch], OUTPUT);
             digitalWrite(default_pins[ch], LOW); // active_high → LOW = relay OFF at boot
             relay_states[ch] = { false, false, 0, false };
@@ -39,6 +71,12 @@ void init_relays() {
                         i, default_pins[i], rt.gpio_pin);
                     rt.gpio_pin = default_pins[i];
                     settings_save_relay(i, &rt);
+                }
+                if (!is_safe_relay_pin(rt.gpio_pin)) {
+                    Serial.printf("[RELAY] ERROR: loaded pin %d for relay %d is invalid/unsafe — skipping\n",
+                        rt.gpio_pin, i);
+                    relay_states[i] = { false, false, 0, false };
+                    continue;
                 }
                 pinMode(rt.gpio_pin, OUTPUT);
                 digitalWrite(rt.gpio_pin, LOW); // active_high=true: LOW=OFF, HIGH=ON
@@ -97,7 +135,11 @@ void evaluate_relays(const SensorData& data) {
             } else if (!st.energized && (now - st.condition_start_ms >= rt.trip_delay_ms)) {
                 st.energized = true;
                 if (!st.was_energized) { st.was_energized = true; publish_relay_state(i, true); }
-                digitalWrite(rt.gpio_pin, rt.active_high ? HIGH : LOW);
+                if (is_safe_relay_pin(rt.gpio_pin)) {
+                    digitalWrite(rt.gpio_pin, rt.active_high ? HIGH : LOW);
+                } else {
+                    Serial.printf("[RELAY] ERROR: trip skipped, invalid pin %d (relay %d)\n", rt.gpio_pin, i);
+                }
                 Serial.printf("Relay %d TRIPPED (ch=%d, pin=%d)\n", i, ch, rt.gpio_pin);
             }
         } else {
@@ -107,7 +149,11 @@ void evaluate_relays(const SensorData& data) {
             } else if (st.energized && (now - st.condition_start_ms >= rt.reset_delay_ms)) {
                 st.energized = false;
                 if (st.was_energized) { st.was_energized = false; publish_relay_state(i, false); }
-                digitalWrite(rt.gpio_pin, rt.active_high ? LOW : HIGH);
+                if (is_safe_relay_pin(rt.gpio_pin)) {
+                    digitalWrite(rt.gpio_pin, rt.active_high ? LOW : HIGH);
+                } else {
+                    Serial.printf("[RELAY] ERROR: reset skipped, invalid pin %d (relay %d)\n", rt.gpio_pin, i);
+                }
                 Serial.printf("Relay %d RESET (ch=%d, pin=%d)\n", i, ch, rt.gpio_pin);
             }
         }
@@ -121,6 +167,10 @@ void relay_set_auto(bool enabled) {
 void relay_set(uint8_t idx, bool is_energized) {
     RelayRule rt;
     if (!settings_load_relay(idx, &rt)) return;
+    if (!is_safe_relay_pin(rt.gpio_pin)) {
+        Serial.printf("[RELAY] ERROR: manual set skipped, invalid pin %d (relay %d)\n", rt.gpio_pin, idx);
+        return;
+    }
     digitalWrite(rt.gpio_pin, rt.active_high ? (is_energized ? HIGH : LOW) : (is_energized ? LOW : HIGH));
     relay_states[idx].energized = is_energized;
     relay_states[idx].was_energized = is_energized;
@@ -132,6 +182,7 @@ void relay_set(uint8_t idx, bool is_energized) {
 bool get_relay_state(uint8_t idx) {
     RelayRule rt;
     if (!settings_load_relay(idx, &rt) || !rt.enabled) return false;
+    if (!is_safe_relay_pin(rt.gpio_pin)) return false;
     bool pin_high = digitalRead(rt.gpio_pin) == HIGH;
     return rt.active_high ? pin_high : !pin_high;
 }

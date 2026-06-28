@@ -65,7 +65,6 @@ static bool     g_deferred_relay_state = false;
 #define BATCH_DRAIN_MAX 5         // cap burst at 5 entries
 static SensorData g_batch[BATCH_SIZE];
 static uint8_t    g_batch_count = 0;
-static unsigned long g_batch_last_ms = 0;
 
 // sync_device_channels_to_supabase is static and not in header — forward declare
 static void sync_device_channels_to_supabase();
@@ -886,7 +885,6 @@ void publish_data_supabase(const SensorData& data) {
 
     // Accumulate reading into batch
     g_batch[g_batch_count++] = data;
-    g_batch_last_ms = millis();
 
     // Always attempt to send — drain burst when backlogged, single entry normally
     if (g_batch_count < 1) return;
@@ -902,13 +900,9 @@ void publish_data_supabase(const SensorData& data) {
         return;
     }
 
-    uint32_t ms = g_batch_last_ms;
-    // Prefer time() (set by SNTP to true UTC epoch) over epoch_time so a stale
-    // epoch doesn't leak into the payload when re-sync is pending.
-    time_t t_now = time(nullptr);
-    time_t epoch_s = (t_now > 1700000000) ? t_now
-                     : (epoch_time > 0) ? epoch_time
-                     : t_now;
+    // Use the synced epoch_time directly; fall back to current system time if
+    // not yet synced. Do NOT add uptime milliseconds (ms/1000) to the epoch.
+    time_t epoch_s = (epoch_time > 0) ? epoch_time : time(nullptr);
 
     uint8_t to_send = (g_batch_count >= BATCH_DRAIN_THRESHOLD)
         ? min<uint8_t>(g_batch_count, BATCH_DRAIN_MAX)

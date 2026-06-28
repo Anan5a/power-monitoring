@@ -1,6 +1,20 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+// Board-specific pin/address abstraction.
+// Each PlatformIO environment must pass exactly one of:
+//   -DBOARD_ESP32DEV, -DBOARD_ESP32C3, or -DBOARD_ESP32S3
+#if defined(BOARD_ESP32DEV)
+    #include "boards/esp32dev.h"
+#elif defined(BOARD_ESP32C3)
+    #include "boards/esp32c3.h"
+#elif defined(BOARD_ESP32S3)
+    #include "boards/esp32s3.h"
+#else
+    #warning "No BOARD_* build flag defined; falling back to esp32c3 board pinout. Add -DBOARD_ESP32DEV/C3/S3 to your PlatformIO build_flags."
+    #include "boards/esp32c3.h"
+#endif
+
 // WiFi credentials
 #define WIFI_SSID     "YOUR_SSID"
 #define WIFI_PASSWORD "YOUR_PASSWORD"
@@ -15,11 +29,6 @@
 #define BLYNK_TEMPLATE_ID   "TMPLxxxxxx"
 #define BLYNK_TEMPLATE_NAME "PowerMonitor"
 #define BLYNK_AUTH_TOKEN    "YOUR_BLYNK_TOKEN"
-
-// I2C bus pins (ESP32-C3)
-#define I2C_SDA         5
-#define I2C_SCL         6
-#define I2C_FREQ        100000
 
 // Hardware enable/disable
 #define ENABLE_INA3221         1   // current module 0x40
@@ -64,6 +73,12 @@
 // Baseline noise calibration / spike detection (disable if noisy hardware causes false spikes)
 #define ENABLE_BASELINE_CALIBRATION 0
 
+// Serial / BL0939 energy-meter interface (pins defined in the selected board header)
+#define ENABLE_SERIAL1       0   // set to 1 to enable legacy Serial1 reader
+#define SERIAL1_BAUD         9600
+
+#define ENABLE_BL0939        0   // set to 1 when a BL0939 UART meter is wired to BL0939_*_PIN
+
 // BLE settings
 #define BT_DEVICE_NAME          "PowerMonitor"
 #define BLE_SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -76,18 +91,6 @@
 #define LOG_MAX_DELTA_MA      32760
 #define LOG_MAX_DELTA_POWER   32760
 
-// Relay GPIO defaults (ESP32-C3)
-#define RELAY_1_GPIO    7
-#define RELAY_2_GPIO    10
-#define RELAY_3_GPIO    20
-#define RELAY_4_GPIO    21
-
-// Serial1 interface (external device: inverter, generator, etc.)
-// TX not needed — RX only on D23
-#define ENABLE_SERIAL1       0   // set to 1 to enable Serial1 reader
-#define SERIAL1_RX_PIN       23
-#define SERIAL1_BAUD         9600
-#define SERIAL1_BUFFER       256  // ring buffer size in bytes
 
 // BLE command interface UUIDs
 #define BLE_CHAR_CMD_UUID       "c01afdfc-3cbe-4c26-a1e8-8c71a5f6f2a4"

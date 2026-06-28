@@ -17,7 +17,7 @@
 
 static void print_sensor_data(const SensorData& data) {
     for (int i = 0; i < 3; i++) {
-        Serial.printf("CH%d: %.2fV %.3fA (cal)\n", i, data.ads1115_volts[i], data.ina3221_current[i]);
+        Serial.printf("CH%d: %.2fV %.3fA (cal)\n", i, data.ina3221_busV[i], data.ina3221_current[i]);
     }
     Serial.printf("Raw INA3221 volt module (0x42): ");
     for (int i = 0; i < 3; i++) {
@@ -50,7 +50,7 @@ static void print_status() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Core 0 — Network Task
-// Handles: MQTT loop, HTTP publish, Supabase telemetry + settings poll
+// Handles: MQTT loop, HTTP publish, Supabase telemetry + settings poll + OLED display
 // ─────────────────────────────────────────────────────────────────────────────
 static void networkTask(void* param) {
     (void)param;
@@ -68,9 +68,22 @@ static void networkTask(void* param) {
         loop_ble_provisioner();
 
         // Process at most 1 sensor reading per tick to avoid burst POSTs
+        static unsigned long last_display_update = 0;
         if (xQueueReceive(g_sensor_queue, &data, 0) == pdTRUE) {
             publish_data(data);
             publish_data_supabase(data);
+
+            // Update OLED from network task so I2C display traffic doesn't delay
+            // the 1-second sensor sampling loop.
+            if (millis() - last_display_update >= 5000) {
+                last_display_update = millis();
+                float total_power = 0;
+                for (int ch = 0; ch < 3; ch++) {
+                    total_power += data.ina3221_busV[ch] * data.ina3221_current[ch];
+                }
+                total_power += data.ina226_power;
+                update_display(data, get_local_ip_str(), total_power);
+            }
         }
 
         // Flush log batch to Supabase (RAM + LittleFS overflow)
@@ -96,7 +109,7 @@ static void networkTask(void* param) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Core 1 — Sensor Task
-// Handles: I2C reads, logging, coulomb, relay eval, OLED display
+// Handles: I2C reads, logging, coulomb, relay eval
 // ─────────────────────────────────────────────────────────────────────────────
 static void sensorTask(void* param) {
     (void)param;
@@ -104,7 +117,6 @@ static void sensorTask(void* param) {
 
     SensorData data;
     TickType_t last_wake = xTaskGetTickCount();
-    unsigned long last_display_update = 0;
 
     for (;;) {
         data = read_sensors();
@@ -113,17 +125,6 @@ static void sensorTask(void* param) {
         update_coulomb_counter(data, 1.0f);
         update_energy_counter(data, 1.0f);
         evaluate_relays(data);
-
-        // OLED display update every 5s
-        if (millis() - last_display_update >= 5000) {
-            last_display_update = millis();
-            float total_power = 0;
-            for (int ch = 0; ch < 3; ch++) {
-                total_power += data.ads1115_volts[ch] * data.ina3221_current[ch];
-            }
-            total_power += data.ina226_power;
-            update_display(data, get_local_ip_str(), total_power);
-        }
 
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000));
     }
@@ -352,7 +353,7 @@ static void handle_serial_cli() {
             } else if (strncmp(line, "display ", 8) == 0) {
                 SensorData d = read_sensors();
                 float total_power = 0;
-                for (int ch = 0; ch < 3; ch++) total_power += d.ads1115_volts[ch] * d.ina3221_current[ch];
+                for (int ch = 0; ch < 3; ch++) total_power += d.ina3221_busV[ch] * d.ina3221_current[ch];
                 total_power += d.ina226_power;
                 if (strcmp(line, "display all") == 0) {
                     for (int p = 0; p < 5; p++) {
@@ -633,8 +634,8 @@ void setup() {
     Serial.printf("Largest alloc: %u bytes\n", ESP.getMaxAllocHeap());
     init_ble_provisioner();  // BLE stack needs ~60-80KB contiguous heap
 
-    xTaskCreatePinnedToCore(networkTask, "Network", 12288, NULL, 3, NULL, tskNO_AFFINITY);
-    xTaskCreatePinnedToCore(sensorTask,    "Sensor",   4096, NULL, 4, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(networkTask, "Network", 12288, NULL, 3, NULL, 0);
+    xTaskCreatePinnedToCore(sensorTask,    "Sensor",   4096, NULL, 4, NULL, 1);
 
     Serial.println("Type 'help' for serial commands");
 }
