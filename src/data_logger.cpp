@@ -1,5 +1,6 @@
 #include "data_logger.h"
 #include "config.h"
+#include "log_serial.h"
 #include <string.h>
 #include <Arduino.h>
 #include <WiFi.h>
@@ -15,11 +16,27 @@ static int16_t last_v[4] = {}, last_i[4] = {}, last_p[4] = {};
 static uint32_t last_ts = 0;
 static bool have_base = false;
 static time_t epoch_offset = 0;
+// True once log_set_epoch() has been called with a trusted post-2023 value
+// (i.e. NTP has synced). Until then log_to_epoch() returns uptime-derived
+// seconds and downstream consumers should treat timestamps as untrusted.
+static bool g_log_epoch_valid = false;
+// One-shot warning guard so we don't spam the serial console.
+static bool g_log_untrusted_warned = false;
 
 void log_set_epoch(time_t epoch) {
     epoch_offset = epoch - millis() / 1000;
-    Serial.printf("Log: epoch offset set, time %s", ctime(&epoch));
+    if (epoch > 1700000000) {
+        g_log_epoch_valid = true;
+        LOG_PRINT("Log: epoch offset set, time %s", ctime(&epoch));
+    } else {
+        // Caller passed an untrusted value (boot pre-NTP). Leave the flag
+        // false and let the next valid sync set it.
+        LOG_PRINT("Log: epoch offset set to UNTRUSTED value %lld — log timestamps will drift\n", (long long)epoch);
+    }
 }
+
+bool log_epoch_valid() { return g_log_epoch_valid; }
+void log_epoch_valid_set(bool valid) { g_log_epoch_valid = valid; }
 
 time_t log_to_epoch(uint32_t timestamp_ms) {
     return epoch_offset + timestamp_ms / 1000;
@@ -69,7 +86,7 @@ static void flush_to_littlefs() {
     }
     File f = LittleFS.open(LOG_OVERFLOW_FILE, FILE_APPEND);
     if (!f) {
-        Serial.println("[LittleFS] open failed for log append");
+        LOG_PRINTLN("[LittleFS] open failed for log append");
         return;
     }
     size_t written = 0;
@@ -87,7 +104,7 @@ static void flush_to_littlefs() {
     if (written > 0) {
         tail = head;
         entry_count = 0;
-        Serial.printf("[LittleFS] flushed %u bytes\n", written);
+        LOG_PRINT("[LittleFS] flushed %u bytes\n", written);
     }
 }
 
@@ -99,17 +116,29 @@ void init_data_logger() {
     entry_count = 0;
     have_base = false;
     if (!LittleFS.begin(true)) {
-        Serial.println("LittleFS init failed");
+        LOG_PRINTLN("LittleFS init failed");
     } else {
         size_t total = LittleFS.totalBytes();
         size_t used = LittleFS.usedBytes();
-        Serial.printf("LittleFS ready: %u/%u bytes used (%.1f%% free)\n",
+        LOG_PRINT("LittleFS ready: %u/%u bytes used (%.1f%% free)\n",
                       used, total, (total - used) * 100.0f / total);
     }
+    // One-shot warning if NTP hasn't synced before log_sample() starts writing.
+    // The check is deferred to the first log_sample() call so that any boot-time
+    // log_set_epoch() (from setup() with get_epoch_time()) gets a chance to flip
+    // g_log_epoch_valid first. See log_sample() below.
 }
 
 void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms) {
     (void)data;
+    // One-shot warning: if NTP has not synced, log timestamps are uptime-based
+    // and will drift from real time. Mark this once per boot so the operator
+    // can decide to fix the network or NTP config. The timestamp math itself
+    // is intentionally unchanged — we just flag the result.
+    if (!g_log_epoch_valid && !g_log_untrusted_warned) {
+        LOG_PRINTLN("[WARN] log timestamps are based on uptime (NTP not yet synced) — will drift from real time");
+        g_log_untrusted_warned = true;
+    }
     int16_t v[4] = {
         (int16_t)(get_channel_voltage(0) * 1000),
         (int16_t)(get_channel_voltage(1) * 1000),
@@ -185,14 +214,14 @@ void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms) {
         size_t fs_total = LittleFS.totalBytes();
         size_t fs_used  = LittleFS.usedBytes();
         if (fs_used >= fs_total || (fs_total - fs_used) < 4096) {
-            Serial.println("[LOG] flash full, dropping oldest entries");
+            LOG_PRINTLN("[LOG] flash full, dropping oldest entries");
             tail = head;
             entry_count = 0;
         } else if (network_down) {
             flush_to_littlefs();
         } else {
             // Network up — just drop oldest entries, they get published from RAM
-            Serial.println("[LOG] buffer full but network up, dropping oldest");
+            LOG_PRINTLN("[LOG] buffer full but network up, dropping oldest");
             tail = head;
             entry_count = 0;
         }

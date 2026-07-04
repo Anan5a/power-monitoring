@@ -5,6 +5,10 @@
 // Flash/SPI0 are internal pins 6-11 and are not broken out on most dev boards,
 // so the pins below are safe for GPIO/I2C on a standard ESP32-DevKitC/V1.
 
+// Highest legal GPIO number on this board. switch_controller.cpp uses this
+// to reject out-of-range pins in NVS before pinMode() is called.
+#define BOARD_GPIO_MAX 39
+
 // I2C bus pins
 #define I2C_SDA         21
 #define I2C_SCL         22

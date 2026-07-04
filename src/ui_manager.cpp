@@ -1,5 +1,6 @@
 #include "ui_manager.h"
 #include "config.h"
+#include "log_serial.h"
 #include "switch_controller.h"
 #include "sensor_manager.h"
 #include "settings_manager.h"
@@ -41,12 +42,17 @@ static bool system_healthy = false;
 static const int ui_button_pins[UI_BUTTON_COUNT] = UI_BUTTON_PINS;
 
 void init_ui() {
+    // One-shot warning flag so we don't spam the serial console if many
+    // buttons or LEDs are intentionally unmapped (-1 placeholders).
+    static bool warned_unmapped = false;
     for (uint8_t i = 0; i < UI_BUTTON_COUNT; i++) {
         buttons[i].pin = (ui_button_pins[i] >= 0) ? (uint8_t)ui_button_pins[i] : 255;
         if (buttons[i].pin != 255) {
             pinMode(buttons[i].pin, INPUT_PULLUP);
             buttons[i].last_raw = digitalRead(buttons[i].pin) == LOW; // active low
             buttons[i].stable = buttons[i].last_raw;
+        } else if (!warned_unmapped) {
+            LOG_PRINT("[UI] button %u unmapped (pin -1) — skipping silently\n", (unsigned)i);
         }
     }
 
@@ -58,8 +64,12 @@ void init_ui() {
         if (leds[i].pin != 255) {
             pinMode(leds[i].pin, OUTPUT);
             digitalWrite(leds[i].pin, LOW);
+        } else if (!warned_unmapped) {
+            const char* role = (i == 0) ? "NETWORK" : (i == 1) ? "ERROR" : "OK";
+            LOG_PRINT("[UI] LED %s unmapped (pin -1) — skipping silently\n", role);
         }
     }
+    warned_unmapped = true;
 }
 
 static bool is_pressed(const ButtonState& b) {
@@ -131,11 +141,11 @@ static void handle_button_event(uint8_t idx, bool short_press, bool long_press, 
     if (long_press) {
         switch (idx) {
             case 2:
-                Serial.println("[UI] sensor re-discovery via button");
+                LOG_PRINTLN("[UI] sensor re-discovery via button");
                 discover_sensors();
                 break;
             case 3:
-                Serial.println("[UI] factory reset requested via button");
+                LOG_PRINTLN("[UI] factory reset requested via button");
                 settings_factory_reset();
                 ESP.restart();
                 break;

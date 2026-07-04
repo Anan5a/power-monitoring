@@ -18,6 +18,10 @@ struct BaseEntry {
 
 struct DeltaEntry {
     uint8_t  type;
+    // dt_ms is uint16_t: max representable gap is 65535 ms (~65.5 s).
+    // log_sample() clamps the gap to 60 s and forces a BaseEntry when the
+    // wall-clock delta exceeds that, so on-wire dt_ms is always <= 60000.
+    // Reconstruction code in connectivity_manager.cpp relies on this clamp.
     uint16_t dt_ms;
     int16_t  dv[4];
     int16_t  di[4];
@@ -35,6 +39,18 @@ void init_data_logger();
 void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms);
 void log_set_epoch(time_t epoch);
 time_t log_to_epoch(uint32_t timestamp_ms);
+
+// True once a trusted (NTP-derived) wall-clock epoch has been set; false
+// means log timestamps are computed from uptime and will drift from real
+// time. Consumers should mark timestamps "untrusted" if this is false.
+//
+// log_epoch_valid_set() lets external modules (e.g. connectivity_manager's
+// sync_time()) flag the validity explicitly, since the validity is owned
+// by whoever last touched the clock. The init code should call
+//   log_epoch_valid_set(time(nullptr) > 1700000000)
+// right after the first NTP attempt, and on every later sync.
+void log_epoch_valid_set(bool valid);
+bool log_epoch_valid();
 
 size_t log_pop_batch(uint8_t* out_buf, size_t out_len);
 bool log_peek_latest(LogSnapshot* out);

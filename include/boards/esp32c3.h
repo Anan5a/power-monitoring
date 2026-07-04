@@ -7,6 +7,10 @@
 // Strapping pins 2, 8 and 9 are also avoided for outputs/inputs that
 // would pull them at boot. STATUS_LED_GPIO (2) is marked accordingly.
 
+// Highest legal GPIO number on this board. switch_controller.cpp uses this
+// to reject out-of-range pins in NVS before pinMode() is called.
+#define BOARD_GPIO_MAX 21
+
 // I2C bus pins
 #define I2C_SDA         5
 #define I2C_SCL         6

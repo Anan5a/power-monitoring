@@ -39,6 +39,14 @@
 #define HAS_DISPLAY           1   // SSD1306 OLED on I2C
 #endif
 
+// Debug Serial console. Set to 0 for builds that disable the USB-CDC console
+// (e.g. esp32c3_nodisplay with ARDUINO_USB_CDC_ON_BOOT=1) where `Serial` is
+// not declared in scope. When 0, every LOG_PRINT/LOG_PRINTLN call in
+// include/log_serial.h becomes a no-op.
+#ifndef HAS_SERIAL
+#define HAS_SERIAL            1
+#endif
+
 // Maximum number of sensor pods supported at compile time
 #define MAX_INA226          8
 #define MAX_BL0939          4
@@ -96,6 +104,13 @@
 #define LOG_MAX_DELTA_MA      32760
 #define LOG_MAX_DELTA_POWER   32760
 
+// MQTT — PubSubClient reads MQTT_MAX_PACKET_SIZE at include time, so the
+// guard lets the user override from build_flags without us stomping on it.
+// Bumped from the library default of 256 to 2048 so JSON telemetry payloads
+// (with metadata + 4 channel rows ≈ 1.4 KB) fit without truncation.
+#ifndef MQTT_MAX_PACKET_SIZE
+#define MQTT_MAX_PACKET_SIZE 2048
+#endif
 
 // BLE command interface UUIDs
 #define BLE_CHAR_CMD_UUID       "c01afdfc-3cbe-4c26-a1e8-8c71a5f6f2a4"

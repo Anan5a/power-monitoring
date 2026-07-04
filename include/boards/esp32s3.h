@@ -6,6 +6,10 @@
 // avoided. Native USB pins 19-21 are avoided. Strapping pins 0, 3, 45, 46
 // are avoided for outputs.
 
+// Highest legal GPIO number on this board. switch_controller.cpp uses this
+// to reject out-of-range pins in NVS before pinMode() is called.
+#define BOARD_GPIO_MAX 48
+
 // I2C bus pins
 #define I2C_SDA         8
 #define I2C_SCL         9
