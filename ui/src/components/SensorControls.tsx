@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { setCalibration as sendSetCalibration, calibrateBaseline as sendCalibrateBaseline } from '../lib/deviceCommands'
 import type { DeviceChannels } from '../lib/types'
 
 interface CalStatus {
@@ -48,24 +49,20 @@ export default function SensorControls({ deviceKey, deviceChannels }: Props) {
 
   const runBaselineCal = async () => {
     if (!deviceKey) return
-    const { error } = await supabase.from('settings_commands').insert({
-      device_key: deviceKey,
-      cmd_type: 'calibrate_baseline',
-      payload: {},
-      status: 'pending',
-    })
-    if (error) console.error('Failed to send calibrate_baseline:', error)
+    try {
+      await sendCalibrateBaseline(deviceKey)
+    } catch (e) {
+      console.error('Failed to send calibrate_baseline:', e)
+    }
   }
 
   const setCalibration = async (channel: number, type: number, value: number) => {
     if (!deviceKey) return
-    const { error } = await supabase.from('settings_commands').insert({
-      device_key: deviceKey,
-      cmd_type: 'set_calibration',
-      payload: { channel, type, value },
-      status: 'pending',
-    })
-    if (error) console.error('Failed to set calibration:', error)
+    try {
+      await sendSetCalibration(deviceKey, channel, type, value)
+    } catch (e) {
+      console.error('Failed to set calibration:', e)
+    }
   }
 
   // Load current calibration from deviceChannels or use defaults
