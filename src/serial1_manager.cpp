@@ -1,5 +1,6 @@
 #include "serial1_manager.h"
 #include "config.h"
+#include "log_serial.h"
 #include <HardwareSerial.h>
 
 #if ENABLE_SERIAL1
@@ -10,7 +11,7 @@ static uint16_t rx_tail = 0;  // read position
 void init_serial1() {
     Serial1.begin(SERIAL1_BAUD, SERIAL_8N1, SERIAL1_RX_PIN, -1);
     rx_head = rx_tail = 0;
-    Serial.printf("Serial1 enabled on RX=%d at %d baud\n",
+    LOG_PRINT("Serial1 enabled on RX=%d at %d baud\n",
         SERIAL1_RX_PIN, SERIAL1_BAUD);
 }
 

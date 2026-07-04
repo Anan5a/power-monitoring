@@ -1,6 +1,7 @@
 #include "sensor_manager.h"
 #include "settings_manager.h"
 #include "config.h"
+#include "log_serial.h"
 #include <Wire.h>
 
 #if ENABLE_INA3221
@@ -195,7 +196,7 @@ static void clear_pods() {
 #if ENABLE_INA226
 static void discover_ina226() {
     uint8_t found = 0;
-    Serial.println("[DISC] Scanning I2C for INA226 (0x40-0x4F)...");
+    LOG_PRINTLN("[DISC] Scanning I2C for INA226 (0x40-0x4F)...");
     for (uint8_t addr = 0x40; addr <= 0x4F; addr++) {
         Wire.beginTransmission(addr);
         if (Wire.endTransmission() != 0) continue; // no ACK
@@ -227,7 +228,7 @@ static void discover_ina226() {
         char name[16];
         snprintf(name, sizeof(name), "INA226@0x%02X", addr);
         register_pod(POD_INA226, name, 1, pod_ina226_read);
-        Serial.printf("[DISC] INA226 found at 0x%02X (pod %d)\n", addr, g_pod_count - 1);
+        LOG_PRINT("[DISC] INA226 found at 0x%02X (pod %d)\n", addr, g_pod_count - 1);
 
         found++;
         if (found >= MAX_INA226) break;
@@ -237,7 +238,7 @@ static void discover_ina226() {
     // The actual addresses are stored per-device in the discovery loop.
     // Shunt/vratio defaults are set; user can override via BLE/CLI later.
     (void)0;
-    Serial.printf("[DISC] INA226 scan complete: %d found\n", found);
+    LOG_PRINT("[DISC] INA226 scan complete: %d found\n", found);
 }
 #endif
 
@@ -267,7 +268,7 @@ void init_sensors() {
 
 #if ENABLE_INA3221
     if (!ina3221.begin(INA3221_ADDR, &Wire)) {
-        Serial.println("INA3221 current (0x40) init failed");
+        LOG_PRINTLN("INA3221 current (0x40) init failed");
     } else {
         for (uint8_t ch = 0; ch < 3; ch++) {
             float shunt = 0.0f;
@@ -280,7 +281,7 @@ void init_sensors() {
 
 #if ENABLE_INA3221_VOLT
     if (!ina3221_volt.begin(0x42, &Wire)) {
-        Serial.println("INA3221 voltage (0x42) init failed");
+        LOG_PRINTLN("INA3221 voltage (0x42) init failed");
     }
 #endif
 
@@ -288,13 +289,13 @@ void init_sensors() {
 #if ENABLE_INA226
     uint8_t disc_count = settings_load_discovered_ina_count();
     if (disc_count > 0) {
-        Serial.printf("[DISC] Loading %d INA226 from NVS cache\n", disc_count);
+        LOG_PRINT("[DISC] Loading %d INA226 from NVS cache\n", disc_count);
         for (uint8_t i = 0; i < disc_count && i < MAX_INA226; i++) {
             uint8_t addr;
             if (!settings_load_discovered_ina_addr(i, &addr)) continue;
             ina226_devices[i] = new INA226(addr, &Wire);
             if (!ina226_devices[i]->begin()) {
-                Serial.printf("[DISC] INA226 at 0x%02X init failed (re-scan?)\n", addr);
+                LOG_PRINT("[DISC] INA226 at 0x%02X init failed (re-scan?)\n", addr);
                 delete ina226_devices[i];
                 ina226_devices[i] = nullptr;
                 continue;
@@ -311,23 +312,23 @@ void init_sensors() {
             char name[16];
             snprintf(name, sizeof(name), "INA226@0x%02X", addr);
             register_pod(POD_INA226, name, 1, pod_ina226_read);
-            Serial.printf("[DISC] Restored INA226 at 0x%02X (pod %d)\n", addr, g_pod_count - 1);
+            LOG_PRINT("[DISC] Restored INA226 at 0x%02X (pod %d)\n", addr, g_pod_count - 1);
         }
     } else {
         discover_ina226();
     }
 #else
-    Serial.println("INA226 disabled");
+    LOG_PRINTLN("INA226 disabled");
 #endif
 
 #if ENABLE_ADS1115
     if (!ads1115.begin(ADS1115_ADDR, &Wire)) {
-        Serial.println("ADS1115 init failed");
+        LOG_PRINTLN("ADS1115 init failed");
     } else {
         ads1115.setGain(GAIN_ONE);
     }
 #else
-    Serial.println("ADS1115 disabled");
+    LOG_PRINTLN("ADS1115 disabled");
 #endif
 
     // Register legacy INA3221 pods (if enabled and no discovery data)
@@ -342,12 +343,12 @@ void init_sensors() {
 #endif
 
     if (g_pod_count == 0) {
-        Serial.println("[DISC] WARNING: No sensors found! Use 'discover_sensors' CLI/BLE command to re-scan.");
+        LOG_PRINTLN("[DISC] WARNING: No sensors found! Use 'discover_sensors' CLI/BLE command to re-scan.");
     }
 }
 
 void discover_sensors() {
-    Serial.println("[DISC] Re-discovering sensors...");
+    LOG_PRINTLN("[DISC] Re-discovering sensors...");
     settings_clear_discovered();
 
     // Delete existing INA226 devices
@@ -364,9 +365,9 @@ void discover_sensors() {
     discover_ina226();
 
     if (g_pod_count == 0) {
-        Serial.println("[DISC] No sensors found after re-discovery.");
+        LOG_PRINTLN("[DISC] No sensors found after re-discovery.");
     } else {
-        Serial.printf("[DISC] Re-discovery complete: %d pods, %d logical channels\n",
+        LOG_PRINT("[DISC] Re-discovery complete: %d pods, %d logical channels\n",
             g_pod_count, g_logical_count);
     }
 }
@@ -415,7 +416,7 @@ SensorSnapshot read_sensors() {
             baseline_stddev[i] += g_meta[i].stddev / (float)BASELINE_TICKS;
         }
         if (baseline_count >= BASELINE_TICKS) {
-            Serial.printf("[CALIB] baseline complete: i0_stddev=%.4f i1_stddev=%.4f i2_stddev=%.4f\n",
+            LOG_PRINT("[CALIB] baseline complete: i0_stddev=%.4f i1_stddev=%.4f i2_stddev=%.4f\n",
                 baseline_stddev[0], baseline_stddev[1], baseline_stddev[2]);
         }
     }
@@ -502,9 +503,9 @@ void sensor_calibrate_baseline() {
 #if ENABLE_BASELINE_CALIBRATION
     baseline_count = 0;
     for (int i = 0; i < MAX_LOGICAL_CHANNELS; i++) baseline_stddev[i] = 0;
-    Serial.println("Baseline recalibration started");
+    LOG_PRINTLN("Baseline recalibration started");
 #else
-    Serial.println("Baseline calibration disabled at compile time");
+    LOG_PRINTLN("Baseline calibration disabled at compile time");
 #endif
 }
 

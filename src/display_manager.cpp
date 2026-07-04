@@ -2,6 +2,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "config.h"
+#include "log_serial.h"
 #include "coulomb_counter.h"
 #include "data_logger.h"
 #include "settings_manager.h"
@@ -207,13 +208,13 @@ void init_display() {
     // Heap-allocate display — avoids static init order issues on ESP32-C3
     display = new Adafruit_SSD1306(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
     if (!display) {
-        Serial.println("OLED alloc failed");
+        LOG_PRINTLN("OLED alloc failed");
         return;
     }
 
     // Fix: begin() must run completely before calling any drawing methods
     if (!display->begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
-        Serial.println("OLED init failed");
+        LOG_PRINTLN("OLED init failed");
         delete display;
         display = nullptr;
         return;
