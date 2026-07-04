@@ -1,14 +1,26 @@
 #include "core_shared.h"
 #include "connectivity_manager.h"
+#include "battery_lock.h"
 
 QueueHandle_t g_sensor_queue = nullptr;
 QueueHandle_t g_cmd_queue = nullptr;
 SemaphoreHandle_t g_relay_mutex = nullptr;
 
+#if defined(ESP32) || defined(ESP32C3) || defined(ESP32S3)
+portMUX_TYPE g_battery_mux = portMUX_INITIALIZER_UNLOCKED;
+#endif
+
 void init_core_shared() {
     g_sensor_queue = xQueueCreate(16, sizeof(SensorSnapshot));
     g_cmd_queue = xQueueCreate(8, 128);
     g_relay_mutex = xSemaphoreCreateMutex();
+    BATTERY_LOCK_INIT();
+}
+
+void battery_lock_init() {
+    // portMUX is statically initialised via portMUX_INITIALIZER_UNLOCKED on
+    // the firmware targets. This hook exists so future code can do runtime
+    // setup (e.g. spinlock fallback on hosts) without changing the API.
 }
 
 void push_sensor_data(const SensorSnapshot& data) {

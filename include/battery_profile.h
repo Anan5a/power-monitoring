@@ -4,15 +4,30 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// ── Size summary (verified on esp32c3, 4-byte aligned) ────────────────────────
-// BatteryProfile        : 64 bytes
-//   - id (1) + name[16] + chemistry (1) + pad (2) + 9*float (36) + 1*uint16 (2) + 2*float (8)
-//   - Approx 64 bytes (struct padded to 4-byte floats; name[16] forces natural alignment)
+// ── Size summary (verified — see static_assert below) ────────────────────────
+// BatteryChemistryProfile  : 56 bytes
+//   Layout (4-byte aligned):
+//     +0   uint8_t  id
+//     +1   char[16] name
+//     +17  uint8_t  chemistry
+//     +18  pad[2]   (for float alignment)
+//     +20  float    nominal_voltage
+//     +24  float    rated_capacity_Ah
+//     +28  float    c_rating
+//     +32  float    cutoff_voltage
+//     +36  float    float_voltage
+//     +40  float    charge_efficiency
+//     +44  uint16_t cycle_life_rated
+//     +46  pad[2]   (for float alignment)
+//     +48  float    min_soc_pct
+//     +52  float    max_soc_pct
+//     = 56 bytes total
 //
-// All persisted as a single NVS blob "bat_profiles_v1" in namespace "pm-battery":
+// All persisted as a single NVS blob "bat_profiles_v1" in namespace
+// "pm-battery-profile" (via battery_nvs.cpp):
 //   [0]    uint8_t   version (=1)
-//   [1..]  16 * sizeof(BatteryProfile) = 1024 bytes
-//   total = 1025 bytes
+//   [1..]  16 * sizeof(BatteryChemistryProfile) = 16 * 56 = 896 bytes
+//   total = 897 bytes
 // ──────────────────────────────────────────────────────────────────────────────
 
 enum BatteryChemistryEnum {
@@ -44,6 +59,8 @@ struct BatteryChemistryProfile {
     float    min_soc_pct;
     float    max_soc_pct;
 };
+
+static_assert(sizeof(BatteryChemistryProfile) == 56, "size drift — recompute layout above");
 
 // Init: must be called once after init_settings() to populate built-in profiles
 // and load any custom profile overrides from NVS.

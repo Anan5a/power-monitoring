@@ -67,7 +67,8 @@ TEST_CC_SRCS = \
     ../src/coulomb_counter.cpp \
     ../src/settings_manager.cpp \
     ../src/battery_state.cpp \
-    ../src/battery_profile.cpp
+    ../src/battery_profile.cpp \
+    ../src/battery_nvs.cpp
 
 TEST_CC_OBJS = $(patsubst %.cpp,$(BUILD_DIR)/test_cc_%.o,$(notdir $(TEST_CC_SRCS)))
 TEST_CC_TARGET = $(BUILD_DIR)/test_cycle_counter

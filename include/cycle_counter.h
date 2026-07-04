@@ -23,6 +23,13 @@ void update_cycle_counter(const SensorSnapshot& snap, float dt_seconds);
 // Snapshots the current cycle state for a channel (used by BLE/serial).
 void cycle_counter_get(uint8_t channel, BatteryState* out);
 
+// Atomic point-in-time copy of a channel's BatteryState under a single
+// critical-section lock. Preferred over cycle_counter_get() for telemetry
+// and any caller that reads multiple BatteryState fields in a row, because
+// the fields are guaranteed to come from the same sensorTask frame. See
+// battery_lock.h for the lock discipline.
+void cycle_counter_snapshot(uint8_t channel, BatteryState* out);
+
 // Writes updated BatteryState back (used by capacity_test monitor to update
 // the in-memory cache after integrating measured_Ah).
 void cycle_counter_put(uint8_t channel, const BatteryState* in);

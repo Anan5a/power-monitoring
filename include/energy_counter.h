@@ -5,7 +5,7 @@
 
 void init_energy_counter();
 void update_energy_counter(const SensorSnapshot& data, float dt_seconds);
-float get_energy_Wh(uint8_t channel); // 0-3
+float get_energy_Wh(uint8_t channel); // 0..MAX_LOGICAL_CHANNELS-1
 void reset_energy_counter(uint8_t channel);
 
 #endif

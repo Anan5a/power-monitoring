@@ -8,15 +8,15 @@
 
 // ── Size summary ──────────────────────────────────────────────────────────────
 // ChannelBinding   : 16 bytes (one uint8 per logical channel)
-// BatteryState     : ~52 bytes
+// BatteryState     : ~48 bytes
 //   cumulative_Ah_in (4) + cumulative_Ah_out (4) + equivalent_full_cycles (4) +
 //   last_SoC_pct (4) + last_V (4) + last_I (4) + last_update_ms (4) +
-//   current_session_dod_Ah (4) + last_session_start_pct (4) = 36
-//   + CapacityTestState (16) = 52
+//   last_session_start_pct (4) = 32
+//   + CapacityTestState (~28, padded to 32) ≈ 64
 // CapacityTestState:
 //   active (1) + mode (1) + pad (2) + started_ms (4) + start_SoC_pct (4) +
-//   measured_Ah (4) + sample_count (4) + load_switch_idx (1) + cutoff_v (4) +
-//   last_report_ms (4) = ~28
+//   measured_Ah (4) + sample_count (4) + load_switch_idx (1) + pad (3) +
+//   cutoff_v (4) + last_report_ms (4) + result_pending (1) + pad (3) ≈ 32
 // ──────────────────────────────────────────────────────────────────────────────
 
 #define BATTERY_CHANNEL_NO_BINDING 0xFF
@@ -50,7 +50,6 @@ struct BatteryState {
     float    last_V;
     float    last_I;
     uint32_t last_update_ms;
-    float    current_session_dod_Ah;
     float    last_session_start_pct;
     // Capacity test
     CapacityTestState test;

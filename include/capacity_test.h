@@ -23,6 +23,9 @@ struct CapacityTestResult {
     uint32_t samples;
     float    start_SoC_pct;
     float    end_SoC_pct;
+    bool     invalid_profile;  // true when the test ran on a channel that
+                               // was unbound or pointed at a missing profile
+                               // at finalisation time
 };
 
 // Initialize: nothing to load (per-channel state is in BatteryState).

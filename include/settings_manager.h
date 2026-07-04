@@ -5,7 +5,17 @@
 #include <stddef.h>
 #include "switch_controller.h"
 
-enum BatteryChemistry { BAT_LEAD_ACID = 0, BAT_LIPO, BAT_LIION, BAT_NIMH, BAT_LIFEPO4, BAT_AGM, BAT_FLA };
+// The new canonical chemistry enum is BatteryChemistryEnum in
+// include/battery_profile.h. The two enums are NOT identical — only
+// LEAD_ACID agrees (both = 0), so a legacy "chemistry": 0 setting still
+// resolves to lead-acid in the new registry without remapping. LIPO/LIION
+// are swapped; LIFEPO4/AGM/FLA are legacy-only. Bridging code must use a
+// translation table, not a cast.
+enum BatteryChemistry {
+    BAT_LEAD_ACID = 0, BAT_LIPO, BAT_LIION, BAT_NIMH, BAT_LIFEPO4, BAT_AGM, BAT_FLA
+};
+static_assert(BAT_LEAD_ACID == 0,
+              "legacy BatteryChemistry.LEAD_ACID must remain 0 to match BAT_CHEM_LEAD_ACID");
 
 struct BatteryConfig {
     uint8_t channel;          // 0-3
@@ -54,13 +64,17 @@ struct Calibration {
     float ina226_i_gain;
 };
 
-// Per-channel calibration: voltage offset/gain, current offset/gain
+// Per-channel calibration: voltage offset/gain, current offset/gain.
+// Array sizes are MAX_LOGICAL_CHANNELS so calibration data can be addressed
+// uniformly for every sensor the pod model exposes. NVS blob version is
+// tracked by kCalBlobVersion (see settings_manager.cpp) — a migration is
+// required when the array size changes.
 struct ChannelCalibration {
-    float volt_offset_mv[3];   // mV zero offset per voltage channel
-    float volt_gain[3];        // multiplier per voltage channel
-    float curr_offset_ma[3];  // mA offset per current channel (ghost current sub)
-    float curr_gain[3];        // multiplier per current channel
-    bool invert_curr[3];      // invert current direction (shunt wired backwards)
+    float volt_offset_mv[MAX_LOGICAL_CHANNELS]; // mV zero offset per voltage channel
+    float volt_gain[MAX_LOGICAL_CHANNELS];      // multiplier per voltage channel
+    float curr_offset_ma[MAX_LOGICAL_CHANNELS]; // mA offset per current channel (ghost current sub)
+    float curr_gain[MAX_LOGICAL_CHANNELS];      // multiplier per current channel
+    bool invert_curr[MAX_LOGICAL_CHANNELS];     // invert current direction (shunt wired backwards)
 };
 
 void init_settings();

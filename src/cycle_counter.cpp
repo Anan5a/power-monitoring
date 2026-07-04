@@ -20,21 +20,29 @@
 //       Second flip: |delta| = 50, > 5, equivalent_full_cycles += 0.5.
 //       Both "85 -> 90" and "85 -> 40" pieces together count as 0.5.
 //
-// Struct size: sizeof(BatteryState) ≈ 64 B per channel (16 channels * 64 ≈ 1 KB RAM).
-//   Per-channel RAM cache: g_state[16] ≈ 1 KB.
+// Struct size: sizeof(BatteryState) per channel (16 channels ≈ 0.9 KB RAM).
 //
 // Behavior:
 //   1. init_cycle_counter() zeroes g_state[*], g_loaded[*], g_last_dir[*]
 //   2. update_cycle_counter() runs each 1s tick: integrate signed current,
 //      recompute SoC, and on direction-flip check 5% hysteresis
 //   3. Persist immediately on every flip and every 5 minutes (batched)
-//   4. cycle_counter_get() returns the current g_state (loads from NVS on
-//      first access if needed)
+//   4. cycle_counter_get() / cycle_counter_snapshot() return the current
+//      g_state (loads from NVS on first access if needed)
 //   5. cycle_counter_reset() zeros the accumulator for a channel
 //   6. cycle_counter_put() lets external modules (capacity_test) push updated
 //      state back so the cache stays in sync with their writes
+//
+// Concurrency: g_state[], g_loaded[], and g_last_dir[] are touched by
+// sensorTask (update_cycle_counter at 1Hz) and read by networkTask
+// (telemetry_build at 5s, BLE get_status). All accesses are serialised by
+// the g_battery_mux critical section. The lock window is kept tight: NVS
+// load/save happens OUTSIDE the lock to avoid holding the spinlock across
+// flash I/O.
 
 #include "cycle_counter.h"
+#include "battery_lock.h"
+#include "battery_nvs.h"
 #include "battery_profile.h"
 #include "battery_state.h"
 #include "settings_manager.h"   // settings_load_coulomb_mAh
@@ -47,6 +55,10 @@ constexpr uint32_t kPersistIntervalMs = 300000;  // 5 min
 constexpr int8_t  kDirIdle = 0;
 constexpr int8_t  kDirCharge = 1;
 constexpr int8_t  kDirDischarge = -1;
+
+// Stale-test bound: a capacity test running for longer than this is treated
+// as a crash recovery case and auto-cancelled on next NVS load.
+constexpr uint32_t kStaleTestMaxMs = 7UL * 24UL * 3600UL * 1000UL;  // 7 days
 
 BatteryState g_state[MAX_LOGICAL_CHANNELS];
 bool g_loaded[MAX_LOGICAL_CHANNELS] = {false};
@@ -68,6 +80,27 @@ int8_t classify(float current_a) {
     if (current_a > CYCLE_CURRENT_DEADZONE_A) return kDirCharge;
     if (current_a < -CYCLE_CURRENT_DEADZONE_A) return kDirDischarge;
     return kDirIdle;
+}
+
+// Cancel any capacity test that was active at NVS load time but whose
+// started_ms is suspiciously old — i.e. the firmware crashed mid-test and
+// the active flag was never cleared. Recovery is conservative: drop the
+// active flag, keep measured_Ah so the user can inspect it via BLE if
+// desired.
+//
+// Caller must already hold BATTERY_LOCK(). The mutation stays inside the
+// caller's critical section; the caller is responsible for persisting the
+// cleared state (see update_cycle_counter, which persists after releasing
+// the lock when stale_test_recovered is true).
+void recover_stale_test_if_needed(uint8_t ch) {
+    BatteryState& st = g_state[ch];
+    if (!st.test.active) return;
+    uint32_t now = millis();
+    // millis() can wrap or be smaller than started_ms on a fresh boot, so
+    // only treat the test as stale if the elapsed window fits.
+    if (now > st.test.started_ms && (now - st.test.started_ms) > kStaleTestMaxMs) {
+        st.test.active = false;
+    }
 }
 }  // namespace
 
@@ -96,12 +129,28 @@ void update_cycle_counter(const SensorSnapshot& snap, float dt_seconds) {
         const BatteryChemistryProfile* bp = battery_profile_get(pid);
         if (!bp) continue;
 
+        bool stale_test_recovered = false;
+        bool crossed_hysteresis = false;
+        BATTERY_LOCK();
         if (!g_loaded[ch]) {
-            if (!battery_state_load(ch, &g_state[ch])) {
-                g_state[ch] = BatteryState{};
+            // Drop the lock across the NVS load so a slow flash read doesn't
+            // stall other tasks. After re-acquiring the lock we trust the
+            // cache for the rest of this tick.
+            BATTERY_UNLOCK();
+            BatteryState loaded{};
+            if (!battery_state_load(ch, &loaded)) {
+                loaded = BatteryState{};
             }
+            BATTERY_LOCK();
+            g_state[ch] = loaded;
             g_loaded[ch] = true;
-            g_last_dir[ch] = 0;  // start with no prior direction
+            g_last_dir[ch] = 0;
+            // Auto-cancel any capacity test that survived a crash. Track
+            // whether we mutated the state so we can persist the
+            // cancellation after dropping the lock.
+            bool was_active = g_state[ch].test.active;
+            recover_stale_test_if_needed(ch);
+            stale_test_recovered = was_active && !g_state[ch].test.active;
         }
 
         BatteryState& st = g_state[ch];
@@ -116,11 +165,9 @@ void update_cycle_counter(const SensorSnapshot& snap, float dt_seconds) {
         if (new_dir == kDirCharge) {
             float ah = i * dt_seconds / 3600.0f;
             st.cumulative_Ah_in += ah;
-            st.current_session_dod_Ah += ah;
         } else if (new_dir == kDirDischarge) {
             float ah = -i * dt_seconds / 3600.0f;
             st.cumulative_Ah_out += ah;
-            st.current_session_dod_Ah += ah;
         }
 
         // Update SoC
@@ -140,18 +187,18 @@ void update_cycle_counter(const SensorSnapshot& snap, float dt_seconds) {
             if (delta < 0.0f) delta = -delta;
             if (delta > CYCLE_DOD_HYSTERESIS_PCT) {
                 st.equivalent_full_cycles += delta / 100.0f;
+                crossed_hysteresis = true;
             }
             // Whether or not the delta cleared the hysteresis, the new
             // session starts here. The sub-5% portion is absorbed: it
             // contributes 0 cycles now and is included in the next leg's
             // measurement.
             st.last_session_start_pct = st.last_SoC_pct;
-            st.current_session_dod_Ah = 0.0f;
-            if (delta > CYCLE_DOD_HYSTERESIS_PCT) {
-                persist_state(ch);
-            }
         }
         if (new_dir != 0) g_last_dir[ch] = new_dir;
+        BATTERY_UNLOCK();
+
+        if (crossed_hysteresis || stale_test_recovered) persist_state(ch);
     }
 
     if (now - g_last_persist_ms >= kPersistIntervalMs) {
@@ -164,29 +211,49 @@ void update_cycle_counter(const SensorSnapshot& snap, float dt_seconds) {
 
 void cycle_counter_get(uint8_t channel, BatteryState* out) {
     if (!out || channel >= MAX_LOGICAL_CHANNELS) return;
+    BATTERY_LOCK();
     if (!g_loaded[channel]) {
-        if (!battery_state_load(channel, &g_state[channel])) {
-            g_state[channel] = BatteryState{};
+        BATTERY_UNLOCK();
+        BatteryState loaded{};
+        if (!battery_state_load(channel, &loaded)) {
+            loaded = BatteryState{};
         }
+        BATTERY_LOCK();
+        g_state[channel] = loaded;
         g_loaded[channel] = true;
+        g_last_dir[channel] = 0;
+        recover_stale_test_if_needed(channel);
     }
     *out = g_state[channel];
+    BATTERY_UNLOCK();
+}
+
+// Point-in-time snapshot under a single lock. Preferred over
+// cycle_counter_get() for telemetry consumers that want a consistent
+// view across all the BatteryState fields.
+void cycle_counter_snapshot(uint8_t channel, BatteryState* out) {
+    cycle_counter_get(channel, out);
 }
 
 void cycle_counter_put(uint8_t channel, const BatteryState* in) {
     if (!in || channel >= MAX_LOGICAL_CHANNELS) return;
+    BATTERY_LOCK();
     g_state[channel] = *in;
     g_loaded[channel] = true;
+    BATTERY_UNLOCK();
     battery_state_save(channel, in);
 }
 
 void cycle_counter_reset(uint8_t channel) {
     if (channel >= MAX_LOGICAL_CHANNELS) return;
-    if (g_loaded[channel]) {
-        // Preserve test state? Simpler: zero everything for clarity.
-        g_state[channel] = BatteryState{};
-        g_last_dir[channel] = 0;  // forget prior direction so the next
-                                  // tick re-seeds last_session_start_pct
+    BATTERY_LOCK();
+    bool was_loaded = g_loaded[channel];
+    g_state[channel] = BatteryState{};
+    g_last_dir[channel] = 0;  // forget prior direction so the next
+                              // tick re-seeds last_session_start_pct
+    g_loaded[channel] = true;
+    BATTERY_UNLOCK();
+    if (was_loaded) {
         persist_state(channel);
     } else {
         battery_state_reset(channel);
@@ -200,60 +267,91 @@ void cycle_counter_reset(uint8_t channel) {
 
 static void ensure_loaded(uint8_t channel) {
     if (channel >= MAX_LOGICAL_CHANNELS) return;
-    if (g_loaded[channel]) return;
-    if (!battery_state_load(channel, &g_state[channel])) {
-        g_state[channel] = BatteryState{};
+    BATTERY_LOCK();
+    bool loaded = g_loaded[channel];
+    BATTERY_UNLOCK();
+    if (loaded) return;
+
+    BatteryState loaded_state{};
+    if (!battery_state_load(channel, &loaded_state)) {
+        loaded_state = BatteryState{};
     }
+    BATTERY_LOCK();
+    g_state[channel] = loaded_state;
     g_loaded[channel] = true;
+    g_last_dir[channel] = 0;
+    recover_stale_test_if_needed(channel);
+    BATTERY_UNLOCK();
 }
 
 float cycle_counter_get_equivalent_full_cycles(uint8_t channel) {
     if (channel >= MAX_LOGICAL_CHANNELS) return 0.0f;
     if (battery_channel_profile(channel) == BATTERY_CHANNEL_NO_BINDING) return 0.0f;
     ensure_loaded(channel);
-    return g_state[channel].equivalent_full_cycles;
+    BATTERY_LOCK();
+    float v = g_state[channel].equivalent_full_cycles;
+    BATTERY_UNLOCK();
+    return v;
 }
 
 float cycle_counter_get_cumulative_Ah_in(uint8_t channel) {
     if (channel >= MAX_LOGICAL_CHANNELS) return 0.0f;
     if (battery_channel_profile(channel) == BATTERY_CHANNEL_NO_BINDING) return 0.0f;
     ensure_loaded(channel);
-    return g_state[channel].cumulative_Ah_in;
+    BATTERY_LOCK();
+    float v = g_state[channel].cumulative_Ah_in;
+    BATTERY_UNLOCK();
+    return v;
 }
 
 float cycle_counter_get_cumulative_Ah_out(uint8_t channel) {
     if (channel >= MAX_LOGICAL_CHANNELS) return 0.0f;
     if (battery_channel_profile(channel) == BATTERY_CHANNEL_NO_BINDING) return 0.0f;
     ensure_loaded(channel);
-    return g_state[channel].cumulative_Ah_out;
+    BATTERY_LOCK();
+    float v = g_state[channel].cumulative_Ah_out;
+    BATTERY_UNLOCK();
+    return v;
 }
 
 float cycle_counter_get_last_soc_pct(uint8_t channel) {
     if (channel >= MAX_LOGICAL_CHANNELS) return -1.0f;
     if (battery_channel_profile(channel) == BATTERY_CHANNEL_NO_BINDING) return -1.0f;
     ensure_loaded(channel);
-    return g_state[channel].last_SoC_pct;
+    BATTERY_LOCK();
+    float v = g_state[channel].last_SoC_pct;
+    BATTERY_UNLOCK();
+    return v;
 }
 
 float cycle_counter_get_last_voltage(uint8_t channel) {
     if (channel >= MAX_LOGICAL_CHANNELS) return 0.0f;
     if (battery_channel_profile(channel) == BATTERY_CHANNEL_NO_BINDING) return 0.0f;
     ensure_loaded(channel);
-    return g_state[channel].last_V;
+    BATTERY_LOCK();
+    float v = g_state[channel].last_V;
+    BATTERY_UNLOCK();
+    return v;
 }
 
 float cycle_counter_get_last_current(uint8_t channel) {
     if (channel >= MAX_LOGICAL_CHANNELS) return 0.0f;
     if (battery_channel_profile(channel) == BATTERY_CHANNEL_NO_BINDING) return 0.0f;
     ensure_loaded(channel);
-    return g_state[channel].last_I;
+    BATTERY_LOCK();
+    float v = g_state[channel].last_I;
+    BATTERY_UNLOCK();
+    return v;
 }
 
 uint32_t cycle_counter_get_last_update_ms(uint8_t channel) {
     if (channel >= MAX_LOGICAL_CHANNELS) return 0;
     if (battery_channel_profile(channel) == BATTERY_CHANNEL_NO_BINDING) return 0;
     ensure_loaded(channel);
-    return g_state[channel].last_update_ms;
+    BATTERY_LOCK();
+    uint32_t v = g_state[channel].last_update_ms;
+    BATTERY_UNLOCK();
+    return v;
 }
 
 bool cycle_counter_is_active(uint8_t channel) {
