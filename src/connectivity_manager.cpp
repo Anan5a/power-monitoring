@@ -6,6 +6,7 @@
 #include "settings_manager.h"
 #include "data_logger.h"
 #include "ble_provisioner.h"
+#include "battery_profile.h"
 #include "coulomb_counter.h"
 #include "energy_counter.h"
 #include "sensor_manager.h"
@@ -816,33 +817,36 @@ static void publish_battery_profiles_heartbeat(const char* supabase_url,
 
     // Build the profile list. Hash the names+chem+cap so we can detect changes
     // and publish eagerly when something changes (caller drives this path).
+    //
+    // Wire format: the migration's `sync_battery_profiles(p_device_key text,
+    // p_profiles jsonb)` expects `{p_device_key, p_profiles}`. The PostgREST
+    // RPC passes the entire request body as the function's named arguments.
     JsonDocument doc;
-    doc["v"] = TELEMETRY_SCHEMA_VERSION;
-    doc["kind"] = "battery_profiles";
-    JsonArray arr = doc["battery_profiles"].to<JsonArray>();
-    const char* CHEM[] = { "lead_acid", "lipol", "liion", "nimh", "lifepo4", "agm", "fla" };
+    doc["p_device_key"] = device_key;
+    JsonArray arr = doc["p_profiles"].to<JsonArray>();
 
     uint32_t hash = 0;
-    for (uint8_t ch = 0; ch < TELEMETRY_MAX_BATTERIES; ch++) {
-        BatteryProfile bp;
-        if (!settings_load_battery_profile(ch, &bp)) continue;
+    for (uint8_t ch = 0; ch < BATTERY_MAX_PROFILES; ch++) {
+        const BatteryChemistryProfile* bp = battery_profile_get(ch);
+        if (!bp) continue;
         JsonObject o = arr.add<JsonObject>();
-        o["profile_id"] = ch;
-        o["channel"] = ch;
-        o["name"] = bp.name;
-        o["chemistry"] = bp.chemistry < 7 ? CHEM[bp.chemistry] : "lead_acid";
-        o["system_voltage"] = String((double)bp.system_voltage, FLOAT_DECIMALS);
-        o["capacity_mAh"] = String((double)bp.capacity_mAh, FLOAT_DECIMALS);
-        o["initial_soc_pct"] = String((double)bp.initial_soc_pct, FLOAT_DECIMALS);
-        o["cell_count"] = String((double)bp.cell_count, FLOAT_DECIMALS);
-        o["full_voltage"] = String((double)bp.full_voltage, FLOAT_DECIMALS);
-        o["cutoff_voltage"] = String((double)bp.cutoff_voltage, FLOAT_DECIMALS);
-        o["float_voltage"] = String((double)bp.float_voltage, FLOAT_DECIMALS);
+        o["id"] = bp->id;
+        o["name"] = bp->name;
+        o["chemistry"] = battery_chemistry_name(bp->chemistry);
+        o["nominal_voltage"] = String((double)bp->nominal_voltage, FLOAT_DECIMALS);
+        o["rated_capacity_Ah"] = String((double)bp->rated_capacity_Ah, FLOAT_DECIMALS);
+        o["c_rating"] = String((double)bp->c_rating, FLOAT_DECIMALS);
+        o["cutoff_voltage"] = String((double)bp->cutoff_voltage, FLOAT_DECIMALS);
+        o["float_voltage"] = String((double)bp->float_voltage, FLOAT_DECIMALS);
+        o["charge_efficiency"] = String((double)bp->charge_efficiency, FLOAT_DECIMALS);
+        o["cycle_life_rated"] = bp->cycle_life_rated;
+        o["min_soc_pct"] = String((double)bp->min_soc_pct, FLOAT_DECIMALS);
+        o["max_soc_pct"] = String((double)bp->max_soc_pct, FLOAT_DECIMALS);
         // FNV-1a over key fields
-        const char* p = bp.name;
+        const char* p = bp->name;
         while (*p) hash = (hash * 16777619u) ^ (uint8_t)*p++;
-        hash = (hash * 16777619u) ^ (uint8_t)bp.chemistry;
-        hash = (hash * 16777619u) ^ (uint8_t)(bp.capacity_mAh * 1000.0f);
+        hash = (hash * 16777619u) ^ (uint8_t)bp->chemistry;
+        hash = (hash * 16777619u) ^ (uint8_t)(bp->rated_capacity_Ah * 1000.0f);
     }
 
     static char buf[1024];

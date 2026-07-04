@@ -19,6 +19,11 @@ typedef uint8_t byte;
 unsigned long millis();
 void delay(unsigned long ms);
 
+// Test-only hook: set millis() to an absolute value. Host build only.
+// Used by the unit tests to simulate long uptimes (e.g. the 7-day
+// capacity-test stale-recovery bound) without actually waiting.
+void set_millis_for_test(unsigned long ms);
+
 inline long random(long max) {
     if (max <= 0) return 0;
     return rand() % max;

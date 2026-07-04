@@ -67,6 +67,13 @@ uint32_t log_entries_count();
 bool log_is_full();
 size_t log_buffer_capacity();
 
+// Returns the current ring-buffer occupancy as a percentage 0..100.
+// Used by telemetry / status paths to surface near-overflow conditions
+// before the buffer actually fills and entries are dropped. The value
+// is computed under the same lock that log_sample / log_pop_batch take,
+// so callers see a consistent snapshot.
+size_t log_buffer_used_pct();
+
 // LittleFS overflow management
 bool log_has_overflow_file();
 size_t log_overflow_file_size();

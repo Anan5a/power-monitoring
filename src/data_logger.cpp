@@ -7,10 +7,36 @@
 #include <FS.h>
 #include <LittleFS.h>
 
+#if defined(ESP32) || defined(ESP32C3) || defined(ESP32S3)
+    #include <freertos/FreeRTOS.h>
+    #include <freertos/task.h>
+    // Cross-core protection: log_sample() runs on sensorTask (Core 1) and
+    // log_pop_batch() runs on networkTask (Core 0). Without a critical
+    // section the network task can observe a half-written BaseEntry or
+    // DeltaEntry — the type byte (1) at tail might be from a new entry
+    // while the body bytes are still from the prior entry. portMUX gives
+    // us a tight, non-yielding critical section.
+    static portMUX_TYPE g_log_mux = portMUX_INITIALIZER_UNLOCKED;
+    #define LOG_LOCK()    taskENTER_CRITICAL(&g_log_mux)
+    #define LOG_UNLOCK()  taskEXIT_CRITICAL(&g_log_mux)
+#else
+    // Host build (sim unit tests / sim binary): single-threaded. No lock.
+    #define LOG_LOCK()    do {} while (0)
+    #define LOG_UNLOCK()  do {} while (0)
+#endif
+
 // ── Single static 16KB ring buffer (no dynamic allocation) ─────────
 static uint8_t buffer[LOG_BUFFER_BYTES];
 static size_t head = 0, tail = 0;
 static uint32_t entry_count = 0;
+
+// High-water mark latch. True once the buffer has crossed the warning
+// threshold (see LOG_BUFFER_HIGH_WATER_PCT). Used to fire a one-shot log
+// per crossing so a near-overflow condition is visible on the serial
+// console. Reset on init_data_logger() and on every drain back below
+// the threshold.
+static bool g_log_high_water_warned = false;
+#define LOG_BUFFER_HIGH_WATER_PCT 80  // warn when >= 80% full
 
 static int16_t last_v[4] = {}, last_i[4] = {}, last_p[4] = {};
 static uint32_t last_ts = 0;
@@ -146,6 +172,7 @@ void init_data_logger() {
     head = tail = 0;
     entry_count = 0;
     have_base = false;
+    g_log_high_water_warned = false;
     if (!LittleFS.begin(true)) {
         LOG_PRINTLN("LittleFS init failed");
     } else {
@@ -193,6 +220,11 @@ void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms) {
     DeltaEntry delta_e;
     size_t entry_size;
 
+    // Build the entry outside the lock. The struct build is independent
+    // of the ring state; the lock only needs to bracket the head/tail/
+    // entry_count mutations and the memcpy into the buffer. Keeping the
+    // lock window short (and the high-water log outside it) avoids
+    // unnecessarily blocking the network task that calls log_pop_batch.
     if (!have_base) {
         base_e = { ENTRY_BASE, timestamp_ms };
         memcpy(base_e.v, v, sizeof(v)); memcpy(base_e.i, i, sizeof(i)); memcpy(base_e.p, p, sizeof(p));
@@ -225,6 +257,22 @@ void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms) {
     last_ts = timestamp_ms;
 
     uint8_t* entry_ptr = is_base ? (uint8_t*)&base_e : (uint8_t*)&delta_e;
+
+    // Snapshot occupancy before taking the lock so the high-water log
+    // can run outside it. We log only on the rising edge across
+    // LOG_BUFFER_HIGH_WATER_PCT and clear the latch on drain so a
+    // sustained full buffer prints again on the next recovery cycle.
+    bool crossed_high_water = false;
+    size_t used_before;
+    LOG_LOCK();
+    used_before = (head >= tail)
+                      ? (head - tail)
+                      : (LOG_BUFFER_BYTES - tail + head);
+    if (!g_log_high_water_warned &&
+        used_before * 100u >= (size_t)LOG_BUFFER_HIGH_WATER_PCT * LOG_BUFFER_BYTES) {
+        g_log_high_water_warned = true;
+        crossed_high_water = true;
+    }
 
     if (can_fit(entry_size)) {
         size_t avail = free_space(head, tail, LOG_BUFFER_BYTES);
@@ -267,10 +315,33 @@ void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms) {
             entry_count++;
         }
     }
+    LOG_UNLOCK();
+
+    if (crossed_high_water) {
+        LOG_PRINT("[LOG] buffer occupancy crossed %d%% (%u/%u bytes) — "
+                  "drain rate may be insufficient\n",
+                  LOG_BUFFER_HIGH_WATER_PCT,
+                  (unsigned)used_before,
+                  (unsigned)LOG_BUFFER_BYTES);
+    }
 }
 
 size_t log_pop_batch(uint8_t* out_buf, size_t out_len) {
-    return pop_ring(out_buf, out_len);
+    LOG_LOCK();
+    size_t n = pop_ring(out_buf, out_len);
+    // If a successful drain brought us back below the high-water mark,
+    // re-arm the warning latch so a subsequent fill prints a fresh
+    // message rather than staying silent.
+    if (g_log_high_water_warned) {
+        size_t used = (head >= tail)
+                          ? (head - tail)
+                          : (LOG_BUFFER_BYTES - tail + head);
+        if (used * 100u < (size_t)LOG_BUFFER_HIGH_WATER_PCT * LOG_BUFFER_BYTES) {
+            g_log_high_water_warned = false;
+        }
+    }
+    LOG_UNLOCK();
+    return n;
 }
 
 bool log_peek_latest(LogSnapshot* out) {
@@ -287,6 +358,16 @@ bool log_peek_latest(LogSnapshot* out) {
 uint32_t log_entries_count() { return entry_count; }
 bool log_is_full() { return !can_fit(sizeof(DeltaEntry)); }
 size_t log_buffer_capacity() { return LOG_BUFFER_BYTES; }
+
+size_t log_buffer_used_pct() {
+    LOG_LOCK();
+    size_t used = (head >= tail)
+                      ? (head - tail)
+                      : (LOG_BUFFER_BYTES - tail + head);
+    size_t pct = (used * 100u) / LOG_BUFFER_BYTES;
+    LOG_UNLOCK();
+    return pct;
+}
 
 bool log_has_overflow_file() { return LittleFS.exists(LOG_OVERFLOW_FILE); }
 size_t log_overflow_file_size() {
