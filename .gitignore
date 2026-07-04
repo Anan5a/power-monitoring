@@ -12,3 +12,10 @@ ui/package-lock.json
 .env*
 !.env.example
 .worktrees/
+
+# tooling artifacts
+.claude/
+compile_commands.json
+*.d
+sim/build/
+ui/prototypes/
