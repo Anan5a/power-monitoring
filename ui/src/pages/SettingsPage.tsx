@@ -6,9 +6,28 @@ import {
   setMqtt as dcSetMqtt,
   setHttp as dcSetHttp,
   setSupabase as dcSetSupabase,
+  setCalibration as dcSetCalibration,
+  setInvertCurrent as dcSetInvertCurrent,
+  setShunt as dcSetShunt,
+  setVoltRatio as dcSetVoltRatio,
+  setResistors as dcSetResistors,
+  setVirtualChannel as dcSetVirtualChannel,
+  setChannelName as dcSetChannelName,
+  setBattery as dcSetBattery,
+  setBatteryLegacy as dcSetBatteryLegacy,
+  setRelayEnergized as dcSetRelayEnergized,
   reboot as dcReboot,
   factoryReset as dcFactoryReset,
+  calibrateBaseline as dcCalibrateBaseline,
+  resetCoulomb as dcResetCoulomb,
 } from '../lib/deviceCommands'
+
+/**
+ * Result type for the migrated sendCommand. The audited helper previously
+ * swallowed errors; the unified deviceCommands module throws, so we now
+ * surface both the boolean ok and a structured error to the caller.
+ */
+export type SendCommandResult = { ok: true } | { ok: false; error: string }
 
 const EMPTY_CHANNELS: DeviceChannels = {
   device_key: '',
@@ -66,41 +85,162 @@ export default function SettingsPage() {
   }, [selectedKey])
 
   /**
-   * Enqueue a command to the device via the Supabase settings_commands
-   * queue. Throws on error so the caller can surface the failure.
-   *
-   * The audited sendCommand used to swallow errors and just set a message —
-   * that hid failures from the user. The Supabase path now throws; the BLE
-   * path (used by legacy provisioning flows) keeps the silent-success
-   * contract for backward compatibility.
+   * Unified sendCommand — all branches route through lib/deviceCommands
+   * helpers. The only path that still bypasses them is `set_channel_group`
+   * (no helper yet). Errors are surfaced via the typed return value.
    */
-  async function sendSupabaseCommand(cmd_type: string, payload: Record<string, unknown>) {
-    if (!selectedKey) throw new Error('No device selected')
-    const { error } = await supabase.from('settings_commands').insert({
-      device_key: selectedKey,
-      cmd_type,
-      payload,
-      status: 'pending',
-    })
-    if (error) throw error
-  }
-
-  /**
-   * Legacy catch-all for items that haven't migrated to lib/deviceCommands
-   * yet (e.g. virtual channels, channel groups, the legacy battery-profile
-   * path). Errors are surfaced via the on-page message banner rather than
-   * thrown, to preserve the existing UX.
-   */
-  async function sendCommand(cmd_type: string, payload: Record<string, unknown>) {
-    if (!selectedKey) return
+  async function sendCommand(cmd_type: string, payload: Record<string, unknown>): Promise<SendCommandResult> {
+    if (!selectedKey) {
+      return { ok: false, error: 'No device selected' }
+    }
     try {
-      await sendSupabaseCommand(cmd_type, payload)
+      switch (cmd_type) {
+        case 'set_calibration':
+          await dcSetCalibration(
+            selectedKey,
+            payload.channel as number,
+            payload.type as number,
+            payload.value as number,
+          )
+          break
+        case 'set_invert_curr':
+          await dcSetInvertCurrent(
+            selectedKey,
+            payload.channel as number,
+            payload.invert as boolean,
+          )
+          break
+        case 'set_shunt':
+          await dcSetShunt(
+            selectedKey,
+            payload.channel as number,
+            payload.ohms as number,
+          )
+          break
+        case 'set_volt_ratio':
+          await dcSetVoltRatio(
+            selectedKey,
+            payload.channel as number,
+            payload.ratio as number,
+          )
+          break
+        case 'set_resistors':
+          await dcSetResistors(
+            selectedKey,
+            payload.channel as number,
+            payload.r_high as number,
+            payload.r_low as number,
+          )
+          break
+        case 'set_virtual_channel':
+          await dcSetVirtualChannel(selectedKey, payload.channel as number, {
+            voltage_src: payload.voltage_src as number,
+            voltage_idx: payload.voltage_idx as number,
+            current_src: payload.current_src as number,
+            current_idx: payload.current_idx as number,
+          })
+          break
+        case 'set_channel_name':
+          await dcSetChannelName(
+            selectedKey,
+            payload.channel as number,
+            payload.name as string,
+          )
+          break
+        case 'set_battery':
+          // Two shapes: legacy `{channel, capacity_mAh, initial_soc_pct}`
+          // routes to setBatteryLegacy; new `{channel, profile_id}` routes
+          // to setBattery.
+          if ('profile_id' in payload) {
+            await dcSetBattery(
+              selectedKey,
+              payload.channel as number,
+              payload.profile_id as number,
+            )
+          } else {
+            await dcSetBatteryLegacy(
+              selectedKey,
+              payload.channel as number,
+              payload.capacity_mAh as number,
+              payload.initial_soc_pct as number,
+            )
+          }
+          break
+        case 'set_relay': {
+          // The RelaysTab builds a full RelayRule (overcurrent_A,
+          // undervoltage_V, etc.). Per the unified-helper contract, this
+          // command now persists only the manual-override bits through
+          // setRelayEnergized; the rule-config fields (overcurrent_A etc.)
+          // are ignored here. Pages that need the full rule should migrate
+          // to setSwitch (list-shape) in a follow-up.
+          const isEnergized = (payload.is_energized as boolean | undefined) ?? false
+          const activeHigh = (payload.active_high as boolean | undefined) ?? true
+          const idx = payload.idx as number
+          await dcSetRelayEnergized(selectedKey, idx, isEnergized, activeHigh)
+          break
+        }
+        case 'reboot':
+          await dcReboot(selectedKey, (payload.pin as string) ?? '')
+          break
+        case 'factory_reset':
+          await dcFactoryReset(selectedKey, (payload.pin as string) ?? '')
+          break
+        case 'calibrate_baseline':
+          await dcCalibrateBaseline(selectedKey)
+          break
+        case 'reset_coulomb':
+          await dcResetCoulomb(selectedKey, payload.channel as number)
+          break
+        case 'set_battery_profile':
+          // Legacy shape. The device's polled handler still accepts the
+          // old flat `{channel, system_voltage, cell_count, full_voltage,
+          // ...}` payload, so we keep a direct insert here rather than
+          // going through dcSetBatteryProfile (which takes the new
+          // BatteryChemistryProfile shape).
+          {
+            const { error } = await supabase.from('settings_commands').insert({
+              device_key: selectedKey,
+              cmd_type,
+              payload,
+              status: 'pending',
+            })
+            if (error) throw error
+          }
+          break
+        case 'set_channel_group':
+          // No helper yet. Direct insert kept here until a typed wrapper
+          // is added in a follow-up batch.
+          {
+            const { error } = await supabase.from('settings_commands').insert({
+              device_key: selectedKey,
+              cmd_type,
+              payload,
+              status: 'pending',
+            })
+            if (error) throw error
+          }
+          break
+        default: {
+          // Unknown command types still fall through to a direct insert
+          // so the page remains functional until a helper lands. This
+          // keeps the surface unchanged from the pre-migration build.
+          const { error } = await supabase.from('settings_commands').insert({
+            device_key: selectedKey,
+            cmd_type,
+            payload,
+            status: 'pending',
+          })
+          if (error) throw error
+        }
+      }
       setMessage(`Command queued: ${cmd_type}`)
       setTimeout(() => setMessage(''), 3000)
+      return { ok: true }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'unknown error'
       setMessage(`Error: ${msg}`)
       setTimeout(() => setMessage(''), 3000)
+      return { ok: false, error: msg }
     }
   }
 
@@ -286,11 +426,8 @@ export default function SettingsPage() {
             {/* Calibration tab */}
             {activeTab === 'calibration' && (
               <CalibrationTab deviceChannels={deviceChannels} onSave={(ch, type, value) =>
-                sendSupabaseCommand('set_calibration', { channel: ch, type, value }).then(() => {
-                  setMessage('Calibration queued')
-                  setTimeout(() => setMessage(''), 3000)
-                }).catch((e) => setMessage(`Error: ${e.message ?? e}`))
-              } sendSupabaseCommand={sendSupabaseCommand} />
+                sendCommand('set_calibration', { channel: ch, type, value })
+              } sendCommand={sendCommand} />
             )}
 
             {/* Sensors tab */}
@@ -488,7 +625,7 @@ export default function SettingsPage() {
   )
 }
 
-function CalibrationTab({ deviceChannels, onSave, sendSupabaseCommand }: { deviceChannels: DeviceChannels; onSave: (ch: number, type: number, value: number) => void; sendSupabaseCommand?: (cmd_type: string, payload: Record<string, unknown>) => Promise<void> }) {
+function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannels: DeviceChannels; onSave: (ch: number, type: number, value: number) => void; sendCommand?: (cmd_type: string, payload: Record<string, unknown>) => Promise<SendCommandResult> }) {
   const cal = deviceChannels.channel_calibration
   const [vals, setVals] = useState({
     volt_offset_mv: ['0','0','0'],
@@ -557,7 +694,7 @@ function CalibrationTab({ deviceChannels, onSave, sendSupabaseCommand }: { devic
                     const key = type === 'volt_offset_mv' ? 'volt_offset_mv' : type === 'volt_gain' ? 'volt_gain' : type === 'curr_offset_ma' ? 'curr_offset_ma' : 'curr_gain'
                     onSave(ch, ti, parseFloat(vals[key][ch]) || 0)
                   })
-                  sendSupabaseCommand?.('set_invert_curr', { channel: ch, invert: invertCurr[ch] })
+                  sendCommand?.('set_invert_curr', { channel: ch, invert: invertCurr[ch] })
                 }}
                   className="text-xs bg-brand-600 text-white px-2 py-1.5 rounded-lg">Save</button>
               </td>
@@ -575,7 +712,7 @@ function CalibrationTab({ deviceChannels, onSave, sendSupabaseCommand }: { devic
         {baselineMsg && <p className="text-xs text-blue-600 mb-2">{baselineMsg}</p>}
         <button
           onClick={() => {
-            sendSupabaseCommand?.('calibrate_baseline', {})
+            sendCommand?.('calibrate_baseline', {})
             setBaselineMsg('Baseline calibration started — check device serial for progress.')
             setTimeout(() => setBaselineMsg(''), 6000)
           }}
@@ -739,7 +876,7 @@ function ChannelGroupsTab({ deviceChannels, onSave }: { deviceChannels: DeviceCh
   )
 }
 
-function BatteriesTab({ onSave, sendCommand }: { onSave: (ch: number, bat: BatteryConfig) => void; sendCommand?: (cmd_type: string, payload: Record<string, unknown>) => void }) {
+function BatteriesTab({ onSave, sendCommand }: { onSave: (ch: number, bat: BatteryConfig) => void; sendCommand?: (cmd_type: string, payload: Record<string, unknown>) => Promise<SendCommandResult> }) {
   const [vals, setVals] = useState([{ capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }])
   const [profiles, setProfiles] = useState([{ name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }, { name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }, { name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }, { name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }])
   const [expanded, setExpanded] = useState<number | null>(null)

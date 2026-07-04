@@ -148,6 +148,33 @@ export async function setBattery(deviceKey: string, channel: number, profile_id:
   return enqueue(deviceKey, 'set_battery', { channel, profile_id })
 }
 
+/**
+ * Legacy capacity-only battery binding.
+ *
+ * Some very old firmwares (and the SettingsPage "Save Basic" path) still
+ * send a flat `{channel, capacity_mAh, initial_soc_pct}` payload rather than
+ * a profile id. The device's polled handler accepts this as a fallback for
+ * the new `set_battery` shape; new code should prefer setBattery with a
+ * profile_id. Kept for backward compatibility.
+ */
+export async function setBatteryLegacy(
+  deviceKey: string,
+  channel: number,
+  capacity_mAh: number,
+  initial_soc_pct: number,
+) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 15) {
+    throw new Error('channel must be an integer in 0..15')
+  }
+  if (!Number.isFinite(capacity_mAh) || capacity_mAh < 0) {
+    throw new Error('capacity_mAh must be a non-negative finite number')
+  }
+  if (!Number.isFinite(initial_soc_pct) || initial_soc_pct < 0 || initial_soc_pct > 100) {
+    throw new Error('initial_soc_pct must be a finite number in 0..100')
+  }
+  return enqueue(deviceKey, 'set_battery', { channel, capacity_mAh, initial_soc_pct })
+}
+
 /** Create or update a custom battery profile (or overwrite a built-in). */
 export async function setBatteryProfile(deviceKey: string, profile: BatteryChemistryProfile) {
   if (!Number.isInteger(profile.id) || profile.id < 0 || profile.id > 15) {
@@ -298,6 +325,36 @@ export async function setChannelName(deviceKey: string, channel: number, name: s
     throw new Error('name must be a string')
   }
   return enqueue(deviceKey, 'set_channel_name', { channel, name })
+}
+
+/**
+ * Configure a virtual channel (source mapping for voltage/current).
+ *
+ * `voltage_src` (0..4): 0=none, 1=ina3221_volt, 2=ina3221_curr, 3=ina226,
+ * 4=ads1115. `current_src` (0..3): 0=none, 1=ina3221, 2=ina226. See
+ * docs/API.md for the full `set_virtual_channel` schema.
+ */
+export async function setVirtualChannel(
+  deviceKey: string,
+  channel: number,
+  config: { voltage_src: number; voltage_idx: number; current_src: number; current_idx: number },
+) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 3) {
+    throw new Error('channel must be an integer in 0..3')
+  }
+  if (!Number.isInteger(config.voltage_src) || config.voltage_src < 0 || config.voltage_src > 4) {
+    throw new Error('voltage_src must be an integer in 0..4')
+  }
+  if (!Number.isInteger(config.voltage_idx) || config.voltage_idx < 0 || config.voltage_idx > 15) {
+    throw new Error('voltage_idx must be a non-negative integer in 0..15')
+  }
+  if (!Number.isInteger(config.current_src) || config.current_src < 0 || config.current_src > 3) {
+    throw new Error('current_src must be an integer in 0..3')
+  }
+  if (!Number.isInteger(config.current_idx) || config.current_idx < 0 || config.current_idx > 15) {
+    throw new Error('current_idx must be a non-negative integer in 0..15')
+  }
+  return enqueue(deviceKey, 'set_virtual_channel', { channel, ...config })
 }
 
 // ── Connectivity / provisioning ──────────────────────────────────────────────
