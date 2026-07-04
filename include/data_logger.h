@@ -8,6 +8,15 @@
 
 enum EntryType : uint8_t { ENTRY_BASE = 0xB0, ENTRY_DELTA = 0xD0 };
 
+// Data logger wire format: logs the FIRST 4 logical channels only. The
+// pod model exposes up to MAX_LOGICAL_CHANNELS (16) channels via telemetry
+// (MQTT/HTTP/Supabase), but the on-device buffer is fixed at 4 channels
+// to keep the ring buffer small and the delta-compression math simple.
+// Channels 4..15 are not recorded in the local data buffer — they only
+// reach consumers via the v1 telemetry schema that includes all 16.
+// Bumping the channel count to MAX_LOGICAL_CHANNELS would be a wire-
+// format break (BaseEntry/DeltaEntry would need a count byte and a v2
+// entry type).
 struct BaseEntry {
     uint8_t  type;
     uint32_t timestamp_ms;

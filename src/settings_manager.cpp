@@ -168,20 +168,44 @@ void settings_save_calibration(const Calibration* in) {
     prefs.putBytes("cal", in, sizeof(Calibration));
 }
 
+// Version byte for the ChannelCalibration blob. Bump when the struct layout
+// (i.e. array sizes) changes. The legacy 48-byte blob (3-element arrays
+// without invert_curr) is version 1; the MAX_LOGICAL_CHANNELS-sized blob
+// is version 2.
+static const uint8_t kCalBlobVersion = 2;
+static const char kCalBlobVersionKey[] = "chan_cal_ver";
+// Size of the legacy v1 blob (3 channels, no invert_curr).
+//   4 float[3] arrays = 12 * 4 = 48 bytes
+static const size_t kCalBlobV1Size = 48;
+
 bool settings_load_channel_calibration(ChannelCalibration* out) {
     if (!prefs.isKey("chan_cal")) return false;
     size_t len = prefs.getBytes("chan_cal", out, sizeof(ChannelCalibration));
-    if (len == sizeof(ChannelCalibration)) return true;
-    // Backward compat: older struct (48 bytes) without invert_curr field
-    if (len == 48) {
+    // Reject blobs larger than the current struct — never happens in
+    // production but guards against accidentally growing MAX_LOGICAL_CHANNELS.
+    if (len == sizeof(ChannelCalibration)) {
+        // Version 2 — current layout. Make sure the version byte matches;
+        // if not, a future field reshuffled the layout and we should drop
+        // the blob rather than mis-decode it.
+        uint8_t stored = prefs.getUChar(kCalBlobVersionKey, 0);
+        if (stored != kCalBlobVersion) {
+            return false;
+        }
+        return true;
+    }
+    // Backward compat: legacy v1 blob (48 bytes, 3-element arrays, no invert_curr).
+    if (len == kCalBlobV1Size) {
         memset(out, 0, sizeof(ChannelCalibration));
         prefs.getBytes("chan_cal", out, len);
+        // Stamp the version byte so subsequent loads treat it as upgraded.
+        prefs.putUChar(kCalBlobVersionKey, kCalBlobVersion);
         return true;
     }
     return false;
 }
 void settings_save_channel_calibration(const ChannelCalibration* in) {
     prefs.putBytes("chan_cal", in, sizeof(ChannelCalibration));
+    prefs.putUChar(kCalBlobVersionKey, kCalBlobVersion);
 }
 
 float settings_load_coulomb_mAh(uint8_t channel) {
@@ -409,5 +433,17 @@ void settings_clear_discovered() {
 }
 
 void settings_factory_reset() {
+    // Wipe pm-settings (this is the only Preferences instance we own
+    // directly — the static `prefs` in this translation unit). Battery
+    // profiles and bindings live in the "pm-battery" namespace managed by
+    // battery_profile.cpp / battery_state.cpp. Open a fresh scoped handle
+    // and clear it here so factory reset covers both namespaces.
     prefs.clear();
+    {
+        Preferences bat;
+        if (bat.begin("pm-battery", false)) {
+            bat.clear();
+            bat.end();
+        }
+    }
 }

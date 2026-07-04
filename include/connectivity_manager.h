@@ -22,6 +22,12 @@ void publish_switch_state(uint8_t idx, bool is_energized);
 bool get_ble_pin_from_supabase(char* pin_str, size_t len);
 bool is_cloud_connected();
 
+// True once NTP has successfully synced the wall clock. Until then
+// `time()` returns a stale / untrusted value and the telemetry path stamps
+// `ts=0` plus a `time_source: "uptime"` flag so consumers can distinguish
+// "device was online at sample time" from "wall-clock time at sample time".
+bool ntp_is_synced();
+
 // Virtual channel helpers: get sensor values by source type
 // src: 0=none, 1=ina3221_volt(0x42), 2=ina3221_curr(0x40), 3=ina226, 4=ads1115
 float get_sensor_voltage(uint8_t src, uint8_t idx, const SensorSnapshot& data);

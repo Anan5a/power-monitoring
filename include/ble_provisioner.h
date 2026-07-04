@@ -13,7 +13,11 @@ void ble_notify_sensor_data(const char* data, size_t len);
 void sync_ble_pin_to_supabase();
 bool get_ble_pin_from_supabase(char* pin_str, size_t len);
 
-// Apply a settings command received from Supabase (no PIN required, trusted channel)
-void apply_settings_command(const char* cmd_type, const char* payload_json);
+// Apply a settings command received from Supabase (no PIN required, trusted channel).
+// Returns true on successful apply, false if the command was rejected (unknown
+// command, bad payload, or missing required fields). Callers (e.g. the Supabase
+// poller) should only run the post-hook (WiFi reconnect, MQTT reconnect, etc.)
+// on success — a failed apply must not trigger side effects.
+bool apply_settings_command(const char* cmd_type, const char* payload_json);
 
 #endif

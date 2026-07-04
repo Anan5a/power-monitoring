@@ -54,7 +54,14 @@ struct TelemetrySwitch {
     uint8_t type;          // SwitchType (RELAY, MOSFET, SSR, ...)
     bool    state;         // energized (logical state, not GPIO level)
     bool    auto_mode;     // auto-trip evaluation enabled
-    bool    rule_tripped;  // combined condition currently active
+    // rule_tripped is the LATCHED state, not a live evaluation: it is true
+    // iff the relay is currently energized AND its rule is enabled. The
+    // field is named for wire-format backward compatibility — the value
+    // reflects "the rule has fired and the relay is in the active state"
+    // rather than "the rule's combined conditions are satisfied right now".
+    // Consumers that need live condition status must evaluate the rule
+    // themselves against the channel V/I/P values in this snapshot.
+    bool    rule_tripped;
 };
 
 struct TelemetryBattery {

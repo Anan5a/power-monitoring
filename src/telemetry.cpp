@@ -147,11 +147,12 @@ void telemetry_build(TelemetrySnapshot& out) {
         ts.type = ch.type;
         ts.state = get_switch_state(i);
         ts.auto_mode = switch_get_auto_enabled();
-        // rule_tripped is "is the combined condition currently satisfied?"
-        // We treat it conservatively: a switch is "tripped" if its rule is
-        // enabled AND it is energized (i.e. the rule fired and we're in the
-        // active state). A future enhancement could re-evaluate the rule
-        // against the latest snapshot here.
+        // rule_tripped: LATCHED state, not a live evaluation. True iff
+        // the relay is currently energized AND its rule is enabled. This
+        // is the wire-format-compatible "has the rule fired and stuck?"
+        // signal; it is NOT "are the rule's combined conditions satisfied
+        // right now?". Consumers that need the latter must evaluate the
+        // rule themselves against the channels[] V/I/P in this snapshot.
         ts.rule_tripped = ts.state && settings_load_switch_rule(i, &rule) && rule.enabled;
     }
 
@@ -179,23 +180,31 @@ void telemetry_build(TelemetrySnapshot& out) {
         uint8_t pid = battery_channel_profile(ch);
         const BatteryChemistryProfile* bp = battery_profile_get(pid);
 
+        // Point-in-time snapshot of the channel state under a single
+        // critical-section lock. The previous implementation called seven
+        // getters sequentially, each taking its own lock — a sensorTask
+        // tick in between could have updated cumulative_Ah_in but not yet
+        // last_V, so the published snapshot could mix frames. The snapshot
+        // helper eliminates that race.
+        BatteryState st;
+        cycle_counter_snapshot(ch, &st);
+
         TelemetryBattery& tb = out.battery[bat_count++];
         tb.ch = ch;
         tb.profile_id = pid;
         tb.chemistry = bp ? bp->chemistry : 0;
         tb.rated_Ah  = bp ? bp->rated_capacity_Ah : 0.0f;
 
-        // Authoritative values from cycle_counter. These are updated every
-        // 1Hz tick in sensorTask; publish (5s cadence) always reads at least
-        // one tick old.
-        tb.soc_pct             = cycle_counter_get_last_soc_pct(ch);
-        tb.V                   = cycle_counter_get_last_voltage(ch);
-        tb.I                   = cycle_counter_get_last_current(ch);
-        tb.cumulative_Ah_in    = cycle_counter_get_cumulative_Ah_in(ch);
-        tb.cumulative_Ah_out   = cycle_counter_get_cumulative_Ah_out(ch);
-        tb.equivalent_full_cycles = cycle_counter_get_equivalent_full_cycles(ch);
+        // Authoritative values from the snapshot (same fields as before;
+        // ordering under one lock guarantees they're a consistent view).
+        tb.soc_pct             = st.last_SoC_pct;
+        tb.V                   = st.last_V;
+        tb.I                   = st.last_I;
+        tb.cumulative_Ah_in    = st.cumulative_Ah_in;
+        tb.cumulative_Ah_out   = st.cumulative_Ah_out;
+        tb.equivalent_full_cycles = st.equivalent_full_cycles;
         (void)cycle_counter_get_last_update_ms;  // not exposed in TelemetryBattery
-        tb.capacity_test_active  = capacity_test_is_active(ch);
+        tb.capacity_test_active  = st.test.active;
         tb.capacity_test_soh_pct = capacity_test_last_soh_pct(ch);
         // capacity_test_soh_valid stays true if either the cycle_counter's
         // pending result or the one-shot side channel set a recent value.

@@ -25,6 +25,7 @@
 #include <HTTPClient.h>
 #include <time.h>
 #include <stdlib.h>     // setenv
+#include <math.h>       // isfinite
 #include <esp_sntp.h>
 
 static WiFiClient wifiClient;
@@ -63,13 +64,14 @@ static uint16_t g_deferred_requests = 0;
 static uint8_t  g_deferred_relay_idx = 0;
 static bool     g_deferred_relay_state = false;
 
-// Telemetry batching: normal send=1 entry, drain burst=3-5 when backlogged
-// to prevent RAM buffer from filling up during network lag.
-#define BATCH_SIZE 5
-#define BATCH_DRAIN_THRESHOLD 2   // send up to BATCH_DRAIN entries when g_batch_count >= this
-#define BATCH_DRAIN_MAX 5         // cap burst at 5 entries
-static SensorSnapshot g_batch[BATCH_SIZE];
-static uint8_t    g_batch_count = 0;
+// Heap-guard thresholds. All Supabase/MQTT publish paths bail if free heap
+// drops below MIN_FREE_HEAP_FOR_PUBLISH; publish_switch_state / sync_*
+// operations (low frequency) can use a slightly lower threshold. Centralised
+// so a single tuning change covers every site.
+static const uint32_t MIN_FREE_HEAP_FOR_PUBLISH   = 13000;  // full HTTP POST + JSON serialize
+static const uint32_t MIN_FREE_HEAP_FOR_LOWFREQ   = 8192;   // sync_device_channels / publish_log_batch_supabase
+static const uint32_t MIN_FREE_HEAP_FOR_SYNC_OPS  = 4096;   // sync_calibration / sync_ble_pin / calibration_status
+static const uint32_t MIN_FREE_HEAP_FOR_SWITCH    = 3072;   // publish_switch_state (small payload)
 
 // sync_device_channels_to_supabase is static and not in header — forward declare
 static void sync_device_channels_to_supabase();
@@ -112,7 +114,7 @@ static void drain_telemetry_response() {
 
 static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
     if (WiFi.status() != WL_CONNECTED) return false;
-    if (ESP.getFreeHeap() < 13000) return false;
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_PUBLISH) return false;
     if (!g_telemetry_http_ready) {
         g_telemetry_client.setInsecure();
         g_telemetry_client.setHandshakeTimeout(30);
@@ -146,7 +148,7 @@ static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
 
 static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     if (WiFi.status() != WL_CONNECTED) return false;
-    if (ESP.getFreeHeap() < 12288) return false;
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_LOWFREQ) return false;
     if (g_supa_http_ready) {
         // Always tear down and rebuild — setReuse(false) means no pooling benefit,
         // and WiFiClientSecure::connected() only checks TCP, not TLS session health.
@@ -288,6 +290,8 @@ static bool g_ntp_synced = false;
 static bool g_ntp_timeout_warned = false;
 static const uint32_t NTP_TIMEOUT_MS = 5000;
 
+bool ntp_is_synced() { return g_ntp_synced; }
+
 static SyncResult sync_time() {
     if (skip_network) return SYNC_NO_WIFI;
     start_sntp();
@@ -317,6 +321,9 @@ static SyncResult sync_time() {
     log_set_epoch(t);
     log_epoch_valid_set(true);  // trusted post-2023 epoch
     g_ntp_synced = true;
+    // Reset the warning latch so the next timeout (e.g. after a WiFi
+    // reconnect) prints a fresh message instead of staying silent.
+    g_ntp_timeout_warned = false;
     struct tm ti = {};
     gmtime_r(&t, &ti);
     char buf[32];
@@ -447,8 +454,16 @@ static void connect_mqtt() {
     static uint32_t last_mqtt_retry = -30000UL; // underflow so first call passes
     if (millis() - last_mqtt_retry < 30000) return; // rate limit: 1 attempt per 30s
     last_mqtt_retry = millis();
-    if (mqtt.connect("power-monitor-esp32")) {
+    // Last-will-and-testament: when the broker sees this client drop, it
+    // publishes "offline" to <topic>/status. We override with "online" right
+    // after a successful connect so subscribers see the actual state.
+    // PubSubClient exposes LWT via the connect() overloads, not a setWill().
+    const char* will_topic = MQTT_TOPIC "/status";
+    bool connected = mqtt.connect("power-monitor-esp32", will_topic, 1, true, "offline");
+    if (connected) {
         LOG_PRINTLN("MQTT connected");
+        // Override LWT with our actual liveness state.
+        mqtt.publish(will_topic, "online", true);
     } else {
         LOG_PRINT("MQTT fail rc=%d\n", mqtt.state());
     }
@@ -483,7 +498,7 @@ static void print_http_error(HTTPClient& http, int rc) {
 
 void publish_data_http(const SensorSnapshot& data, const char* json_buffer, size_t json_len) {
     (void)data;
-    if (ESP.getFreeHeap() < 4096) return;
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_SYNC_OPS) return;
     if (!settings_load_http_enabled()) return;
     char url[128], token[64];
     if (!settings_load_http_endpoint(url, token, sizeof(url))) return;
@@ -611,7 +626,12 @@ void publish_log_batch() {
     size_t batch_len = log_pop_batch(batch, sizeof(batch));
     while (batch_len > 0) {
         base64_encode(batch, batch_len, encoded);
-        mqtt.publish(MQTT_LOG_TOPIC, encoded);
+        if (!mqtt.publish(MQTT_LOG_TOPIC, encoded)) {
+#if CORE_DEBUG_LEVEL >= 3
+            LOG_PRINTLN("[MQTT] log publish() returned false — broker dropped or buffer full");
+#endif
+            break;  // stop draining — broker connection is likely dead
+        }
         batch_len = log_pop_batch(batch, sizeof(batch));
     }
 
@@ -621,7 +641,12 @@ void publish_log_batch() {
             size_t n = log_read_overflow_chunk(batch, sizeof(batch));
             if (n == 0) break;
             base64_encode(batch, n, encoded);
-            mqtt.publish(MQTT_LOG_TOPIC, encoded);
+            if (!mqtt.publish(MQTT_LOG_TOPIC, encoded)) {
+#if CORE_DEBUG_LEVEL >= 3
+                LOG_PRINTLN("[MQTT] log publish() returned false during overflow drain");
+#endif
+                break;
+            }
         }
         log_close_overflow();
     }
@@ -647,14 +672,31 @@ static_assert(TELEMETRY_BUF_BYTES >= 2048,
               "Telemetry buffer < 2 KB; raise TELEMETRY_BUF_BYTES or shrink struct");
 
 static void write_float(JsonObject obj, const char* key, float v) {
+    // NaN/Inf floats are an absolute no-go on the wire: ArduinoJson's String
+    // ctor prints "nan"/"inf" which is not valid JSON, the server rejects it,
+    // and our heap budget is too tight to recover by retrying. Downgrade to 0
+    // so the row is still parsable and the dashboard can flag the missing
+    // data on the channel.
+    if (!isfinite(v)) v = 0.0f;
     obj[key] = String((double)v, FLOAT_DECIMALS);
 }
 
 static void serialize_telemetry_core(const TelemetrySnapshot& s, JsonObject root) {
     root["v"] = s.schema_version;          // schema version (uint8)
     root["schema"] = s.schema;             // "telemetry_v1"
+
+    // ts: 0 when NTP has never synced, otherwise the epoch seconds from
+    // telemetry_build(). The dashboard distinguishes the two via the
+    // time_source field below; the contract is documented in
+    // docs/API.md and the server treats ts=0 as "data is real but the
+    // wall-clock is not yet trustworthy."
     root["ts"] = s.ts;
     root["ts_ms"] = s.ts_ms;
+    if (s.ts == 0 || !g_ntp_synced) {
+        root["time_source"] = "uptime";
+    } else {
+        root["time_source"] = "ntp";
+    }
 
     JsonObject dev = root["device"].to<JsonObject>();
     dev["id"] = s.device.id;
@@ -830,7 +872,11 @@ void telemetry_kick_battery_profiles() {
 static JsonDocument g_supa_doc;
 
 #define LOG_BATCH_SIZE 10
-static JsonDocument g_log_doc;
+// send_log_entry / flush_log_batch each construct their own local
+// StaticJsonDocument. The previous static g_log_doc was shared state that
+// every caller had to remember to .clear() — easy to miss, and a corruption
+// source if any path forgets. The local doc costs a small heap frame per
+// call but is bounded (~1 KB) and confined to the single network task.
 static uint8_t g_log_count = 0;
 static uint32_t g_log_last_ts = 0;
 
@@ -838,8 +884,8 @@ static void flush_log_batch(const char* supabase_url, const char* anon_key,
     const char* device_key, const char* api_key) {
     if (g_log_count == 0) return;
 
-    g_log_doc.clear();
-    JsonArray arr = g_log_doc.to<JsonArray>();
+    StaticJsonDocument<1024> doc;
+    JsonArray arr = doc.to<JsonArray>();
 
     for (uint8_t e = 0; e < g_log_count; e++) {
         JsonObject elem = arr.add<JsonObject>();
@@ -851,14 +897,14 @@ static void flush_log_batch(const char* supabase_url, const char* anon_key,
 
     // Heap-allocated buffer to keep the network task's stack frame small.
     // LOG_BATCH_SIZE entries * ~300 bytes each ≈ 3 KB worst case.
-    size_t needed = serializeJson(g_log_doc, nullptr, 0) + 16;
+    size_t needed = serializeJson(doc, nullptr, 0) + 16;
     uint8_t* buffer = (uint8_t*)malloc(needed);
     if (!buffer) {
         LOG_PRINTLN("[LOG] OOM in flush_log_batch — dropping batch");
         g_log_count = 0;
         return;
     }
-    size_t len = serializeJson(g_log_doc, buffer, needed);
+    size_t len = serializeJson(doc, buffer, needed);
     telemetry_post("/rest/v1/rpc/insert_telemetry", (char*)buffer, len, supabase_url, anon_key);
     free(buffer);
     g_log_count = 0;
@@ -869,11 +915,9 @@ static void send_log_entry(uint32_t timestamp_ms, const int16_t* v, const int16_
     const char* device_key, const char* api_key) {
     if (!is_valid_uuid(api_key)) return;
 
-    JsonArray arr = g_log_doc.is<JsonArray>() ? g_log_doc.as<JsonArray>() : g_log_doc.to<JsonArray>();
-    if (!g_log_doc.is<JsonArray>()) {
-        g_log_doc.clear();
-        arr = g_log_doc.to<JsonArray>();
-    }
+    // Local doc per call (see fix-46 comment above g_log_count).
+    StaticJsonDocument<1024> doc;
+    JsonArray arr = doc.to<JsonArray>();
 
     JsonObject elem = arr.add<JsonObject>();
     elem["p_device_key"] = device_key;
@@ -908,8 +952,20 @@ static void send_log_entry(uint32_t timestamp_ms, const int16_t* v, const int16_
         payload[key] = get_switch_state(ch);
     }
 
-    elem["p_recorded_at"] = (uint32_t)log_to_epoch(timestamp_ms);
-    g_log_last_ts = (uint32_t)log_to_epoch(timestamp_ms);
+    {
+        time_t ts = log_to_epoch(timestamp_ms);
+        if (ts == (time_t)-1) {
+            // log_epoch_valid was false at the moment of encoding. Stamp 0
+            // so the consumer knows the timestamp is untrusted, and warn
+            // once per log batch.
+            elem["p_recorded_at"] = 0;
+            g_log_last_ts = 0;
+            LOG_PRINTLN("log timestamp invalid; stamping 0");
+        } else {
+            elem["p_recorded_at"] = (uint32_t)ts;
+            g_log_last_ts = (uint32_t)ts;
+        }
+    }
     g_log_count++;
 
     if (g_log_count >= LOG_BATCH_SIZE) {
@@ -966,7 +1022,7 @@ void publish_log_batch_supabase() {
     last_log_pub_ms = millis();
 
     // 8KB minimum — safe for g_supa_doc (~2KB) + stack buffers in this function
-    if (ESP.getFreeHeap() < 8192) {
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_LOWFREQ) {
         LOG_PRINTLN("[WARN] Low heap, skipping Supabase log publish");
         return;
     }
@@ -1093,18 +1149,19 @@ void publish_data(const SensorSnapshot& data) {
     JsonArray ina3221Arr = g_pub_doc["ina3221"].to<JsonArray>();
     for (uint8_t i = 0; i < 3; i++) {
         JsonObject ch = ina3221Arr.add<JsonObject>();
-        ch["v"] = get_channel_voltage(i);
-        ch["i"] = get_channel_current(i);
+        ch["v"] = isfinite(get_channel_voltage(i))   ? get_channel_voltage(i)   : 0.0f;
+        ch["i"] = isfinite(get_channel_current(i))   ? get_channel_current(i)   : 0.0f;
     }
 #if ENABLE_INA226
     JsonObject ina226Obj = g_pub_doc["ina226"].to<JsonObject>();
-    ina226Obj["v"] = get_channel_voltage(3);
-    ina226Obj["i"] = get_channel_current(3);
-    ina226Obj["p"] = get_channel_power(3);
+    ina226Obj["v"] = isfinite(get_channel_voltage(3)) ? get_channel_voltage(3) : 0.0f;
+    ina226Obj["i"] = isfinite(get_channel_current(3)) ? get_channel_current(3) : 0.0f;
+    ina226Obj["p"] = isfinite(get_channel_power(3))   ? get_channel_power(3)   : 0.0f;
 #endif
     JsonArray adcArr = g_pub_doc["ads1115"].to<JsonArray>();
     for (uint8_t i = 0; i < 4; i++) {
-        adcArr.add(get_channel_voltage(i));
+        float av = get_channel_voltage(i);
+        adcArr.add(isfinite(av) ? av : 0.0f);
     }
     g_pub_doc["log_entries"] = log_entries_count();
     g_pub_doc["log_buffer_kb"] = log_buffer_capacity() / 1024;
@@ -1135,9 +1192,9 @@ void publish_data(const SensorSnapshot& data) {
             i = get_channel_current(3);
             p = get_channel_power(3);
         }
-        snprintf(key, sizeof(key), "ch%d_V", ch); g_pub_doc[key] = v;
-        snprintf(key, sizeof(key), "ch%d_I", ch); g_pub_doc[key] = i;
-        snprintf(key, sizeof(key), "ch%d_P", ch); g_pub_doc[key] = p;
+        snprintf(key, sizeof(key), "ch%d_V", ch); g_pub_doc[key] = isfinite(v) ? v : 0.0f;
+        snprintf(key, sizeof(key), "ch%d_I", ch); g_pub_doc[key] = isfinite(i) ? i : 0.0f;
+        snprintf(key, sizeof(key), "ch%d_P", ch); g_pub_doc[key] = isfinite(p) ? p : 0.0f;
     }
     char buffer[1024];
     size_t len = serializeJson(g_pub_doc, buffer, sizeof(buffer));
@@ -1163,7 +1220,11 @@ void publish_data(const SensorSnapshot& data) {
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
         if (mqtt.connected() && millis() - last_mqtt_pub >= 1000) {
             last_mqtt_pub = millis();
-            mqtt.publish(MQTT_TOPIC, buffer, len);
+            if (!mqtt.publish(MQTT_TOPIC, buffer, len)) {
+#if CORE_DEBUG_LEVEL >= 3
+                LOG_PRINTLN("[MQTT] publish() returned false — broker dropped or buffer full");
+#endif
+            }
         }
     }
 
@@ -1187,7 +1248,7 @@ void publish_data(const SensorSnapshot& data) {
 void publish_data_supabase(const SensorSnapshot& data) {
     (void)data;
     if (skip_network) return;
-    if (ESP.getFreeHeap() < 13000) {
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_PUBLISH) {
         static unsigned long last_warn = 0;
         if (millis() - last_warn > 10000) {
             LOG_PRINT("[WARN] Low heap (%d / largest=%d), skipping Supabase publish\n",
@@ -1197,22 +1258,21 @@ void publish_data_supabase(const SensorSnapshot& data) {
         return;
     }
 
-    // Throttle incoming readings: keep a small window of un-pushed SensorSnapshots
-    // for the legacy / batching path, but with the new schema we send one
-    // canonical TelemetrySnapshot per call. The batching machinery is kept
-    // around because the caller's loop drains at 1 Hz and we still want to
-    // rate-limit at 1 per second downstream.
-    g_batch[g_batch_count++] = data;
-    if (g_batch_count < 1) return;
+    // The current path publishes one canonical TelemetrySnapshot per call —
+    // the legacy batching buffer (g_batch[]) and the `if (g_batch_count < 1)
+    // return;` dead-storage check were removed. The SensorSnapshot argument
+    // is accepted for caller compatibility (main.cpp pushes a 1Hz queue
+    // entry) but telemetry_build() pulls fresh data from sensor_manager /
+    // counters / NVS at the moment of publish, which is the right semantic
+    // for a 5-s publish tick.
 
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
-    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) { g_batch_count = 0; return; }
-    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) { g_batch_count = 0; return; }
-    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) { g_batch_count = 0; return; }
-    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) { g_batch_count = 0; return; }
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
     if (!is_valid_uuid(api_key)) {
         LOG_PRINTLN("[WARN] device_api_key is not a valid UUID — skip Supabase publish");
-        g_batch_count = 0;
         return;
     }
 
@@ -1222,9 +1282,7 @@ void publish_data_supabase(const SensorSnapshot& data) {
 
     // Wrap it in the Supabase RPC envelope: array of {p_device_key,
     // p_device_api_key, p_payload, p_recorded_at}. One row per call keeps the
-    // server-side insert trivial; the older path sent up to 5 rows at a time
-    // — we drop that batching for the v1 schema and rely on the 1-Hz call
-    // rate from main.cpp for throughput.
+    // server-side insert trivial.
     g_supa_doc.clear();
     JsonArray arr = g_supa_doc.to<JsonArray>();
     JsonObject elem = arr.add<JsonObject>();
@@ -1244,13 +1302,11 @@ void publish_data_supabase(const SensorSnapshot& data) {
     size_t needed = serializeJson(g_supa_doc, nullptr, 0) + 16;
     if (needed > 16384) {
         LOG_PRINT("[SUPA] payload too large: %u bytes — dropping\n", (unsigned)needed);
-        g_batch_count = 0;
         return;
     }
     char* buffer = (char*)malloc(needed);
     if (!buffer) {
-        LOG_PRINTLN("[SUPA] OOM serializing telemetry — dropping batch");
-        g_batch_count = 0;
+        LOG_PRINTLN("[SUPA] OOM serializing telemetry — dropping publish");
         return;
     }
     size_t len = serializeJson(g_supa_doc, buffer, needed);
@@ -1271,34 +1327,38 @@ void publish_data_supabase(const SensorSnapshot& data) {
     }
     free(buffer);
 
-    // Drain the input batch — single row sent, so any further rows in the
-    // window are dropped (legacy was 1-sensor-per-call anyway).
-    g_batch_count = 0;
-
     // Slow path: battery profile heartbeat (60s) and eager on change.
     publish_battery_profiles_heartbeat(supabase_url, anon_key);
 
     publish_calibration_status();
 }
 
-static JsonDocument g_cal_doc;
+// g_rpc_doc — shared RPC payload buffer for the network task.
+// IMPORTANT: This document is owned by the network task ONLY. It is used to
+// build RPC envelopes for sync_device_channels_to_supabase() and (in the
+// future) other sync paths. Any other thread that needs to build an RPC
+// payload MUST construct its own local StaticJsonDocument. The state machine
+// is: claim_settings_command -> apply -> sync_device_channels -> back to
+// loop. Nothing in that sequence re-enters RPC construction concurrently, so
+// a single static document is safe within the network task.
+static JsonDocument g_rpc_doc;
 
 // Sync full device_channels config to Supabase after any settings change.
 // This keeps Supabase device_channels row in sync with ESP32 NVS so the
 // dashboard UI sees up-to-date values after any config command.
 static void sync_device_channels_to_supabase() {
-    if (ESP.getFreeHeap() < 8192) return;
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_LOWFREQ) return;
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
     if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
     if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
     if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
     settings_load_supabase_api_key(api_key, sizeof(api_key));
 
-    g_cal_doc.clear();
-    g_cal_doc["device_key"] = device_key;
+    g_rpc_doc.clear();
+    g_rpc_doc["device_key"] = device_key;
 
     // Channel names
-    JsonArray names = g_cal_doc["channel_names"].to<JsonArray>();
+    JsonArray names = g_rpc_doc["channel_names"].to<JsonArray>();
     for (uint8_t ch = 0; ch < 4; ch++) {
         JsonObject n = names.add<JsonObject>();
         n["channel"] = ch;
@@ -1308,7 +1368,7 @@ static void sync_device_channels_to_supabase() {
     }
 
     // Battery profiles
-    JsonArray bats = g_cal_doc["battery_profiles"].to<JsonArray>();
+    JsonArray bats = g_rpc_doc["battery_profiles"].to<JsonArray>();
     const char* CHEM[] = { "lead_acid", "lipol", "liion", "nimh", "lifepo4", "agm", "fla" };
     for (uint8_t ch = 0; ch < 4; ch++) {
         BatteryProfile bp;
@@ -1328,7 +1388,7 @@ static void sync_device_channels_to_supabase() {
     }
 
     // Channel groups
-    JsonArray groups = g_cal_doc["channel_groups"].to<JsonArray>();
+    JsonArray groups = g_rpc_doc["channel_groups"].to<JsonArray>();
     uint8_t gc = settings_load_channel_group_count();
     for (uint8_t i = 0; i < gc; i++) {
         ChannelGroup cg;
@@ -1342,7 +1402,7 @@ static void sync_device_channels_to_supabase() {
     }
 
     // Virtual channels
-    JsonArray vcs = g_cal_doc["virtual_channels"].to<JsonArray>();
+    JsonArray vcs = g_rpc_doc["virtual_channels"].to<JsonArray>();
     for (uint8_t ch = 0; ch < 4; ch++) {
         VirtualChannelConfig vc;
         if (settings_load_virtual_channel(ch, &vc)) {
@@ -1358,7 +1418,7 @@ static void sync_device_channels_to_supabase() {
     // Calibration
     ChannelCalibration cal;
     if (settings_load_channel_calibration(&cal)) {
-        JsonObject cal_obj = g_cal_doc["channel_calibration"].to<JsonObject>();
+        JsonObject cal_obj = g_rpc_doc["channel_calibration"].to<JsonObject>();
         JsonArray volt_offset = cal_obj["volt_offset_mv"].to<JsonArray>();
         JsonArray volt_gain = cal_obj["volt_gain"].to<JsonArray>();
         JsonArray curr_offset = cal_obj["curr_offset_ma"].to<JsonArray>();
@@ -1374,7 +1434,7 @@ static void sync_device_channels_to_supabase() {
     }
 
     static char buffer[1024];
-    size_t len = serializeJson(g_cal_doc, buffer);
+    size_t len = serializeJson(g_rpc_doc, buffer);
 
     // Use RPC for device sync (same security definer pattern as claim_settings_command)
     char path[256];
@@ -1383,12 +1443,12 @@ static void sync_device_channels_to_supabase() {
     // Build RPC body: {p_device_key: "...", p_payload: {...}}
     JsonDocument rpc_doc;
     rpc_doc["p_device_key"] = device_key;
-    // Embed the full device_channels payload directly (g_cal_doc is still intact here)
-    rpc_doc["p_payload"]["channel_names"] = g_cal_doc["channel_names"];
-    rpc_doc["p_payload"]["battery_profiles"] = g_cal_doc["battery_profiles"];
-    rpc_doc["p_payload"]["channel_calibration"] = g_cal_doc["channel_calibration"];
-    rpc_doc["p_payload"]["virtual_channels"] = g_cal_doc["virtual_channels"];
-    rpc_doc["p_payload"]["channel_groups"] = g_cal_doc["channel_groups"];
+    // Embed the full device_channels payload directly (g_rpc_doc is still intact here)
+    rpc_doc["p_payload"]["channel_names"] = g_rpc_doc["channel_names"];
+    rpc_doc["p_payload"]["battery_profiles"] = g_rpc_doc["battery_profiles"];
+    rpc_doc["p_payload"]["channel_calibration"] = g_rpc_doc["channel_calibration"];
+    rpc_doc["p_payload"]["virtual_channels"] = g_rpc_doc["virtual_channels"];
+    rpc_doc["p_payload"]["channel_groups"] = g_rpc_doc["channel_groups"];
 
     len = serializeJson(rpc_doc, buffer);
     int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
@@ -1401,7 +1461,7 @@ static void sync_device_channels_to_supabase() {
 
 void sync_calibration_to_supabase() {
     if (skip_network) return;
-    if (ESP.getFreeHeap() < 4096) return;
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_SYNC_OPS) return;
     telemetry_http_reset();
     vTaskDelay(pdMS_TO_TICKS(50));
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
@@ -1443,7 +1503,7 @@ void sync_calibration_to_supabase() {
 
 void sync_ble_pin_to_supabase() {
     if (skip_network) return;
-    if (ESP.getFreeHeap() < 4096) return;
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_SYNC_OPS) return;
     telemetry_http_reset();
     vTaskDelay(pdMS_TO_TICKS(50));
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
@@ -1474,7 +1534,7 @@ void sync_ble_pin_to_supabase() {
 
 void publish_switch_state(uint8_t idx, bool is_energized) {
     if (skip_network) { LOG_PRINTLN("[SWITCH] skip: offline mode"); return; }
-    if (ESP.getFreeHeap() < 3072) { LOG_PRINT("[SWITCH] skip: heap %d < 3072\n", ESP.getFreeHeap()); return; }
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_SWITCH) { LOG_PRINT("[SWITCH] skip: heap %d < %u\n", ESP.getFreeHeap(), (unsigned)MIN_FREE_HEAP_FOR_SWITCH); return; }
     telemetry_http_reset();
     vTaskDelay(pdMS_TO_TICKS(50));
     char supabase_url[128], anon_key[128], device_key[64];
@@ -1495,7 +1555,10 @@ void publish_switch_state(uint8_t idx, bool is_energized) {
     rpc_doc["p_is_energized"] = is_energized;
     rpc_doc["p_active_high"] = ch.active_high;
     rpc_doc["p_switch_type"] = ch.type;
-    rpc_doc["p_last_tripped_at"] = "now";
+    // NOTE: do NOT send p_last_tripped_at. The Postgres column has `default now()`,
+    // and the literal string "now" we used to send is not a valid timestamptz.
+    // The server-side default fills in the real wall-clock timestamp; if the
+    // device is not NTP-synced, that's still better than the string "now".
     rpc_doc["p_channel"] = rule.channel;
 
     static char buffer[256];
@@ -1545,7 +1608,7 @@ void publish_calibration_status() {
     static unsigned long last_cal_pub_ms = 0;
     if (millis() - last_cal_pub_ms < 5000) return; // rate limit: 1 cal publish per 5s
     last_cal_pub_ms = millis();
-    if (ESP.getFreeHeap() < 4096) return;
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_SYNC_OPS) return;
     telemetry_http_reset();
     vTaskDelay(pdMS_TO_TICKS(50));
 
@@ -1559,11 +1622,14 @@ void publish_calibration_status() {
     uint8_t tick_count;
     sensor_get_baseline_progress(stddev_out, &tick_count);
 
-    g_cal_doc.clear();
-    g_cal_doc["device_key"] = device_key;
-    g_cal_doc["calibrating"] = sensor_is_calibrating();
-    g_cal_doc["baseline_tick"] = tick_count;
-    JsonObject sd = g_cal_doc["baseline_stddev"].to<JsonObject>();
+    // Local doc — this function runs only from the network task and has
+    // no other caller. Sharing with sync_device_channels_to_supabase()
+    // (which uses g_rpc_doc) would require synchronising the two paths.
+    StaticJsonDocument<512> cal_doc;
+    cal_doc["device_key"] = device_key;
+    cal_doc["calibrating"] = sensor_is_calibrating();
+    cal_doc["baseline_tick"] = tick_count;
+    JsonObject sd = cal_doc["baseline_stddev"].to<JsonObject>();
     char key[16];
     for (int i = 0; i < 3; i++) {
         snprintf(key, sizeof(key), "ina3221_i%d", i);
@@ -1573,10 +1639,10 @@ void publish_calibration_status() {
         snprintf(key, sizeof(key), "ina3221_v%d", i);
         sd[key] = stddev_out[i + 3];
     }
-    g_cal_doc["updated_at"] = "now";
+    cal_doc["updated_at"] = "now";
 
     static char buffer[512];
-    size_t len = serializeJson(g_cal_doc, buffer);
+    size_t len = serializeJson(cal_doc, buffer);
     // Use security definer RPC to bypass RLS
     char path[256];
     snprintf(path, sizeof(path), "/rest/v1/rpc/sync_sensor_calibration_status");
@@ -1635,7 +1701,7 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
 
 void check_settings_commands() {
     if (skip_network) return;
-    if (ESP.getFreeHeap() < 13000) return;
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_PUBLISH) return;
     telemetry_http_reset();
     vTaskDelay(pdMS_TO_TICKS(50));
 
@@ -1649,10 +1715,11 @@ void check_settings_commands() {
     if (millis() - last_check < 5000) return;  // poll every 5s
     last_check = millis();
 
-    g_cal_doc.clear();
-    g_cal_doc["p_device_key"] = device_key;
+    // Local doc for the claim body — small, no need to share.
+    StaticJsonDocument<256> claim_doc;
+    claim_doc["p_device_key"] = device_key;
     static char buffer[256];
-    size_t len = serializeJson(g_cal_doc, buffer);
+    size_t len = serializeJson(claim_doc, buffer);
 
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s/rest/v1/rpc/claim_settings_command", supabase_url);
@@ -1717,8 +1784,11 @@ void check_settings_commands() {
         resp_buf[json_len] = '\0';
         // LOG_PRINT("[SETTINGS] parse attempt: %.128s\n", resp_buf);
 
-        g_cal_doc.clear();
-        DeserializationError err = deserializeJson(g_cal_doc, resp_buf);
+        // Local doc for the parsed response — this branch uses cmd_type +
+        // payload only, and never re-enters the network task, so a stack-
+        // allocated StaticJsonDocument is the right scope.
+        StaticJsonDocument<1024> resp_doc;
+        DeserializationError err = deserializeJson(resp_doc, resp_buf);
         if (err) {
             // LOG_PRINT("[SETTINGS] parse error: %s | body: %.200s\n", err.c_str(), resp_buf);
             supabase_http_reset();
@@ -1727,7 +1797,7 @@ void check_settings_commands() {
             return;
         }
 
-        const char* cmd_type = g_cal_doc["cmd_type"] | "";
+        const char* cmd_type = resp_doc["cmd_type"] | "";
         if (strlen(cmd_type) == 0) {
             supabase_http_reset();
             free(body);
@@ -1744,19 +1814,30 @@ void check_settings_commands() {
             free(resp_buf);
             return;
         }
-        JsonVariant payload_var = g_cal_doc["payload"];
+        JsonVariant payload_var = resp_doc["payload"];
         if (payload_var.is<const char*>()) {
             strlcpy(payload_buf, payload_var.as<const char*>(), PAY_CAP);
         } else {
             serializeJson(payload_var, payload_buf, PAY_CAP);
         }
-        apply_settings_command(cmd_type, payload_buf);
-        apply_settings_posthook(cmd_type);
+        // TODO: Supabase auth is the trust boundary; device_api_key verification
+        // is a schema-side concern. The schema-fix agent will add a
+        // device_api_key column and validation on claim_settings_command.
+        if (apply_settings_command(cmd_type, payload_buf)) {
+            apply_settings_posthook(cmd_type);
+        } else {
+            LOG_PRINT("[CMD] apply failed for %s — skipping posthook\n", cmd_type);
+            free(payload_buf);
+            supabase_http_reset();
+            free(body);
+            free(resp_buf);
+            return;
+        }
         g_deferred_requests |= 1;  // sync_device_channels
         if (strcmp(cmd_type, "set_relay") == 0) {
             uint8_t idx = 0;
             bool energize = false;
-            if (JsonObject obj = g_cal_doc["payload"]) {
+            if (JsonObject obj = resp_doc["payload"]) {
                 idx = obj["idx"] | 0;
                 LOG_PRINT("[SETTINGS] set_relay idx=%d has_is_energized=%d val=%d\n",
                     idx, !obj["is_energized"].isNull(), obj["is_energized"].as<int>());
