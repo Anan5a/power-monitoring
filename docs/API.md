@@ -233,6 +233,151 @@ The firmware exposes a single BLE service with 4 characteristics.
 
 All commands are JSON strings written to the `cmd` characteristic.
 
+#### Canonical Command Table
+
+| Command | PIN | Args | Notes |
+|---|---|---|---|
+| `set_wifi` | yes | `ssid`, `pass` | Triggers `apply_settings_posthook("set_wifi")` |
+| `set_mqtt` | yes | `broker`, `port`, `topic` | |
+| `set_http` | yes | `url`, `token`, `enabled` | |
+| `set_supabase` | yes | `url`, `anon_key`, `api_key`, `device_key` | |
+| `get_wifi` | yes | — | Returns `pass` masked as `"***"` |
+| `get_mqtt` | yes | — | |
+| `get_http` | yes | — | Returns `token` masked as `"***"` |
+| `get_supabase` | yes | — | Returns `anon_key` masked as `"***"` |
+| `get_status` | **no** | — | Entries, buffer size, overflow, switch count |
+| `set_switch` / `set_relay` | yes | `idx` 0-7, plus shape fields | List-shape **and** legacy flat-shape accepted; see [Switch Rule Shapes](#switch-rule-shapes) |
+| `get_switch` / `get_relay` | yes | `idx` 0-7 | Returns rule + conditions list |
+| `get_cycle_state` | yes | `idx` 0-7 | Switch name, state, rule, trip_count |
+| `set_battery` | yes | `channel` 0-7, `capacity_mAh`, `initial_soc_pct` | |
+| `get_battery` | yes | `channel` 0-7 | |
+| `list_battery_profiles` | yes | — | Iterates channels 0-3, returns only configured profiles |
+| `set_battery_profile` | yes | `channel` 0-3, `name`, `chemistry`, `system_voltage`, `capacity_mAh`, `initial_soc_pct`, `cell_count`, `full_voltage`, `cutoff_voltage`, `float_voltage` | `chemistry` accepts int 0-6 or string (`lead_acid`/`lipol`/`liion`/`nimh`/`lifepo4`/`agm`/`fla`) |
+| `get_battery_profile` | yes | `channel` 0-3 | |
+| `delete_battery_profile` | yes | `id` 0..`BATTERY_MAX_PROFILES`-1 | Removes a profile by id |
+| `reset_battery` | yes | `channel` 0-7 | Wipes `BatteryConfig` + `BatteryProfile` + coulomb counter for the channel |
+| `set_shunt` | yes | `channel` 0-7, `ohms` | 0 = use library default |
+| `set_volt_ratio` | yes | `channel` 0-7, `ratio` | |
+| `set_resistors` | yes | `channel` 0-7, `r_high`, `r_low` | Ratio auto-computed |
+| `set_calibration` | yes | `channel` 0-2, `type` 0-3, `value` | `type`: 0=volt_offset_mv, 1=volt_gain, 2=curr_offset_ma, 3=curr_gain |
+| `get_calibration` | yes | `channel` 0-2 | |
+| `reset_calibration` | yes | `channel` 0-2 | |
+| `set_invert_curr` | yes | `channel` 0-2, `invert` | |
+| `get_invert_curr` | yes | `channel` 0-2 | |
+| `reset_invert_curr` | yes | `channel` 0-2 | |
+| `set_virtual_channel` | yes | `channel` 0-3, `voltage_src` 0-4, `voltage_idx`, `current_src` 0-3, `current_idx` | `voltage_src`: 0=none 1=ina3221_volt 2=ina3221_curr 3=ina226 4=ads1115 |
+| `get_virtual_channel` | yes | `channel` 0-3 | |
+| `set_channel_group` | yes | `group_id` 0-3, `name`, `icon`, `channel_mask` | |
+| `get_channel_group` | yes | `group_id` 0-3 | |
+| `set_channel_name` | yes | `channel` 0-7, `name` | |
+| `get_channel_name` | yes | `channel` 0-7 | |
+| `reset_coulomb` | yes | `channel` 0-7 | |
+| `calibrate_baseline` | yes | — | 10-tick re-baseline; suppresses spike detection during collection |
+| `discover_sensors` | yes | — | I2C scan + UART BL0939 listen |
+| `capacity_test` | yes | `action` `start`\|`stop`\|`status`, `channel`, `mode`, `load_switch_idx`, `cutoff_v` | `start` returns immediately, `status` returns running + elapsed_ms |
+| `set_pin` | n/a | `old_pin`, `new_pin` | `old_pin` required if a PIN is set. `new_pin` 0-999999. |
+| `factory_reset` | yes | — | Wipes all NVS; reboot required |
+| `reboot` | yes | — | Graceful ESP restart |
+
+#### Switch Rule Shapes
+
+`set_switch` and `set_relay` accept both shapes. List-shape is preferred when
+both are present; legacy flat-shape is auto-synthesised into OR-conditions so
+older dashboards still work.
+
+**New list-shape:**
+```json
+{
+  "cmd": "set_switch",
+  "idx": 0,
+  "logic": "OR",
+  "min_conditions": 0,
+  "trip_delay_ms": 1000,
+  "reset_delay_ms": 5000,
+  "hysteresis": 0.0,
+  "rule_enabled": true,
+  "conditions": [
+    {"kind": "OVERCURRENT",  "op": ">", "value": 5.0, "ref_channel": -1},
+    {"kind": "UNDERVOLTAGE", "op": "<", "value": 10.5, "ref_channel": -1},
+    {"kind": "SOC_LOW",      "op": "<", "value": 20.0, "ref_channel": -1},
+    {"kind": "SCHEDULE_WINDOW", "op": ">", "value": 0,
+     "schedule_mask": [0,0,...24 bytes total...]}
+  ]
+}
+```
+
+`kind` enum (string): `OVERCURRENT`, `UNDERVOLTAGE`, `SOC_LOW`, `SOC_HIGH`,
+`CHANNEL_ABOVE`, `CHANNEL_BELOW`, `SCHEDULE_WINDOW`.
+`op` enum (string): `>`, `<`, `>=`, `<=`, `==`.
+`logic` (string): `OR` (default) | `AND`. `min_conditions` lets a subset
+satisfy (e.g. AND with min=2 → "at least 2 of N must be true").
+
+**Legacy flat-shape** (still accepted, synthesised into OR-conditions):
+```json
+{
+  "cmd": "set_switch",
+  "idx": 0,
+  "channel": 0,
+  "overcurrent_A": 5.0,
+  "undervoltage_V": 10.5,
+  "soc_low_pct": 20.0,
+  "soc_high_pct": 95.0,
+  "trip_delay_ms": 1000,
+  "reset_delay_ms": 5000
+}
+```
+
+#### Notify Cadence
+
+| Characteristic | Cadence | Source |
+|---|---|---|
+| `status` | every 2 s | `loop_ble_provisioner()` — uptime + log stats |
+| `sensor` | every 5 s (publish tick) | `publish_data()` calls `ble_notify_sensor_data()` |
+| `resp` | on demand | One notify per command write |
+
+Note: the BLE stack is deinitialised once WiFi comes up to free heap for
+TLS (see `init_connectivity()` in `connectivity_manager.cpp`). The `sensor`
+notify therefore only delivers while the device is offline / pre-WiFi. Re-enable
+via Serial CLI (`ble_on`) or after a WiFi drop to resume streaming.
+
+#### Security Model
+
+- Default PIN: `123456` (overridable via `set_pin`).
+- `settings_load_ble_pin() == 0` ⇒ no security on any command.
+- Rate limit: 10 commands per 10-second rolling window per connection.
+- `set_pin` requires `old_pin` whenever a PIN is already set.
+- `get_status` is the only command that is PIN-less by design.
+- Unknown commands log at `CORE_DEBUG_LEVEL>=3` and return `{"ok":false,"error":"unknown_cmd","cmd":"<echo>"}`.
+
+#### Error Responses
+
+All error responses now include a `cmd` echo:
+`{"ok":false,"error":"<err>","cmd":"<echo>"}`.
+
+| Error | Meaning |
+|---|---|
+| `bad_json` | Malformed JSON in command payload |
+| `invalid_pin` | Wrong PIN provided |
+| `invalid_old_pin` | Wrong old PIN when changing PIN |
+| `invalid_value` | Value out of range or NaN/Inf |
+| `invalid_idx` | Switch index out of range |
+| `invalid_channel` | Logical channel out of range |
+| `invalid_id` | Profile/battery id out of range |
+| `invalid_type` | Calibration type out of range |
+| `invalid_chemistry` | Battery chemistry string not recognised |
+| `invalid_action` | `capacity_test` action not in {start, stop, status} |
+| `rate_limited` | > 10 commands in 10 s window |
+| `unknown_cmd` | Command string not recognised |
+| `wifi_not_set` | `get_wifi` but no credentials stored |
+| `mqtt_not_set` | `get_mqtt` but no broker stored |
+| `http_not_set` | `get_http` but no URL stored |
+| `supabase_not_configured` | `get_supabase` but one or more keys missing |
+| `battery_not_found` | `get_battery` and no `BatteryConfig` for that channel |
+| `battery_profile_not_found` | `get_battery_profile` and no profile for that channel |
+| `virtual_channel_not_found` | `get_virtual_channel` for unset channel |
+| `group_not_found` | `get_channel_group` for unset group |
+| `switch_not_found` | `get_switch` and no `SwitchChannel` for that idx |
+
 #### `set_wifi` — Save WiFi credentials
 ```json
 {"cmd":"set_wifi","ssid":"MyNetwork","pass":"MyPassword","pin":123456}
@@ -430,75 +575,206 @@ Response: `{"ok":true,"msg":"factory_reset_done_reboot"}`
 
 The ESP32 publishes telemetry to Supabase every ~5 seconds via the `insert_telemetry` RPC function. The dashboard uses Supabase Realtime to display live data without polling.
 
+### Schema Versioning
+
+The publish payload is versioned. Bump `TELEMETRY_SCHEMA_VERSION` in
+`include/telemetry.h` whenever a field is added, renamed, removed, or its
+unit/semantic changes. The server branches on either:
+
+- the JSON `schema` field (e.g. `"telemetry_v1"`)
+- the Supabase `Content-Profile: telemetry_v1` request header (set automatically)
+
+MQTT consumers can also branch on the JSON `v` field (uint8). The legacy
+`ina3221/ina226/ch_N_V/relayN/log_*` shape is still available by building
+with `MQTT_LEGACY_PAYLOAD=1` in `platformio.ini` `build_flags`.
+
 ### Supabase Tables
 
 | Table | Purpose | ESP32 writes | Dashboard reads |
 |---|---|---|---|
-| `telemetry_live` | Latest readings per device | Every ~5s | Realtime subscription |
+| `telemetry_live` | Latest readings per device | Every ~5s (schema v1) | Realtime subscription |
 | `sensor_calibration_status` | Baseline calibration progress | Every 500ms during calibration | Polled every 1s |
 | `relay_states` | Relay on/off states | Loop reads this to check relay toggles | Writes on toggle |
 | `settings_commands` | Pending config commands | Polls every 10s | Inserts commands |
 | `device_channels` | Channel names, battery profiles, calibration | ESP reads + writes | Modifies via Settings tab |
+| `battery_profiles` | Battery profile list (heartbeat) | Every 60s or on change (RPC `sync_battery_profiles`) | Reads on profile change |
 
-### Telemetry Payload
+### Telemetry Payload (schema v1)
 
-Published via `POST /rest/v1/rpc/insert_telemetry` with auth headers.
+The full payload is the same shape across MQTT, Supabase, HTTP, and BLE
+sensor notify (the BLE path strips down to ts + channels + battery to fit
+MTU). All transports consume the `TelemetrySnapshot` struct built by
+`telemetry_build()` in `src/telemetry.cpp`.
 
 ```json
 {
-  "p_device_key": "my-device",
-  "p_device_api_key": "uuid-here",
-  "p_payload": {
-    "ina3221_v0": 12.34,
-    "ina3221_v1": 12.30,
-    "ina3221_v2": 5.10,
-    "ina3221_i0": 0.523,
-    "ina3221_i1": 0.481,
-    "ina3221_i2": 0.0,
-    "ina3221_i0_stddev": 0.012,
-    "ina3221_i0_spike": false,
-    "ina3221_v0_stddev": 0.008,
-    "ina3221_v0_spike": false,
-    "ina226_v": 12.36,
-    "ina226_i": 0.510,
-    "ina226_p": 6.303,
-    "coulomb_mah0": 850,
-    "coulomb_mah1": 720,
-    "soc_pct0": 42.5,
-    "soc_pct1": 36.0,
-    "ch0_V": 12.34,
-    "ch0_I": 0.523,
-    "ch0_P": 6.47,
-    "ch1_V": 12.30,
-    "ch1_I": 0.481,
-    "ch1_P": 5.92,
-    "log_entries": 1234,
-    "log_overflow": false
+  "v": 1,
+  "schema": "telemetry_v1",
+  "ts": 1716825000,
+  "ts_ms": 234,
+  "device": {
+    "id": "AABBCCDDEEFF",
+    "fw": "2.0.0",
+    "uptime_ms": 3600123
   },
-  "p_metadata": {
+  "wifi": {
     "rssi": -45,
-    "vcc": 3.28,
-    "uptime_s": 3600
+    "ip": "192.168.1.42"
   },
-  "p_recorded_at": 1716825000
+  "channels": [
+    { "ch": 0, "V": 12.3456, "I": 0.5231, "P": 6.4571,
+      "energy_Wh": 12.3456, "charge_mAh": 850.1234 },
+    { "ch": 1, "V": 12.3012, "I": 0.4810, "P": 5.9178,
+      "energy_Wh": 7.0001, "charge_mAh": 720.4500 }
+  ],
+  "switches": [
+    { "idx": 0, "type": 0, "state": false, "auto": false, "rule_tripped": false }
+  ],
+  "battery": [
+    { "ch": 0, "profile_id": 0, "chemistry": 1,
+      "rated_Ah": 5.0000, "soc_pct": 42.5123,
+      "V": 12.3456, "I": 0.5231,
+      "cumulative_Ah_in": 0.8501, "cumulative_Ah_out": 0.0000,
+      "equivalent_full_cycles": 0.0850,
+      "capacity_test_active": false,
+      "capacity_test_soh_pct": 98.5000 }
+  ],
+  "log": { "entries": 1234, "overflow": false },
+  "heap_free": 198320
 }
 ```
 
-### Virtual Channel Keys
+#### Field reference
 
-Virtual channels compute `V × I` from mapped sensor sources and appear as:
-- `ch0_V`, `ch0_I`, `ch0_P` — Virtual Channel 0
-- `ch1_V`, `ch1_I`, `ch1_P` — Virtual Channel 1
-- `ch2_V`, `ch2_I`, `ch2_P` — Virtual Channel 2
-- `ch3_V`, `ch3_I`, `ch3_P` — Virtual Channel 3
+| Field | Type | Unit | Notes |
+|---|---|---|---|
+| `v` | uint8 | — | Schema version, mirrors `TELEMETRY_SCHEMA_VERSION` |
+| `schema` | string | — | Always `telemetry_v1` for v1 |
+| `ts` | uint32 | epoch seconds | From SNTP-synced clock (fallback: time()) |
+| `ts_ms` | uint16 | ms | Sub-second timestamp (millis % 1000) |
+| `device.id` | string | — | MAC address with colons stripped (12 hex chars) |
+| `device.fw` | string | — | Firmware version (currently `2.0.0`) |
+| `device.uptime_ms` | uint32 | ms | `millis()` at sample time |
+| `wifi.rssi` | int8 | dBm | WiFi RSSI; 0 if not connected |
+| `wifi.ip` | string | — | IPv4 dotted-quad |
+| `channels[].ch` | uint8 | — | Logical channel index |
+| `channels[].V` | float | volts | Effective voltage (after VC mapping) |
+| `channels[].I` | float | amps | Effective current (signed; negative = reverse) |
+| `channels[].P` | float | watts | V × I, or INA226 reported power |
+| `channels[].energy_Wh` | float | Wh | Cumulative from `energy_counter` |
+| `channels[].charge_mAh` | float | mAh | Cumulative from `coulomb_counter` |
+| `switches[].idx` | uint8 | — | Switch index 0..N-1 |
+| `switches[].type` | uint8 | — | `SwitchType` enum: 0=RELAY, 1=MOSFET_LOW, 2=MOSFET_HIGH, 3=SSR, 4=EXPANDER |
+| `switches[].state` | bool | — | Energized (logical state, not GPIO level) |
+| `switches[].auto` | bool | — | Auto-trip evaluation enabled |
+| `switches[].rule_tripped` | bool | — | Combined condition currently active |
+| `battery[].ch` | uint8 | — | Logical channel index |
+| `battery[].profile_id` | uint8 | — | NVS profile slot (currently == ch) |
+| `battery[].chemistry` | uint8 | — | `BatteryChemistry`: 0=LEAD_ACID … 6=CUSTOM |
+| `battery[].rated_Ah` | float | Ah | Profile capacity (mAh / 1000) |
+| `battery[].soc_pct` | float | % | 0..100 from coulomb + initial_soc |
+| `battery[].V` | float | volts | Current channel voltage |
+| `battery[].I` | float | amps | Current channel current |
+| `battery[].cumulative_Ah_in` | float | Ah | Total Ah charged (positive coulomb) |
+| `battery[].cumulative_Ah_out` | float | Ah | Total Ah discharged |
+| `battery[].equivalent_full_cycles` | float | cycles | (Ah_in + Ah_out) / (2 × rated_Ah) |
+| `battery[].capacity_test_active` | bool | — | True during an active capacity test |
+| `battery[].capacity_test_soh_pct` | float | % | SoH from most recent test; present for one publish only after completion |
+| `log.entries` | uint16 | — | RAM log buffer entry count |
+| `log.overflow` | bool | — | True when LittleFS overflow file exists |
+| `heap_free` | uint32 | bytes | `ESP.getFreeHeap()` at sample time |
 
-### Spike Detection Keys
+#### Empty arrays
 
-When a spike is detected on INA3221 channels, additional fields appear:
-- `ina3221_i0_spike: true` — current spike on channel 0
-- `ina3221_v0_spike: true` — voltage spike on channel 0
-- `ina3221_i0_stddev: 0.012` — sample stddev of the last burst (mA)
-- `ina3221_v0_stddev: 0.008` — sample stddev of the last burst (mV)
+`channels[]`, `switches[]`, and `battery[]` are always present, even if
+empty. The server should iterate, not assume a fixed length. The array
+lengths are bounded by the constants in `include/telemetry.h`:
+`TELEMETRY_MAX_CHANNELS=16`, `TELEMETRY_MAX_SWITCHES=8`,
+`TELEMETRY_MAX_BATTERIES=8`. No channel in the current 4-channel build
+exceeds the first 4 entries; the rest is headroom for future expansion.
+
+#### Float precision
+
+All floats in the payload are rounded to 4 decimal places by
+`write_float()` in `src/connectivity_manager.cpp`. The 4-decimal cap keeps
+the BLE subset under 200 bytes at the default channel count and prevents
+the full payload from exceeding the 4 KB serialization buffer.
+
+#### BLE sensor notify subset
+
+The BLE `beb5483e-...` characteristic gets a smaller payload to fit the
+default 23-byte ATT MTU (negotiated up to 244 in BLE 4.2+). The shape:
+
+```json
+{
+  "v": 1,
+  "ts": 1716825000,
+  "channels": [
+    { "ch": 0, "V": 12.3456, "I": 0.5231, "P": 6.4571, "c": 850 },
+    { "ch": 1, "V": 12.3012, "I": 0.4810, "P": 5.9178, "c": 720 }
+  ],
+  "battery": [
+    { "ch": 0, "soc_pct": 42.5123 }
+  ]
+}
+```
+
+`c` is the integer mAh accumulator (saves bytes over the float). Switches,
+wifi, log, and heap are dropped from BLE because they don't fit and aren't
+useful at the BLE refresh rate.
+
+#### Supabase request envelope
+
+The wire format for `POST /rest/v1/rpc/insert_telemetry` wraps the schema
+v1 payload in the existing RPC envelope (one row per call):
+
+```json
+[
+  {
+    "p_device_key": "my-device",
+    "p_device_api_key": "uuid-here",
+    "p_payload": { ...telemetry_v1 fields... },
+    "p_recorded_at": 1716825000
+  }
+]
+```
+
+The Supabase request also carries `Content-Profile: telemetry_v1` so the
+server can route by schema even when parsing succeeds.
+
+#### Battery profiles heartbeat
+
+`POST /rest/v1/rpc/sync_battery_profiles` is sent on a slow path
+(every 60 s) and eagerly on profile change. Triggering an eager publish:
+call `telemetry_kick_battery_profiles()` from the settings-command handler
+when a `set_battery_profile` or `set_battery` command is applied.
+
+```json
+{
+  "v": 1,
+  "kind": "battery_profiles",
+  "battery_profiles": [
+    { "profile_id": 0, "channel": 0, "name": "12V Lead Acid",
+      "chemistry": "lead_acid", "system_voltage": 12.0,
+      "capacity_mAh": 5000.0, "initial_soc_pct": 100.0,
+      "cell_count": 6.0, "full_voltage": 13.8, "cutoff_voltage": 10.5,
+      "float_voltage": 13.5 }
+  ]
+}
+```
+
+Chemistry is sent as a string here (`"lead_acid" | "lipol" | "liion" |
+"nimh" | "lifepo4" | "agm" | "fla" | "custom"`) because the heartbeat
+table is meant for human review; the high-frequency publish uses the uint8
+enum to save bytes.
+
+#### Backward compatibility
+
+Set `-DMQTT_LEGACY_PAYLOAD=1` in `platformio.ini` build_flags to emit the
+pre-v1 payload over MQTT (in case a downstream consumer hasn't switched).
+The Supabase path always uses v1; the legacy Supabase keys (`ina3221_vN`,
+`coulomb_mahN`, `soc_pctN`, `chN_V/I/P`, `relayN`, `log_entries`, etc.)
+are gone. The dashboard and the ESP-side BLE path follow v1.
 
 ### Adaptive Retention
 
