@@ -2,6 +2,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "config.h"
+#include "log_serial.h"
 #include "settings_manager.h"
 #include "data_logger.h"
 #include "ble_provisioner.h"
@@ -9,10 +10,14 @@
 #include "energy_counter.h"
 #include "sensor_manager.h"
 #include "switch_controller.h"
+#include "telemetry.h"
 #include <WiFi.h>
 #include <esp_system.h>
 #include <WiFiClientSecure.h>
-#define MQTT_MAX_PACKET_SIZE 1024
+// Bumped to 2048 so JSON telemetry publishes with metadata + 4 channel rows
+// (≈ 1.4 KB serialized) fit without truncation. The PubSubClient library
+// reads this #define at include time, hence the guard. (Mirrored in
+// config.h so the value lives with the other compile-time settings.)
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 // #include <BlynkSimpleEsp32.h> // Blynk disabled
@@ -50,7 +55,7 @@ static WiFiClientSecure g_telemetry_client;
 static HTTPClient        g_telemetry_http;
 static bool              g_telemetry_http_ready = false;
 static bool              g_telemetry_error = false;  // force reset after POST failure
-static WiFiClientSecure* g_supa_client = nullptr;
+static WiFiClientSecure  g_supa_client;
 static HTTPClient        g_supa_http;
 static bool              g_supa_http_ready = false;
 static unsigned long g_defer_cooldown = 0;
@@ -68,18 +73,15 @@ static uint8_t    g_batch_count = 0;
 
 // sync_device_channels_to_supabase is static and not in header — forward declare
 static void sync_device_channels_to_supabase();
+static void connect_mqtt();
 
 static void supabase_http_reset() {
     if (g_supa_http_ready) {
         g_supa_http.end();
         g_supa_http_ready = false;
     }
-    if (g_supa_client) {
-        g_supa_client->stop();
-        vTaskDelay(pdMS_TO_TICKS(10));  // let mbedTLS flush before free
-        delete g_supa_client;
-        g_supa_client = nullptr;
-    }
+    g_supa_client.stop();
+    vTaskDelay(pdMS_TO_TICKS(10));  // let mbedTLS flush before next begin
 }
 
 static void drain_response() {
@@ -120,6 +122,7 @@ static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
             return false;
         }
         g_telemetry_http.addHeader("Content-Type", "application/json");
+        g_telemetry_http.addHeader("Content-Profile", TELEMETRY_PROFILE_STRING);
         g_telemetry_http.addHeader("apikey", anon_key);
         char auth_hdr[384];
         snprintf(auth_hdr, sizeof(auth_hdr), "Bearer %s", anon_key);
@@ -151,13 +154,18 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
         supabase_http_reset();
     }
 
-    // Heap-allocate fresh WiFiClientSecure each call — ensures clean SSL context.
-    g_supa_client = new WiFiClientSecure();
-    g_supa_client->setInsecure();
-    g_supa_client->setHandshakeTimeout(30);
+    // Reuse the static g_supa_client — first call configures insecure + handshake
+    // timeout once. Subsequent calls skip reconfiguration since the underlying
+    // mbedTLS context is reset() rather than destroyed.
+    static bool g_supa_client_configured = false;
+    if (!g_supa_client_configured) {
+        g_supa_client.setInsecure();
+        g_supa_client.setHandshakeTimeout(30);
+        g_supa_client_configured = true;
+    }
     g_supa_http.setReuse(false);
-    if (!g_supa_http.begin(*g_supa_client, full_url)) {
-        Serial.printf("[SUPA_HTTP] begin failed: %s\n", full_url);
+    if (!g_supa_http.begin(g_supa_client, full_url)) {
+        LOG_PRINT("[SUPA_HTTP] begin failed: %s\n", full_url);
         supabase_http_reset();
         return false;
     }
@@ -176,8 +184,8 @@ static int telemetry_post(const char* url_path, const char* payload, size_t len,
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s%s", supabase_url, url_path);
     if (!telemetry_http_prepare(full_url, anon_key)) return -1;
-    // Serial.printf("[HTTP] POST %d bytes (heap=%u)\n", len, ESP.getFreeHeap());
-    // Serial.println(payload);  // verbose — disabled
+    // LOG_PRINT("[HTTP] POST %d bytes (heap=%u)\n", len, ESP.getFreeHeap());
+    // LOG_PRINTLN(payload);  // verbose — disabled
     int rc = g_telemetry_http.POST((uint8_t*)payload, len);
     if (rc < 0) {
         drain_telemetry_response();
@@ -266,67 +274,172 @@ static void start_sntp() {
     sntp_started = true;
 }
 
-static bool sync_time() {
+// NTP / wall-clock sync — bounded wait so a flaky network can't stall the
+// network task. Returns one of:
+//   SYNC_OK      — time() returned a sane post-2023 epoch
+//   SYNC_TIMEOUT — start_sntp() called but time() still < 1700000000 after
+//                  NTP_TIMEOUT_MS milliseconds
+//   SYNC_NO_WIFI — caller is in offline mode (skip_network) and there's no
+//                  point trying
+// On TIMEOUT we set g_ntp_synced=false so the data logger can downgrade
+// timestamps to "uptime" mode and consumers can stop trusting epoch math.
+enum SyncResult { SYNC_OK = 0, SYNC_TIMEOUT, SYNC_NO_WIFI };
+static bool g_ntp_synced = false;
+static bool g_ntp_timeout_warned = false;
+static const uint32_t NTP_TIMEOUT_MS = 5000;
+
+static SyncResult sync_time() {
+    if (skip_network) return SYNC_NO_WIFI;
     start_sntp();
-    // Prefer time() (set directly by SNTP to UTC epoch) over mktime(getLocalTime)
-    // to avoid a double-conversion when newlib's TZ is non-UTC.
-    time_t t = time(nullptr);
+    // Poll time() for up to NTP_TIMEOUT_MS rather than blocking forever.
+    // SNTP runs in the background; we just need to know if it has produced
+    // a sensible answer within the budget.
+    uint32_t deadline = millis() + NTP_TIMEOUT_MS;
+    time_t t = 0;
+    while (millis() < deadline) {
+        t = time(nullptr);
+        if (t > 1700000000) break;
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
     if (t < 1700000000) {
-        Serial.println("NTP sync failed (time() not set), will retry");
-        return false;
+        if (!g_ntp_timeout_warned) {
+            LOG_PRINT("[NTP] sync timeout after %u ms — timestamps will use uptime\n",
+                          (unsigned)NTP_TIMEOUT_MS);
+            g_ntp_timeout_warned = true;
+        }
+        // Mark the data logger as untrusted so any future log_sample() knows
+        // to flag the uptime-based timestamp.
+        log_epoch_valid_set(false);
+        g_ntp_synced = false;
+        return SYNC_TIMEOUT;
     }
     epoch_time = t;
-    log_set_epoch(t);   // keep data logger clock in sync
+    log_set_epoch(t);
+    log_epoch_valid_set(true);  // trusted post-2023 epoch
+    g_ntp_synced = true;
     struct tm ti = {};
     gmtime_r(&t, &ti);
     char buf[32];
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S UTC", &ti);
-    Serial.print("NTP time: "); Serial.println(buf);
-    return true;
+    LOG_PRINTLN("NTP time: "); LOG_PRINTLN(buf);
+    return SYNC_OK;
 }
 
 bool try_sync_epoch_time() {
     // Re-sync hourly so drift / failed first-sync recovers automatically.
     static unsigned long last_sync_ms = 0;
     if (epoch_time > 0 && millis() - last_sync_ms < 3600UL * 1000) return true;
-    if (sync_time()) {
+    SyncResult r = sync_time();
+    if (r == SYNC_OK) {
         last_sync_ms = millis();
         return true;
     }
     return epoch_time > 0;
 }
 
-static void connect_wifi() {
-    char ssid[64], pass[64];
-    if (settings_load_wifi(ssid, pass, sizeof(ssid))) {
-        WiFi.begin(ssid, pass);
-    } else {
-        // Use compile-time defaults only if they look real (not placeholder)
-        if (strlen(WIFI_SSID) > 5 && strcmp(WIFI_SSID, "YOUR_SSID") != 0) {
-            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-        } else {
-            Serial.println("WiFi: no credentials — offline mode");
-            skip_network = true;
+// ============================================================================
+// WiFi init as a non-blocking state machine.
+//
+// Earlier code blocked up to 10 s in connect_wifi() and another 3 s in
+// init_connectivity(), stalling the entire networkTask. Other tasks (sensor,
+// UI) would also be starved because networkTask is the only thing on Core 0
+// driving the heap-heavy Supabase path; the Arduino loop on Core 1 stayed
+// alive but couldn't do much.
+//
+// The state machine:
+//   INIT          — pick credentials, call WiFi.begin() once
+//   CONNECTING    — wait up to 5 s for WL_CONNECTED
+//   CONNECTED     — disable BLE, configure MQTT, run sync_time() etc.
+//   RETRY_BACKOFF — last attempt failed; wait 30 s, then go to CONNECTING
+// State persists in static locals inside this translation unit. The network
+// task calls wifi_state_tick() once per 10 ms loop tick.
+// ============================================================================
+enum WifiState { WST_INIT, WST_CONNECTING, WST_CONNECTED, WST_RETRY_BACKOFF };
+static WifiState s_wifi_state = WST_INIT;
+static uint32_t s_wifi_state_entered_ms = 0;
+static uint32_t s_wifi_connect_deadline = 0;
+static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 5000;
+static const uint32_t WIFI_RETRY_BACKOFF_MS = 30000;
+
+static void wifi_state_enter(WifiState s) {
+    s_wifi_state = s;
+    s_wifi_state_entered_ms = millis();
+}
+
+static void wifi_state_tick() {
+    switch (s_wifi_state) {
+        case WST_INIT: {
+            // Load credentials and start WiFi.begin(). Cached so we don't
+            // hit NVS again on the retry path.
+            char ssid[64] = "", pass[64] = "";
+            if (settings_load_wifi(ssid, pass, sizeof(ssid))) {
+                WiFi.begin(ssid, pass);
+            } else if (strlen(WIFI_SSID) > 5 && strcmp(WIFI_SSID, "YOUR_SSID") != 0) {
+                WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+            } else {
+                LOG_PRINTLN("WiFi: no credentials — offline mode");
+                skip_network = true;
+                wifi_state_enter(WST_RETRY_BACKOFF);
+                return;
+            }
+            WiFi.setAutoReconnect(true);
+            WiFi.setTxPower(WIFI_POWER_8_5dBm);
+            s_wifi_connect_deadline = millis() + WIFI_CONNECT_TIMEOUT_MS;
+            LOG_PRINTLN("[WiFi] connecting");
+            wifi_state_enter(WST_CONNECTING);
             return;
         }
+        case WST_CONNECTING: {
+            if (WiFi.status() == WL_CONNECTED) {
+                LOG_PRINTLN(" — connected");
+                IPAddress ip = WiFi.localIP();
+                snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+                // Disable BLE to free ~50KB heap for TLS operations.
+                LOG_PRINTLN("[BLE] disabling BLE stack to free heap for TLS");
+                deinit_ble_provisioner();
+                // Bounded NTP sync; may fail if no internet, that's fine.
+                SyncResult r = sync_time();
+                if (r == SYNC_OK) {
+                    sync_calibration_to_supabase();
+                }
+                // Configure MQTT broker (we don't block on connect — connect_mqtt
+                // is rate-limited and runs in loop_connectivity).
+                char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
+                if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
+                    mqtt.setServer(mqtt_broker, mqtt_port);
+                    connect_mqtt();
+                } else {
+                    LOG_PRINTLN("MQTT: not configured (skip)");
+                }
+                wifi_state_enter(WST_CONNECTED);
+                return;
+            }
+            if (millis() >= s_wifi_connect_deadline) {
+                LOG_PRINTLN("\n[WiFi] connect timeout — backing off");
+                skip_network = true;  // mirror old behavior; loop_connectivity
+                                       // will retry from WST_RETRY_BACKOFF
+                wifi_state_enter(WST_RETRY_BACKOFF);
+                return;
+            }
+            // Heartbeat dot so a slow user can see progress.
+            static uint32_t last_dot_ms = 0;
+            if (millis() - last_dot_ms > 500) {
+                last_dot_ms = millis();
+                LOG_PRINTLN(".");
+            }
+            return;
+        }
+        case WST_CONNECTED:
+            // Steady state. Disconnect detection happens in loop_connectivity.
+            return;
+        case WST_RETRY_BACKOFF:
+            if (millis() - s_wifi_state_entered_ms >= WIFI_RETRY_BACKOFF_MS) {
+                LOG_PRINTLN("[WiFi] retrying after backoff");
+                skip_network = false;
+                wifi_state_enter(WST_INIT);
+            }
+            return;
     }
-    WiFi.setAutoReconnect(true);  // auto-reconnect on unexpected disconnect
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);  // reduce TX power to avoid RF issues on C3
-    int attempts = 20; // ~10 seconds timeout
-    while (WiFi.status() != WL_CONNECTED && attempts-- > 0) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        Serial.print(".");
-    }
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("\nWiFi: connection failed — offline mode");
-        skip_network = true;
-        return;
-    }
-    IPAddress ip = WiFi.localIP();
-    snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
-    Serial.println("\nWiFi connected");
-    sync_time();
-    sync_calibration_to_supabase();
 }
 
 static void connect_mqtt() {
@@ -335,9 +448,9 @@ static void connect_mqtt() {
     if (millis() - last_mqtt_retry < 30000) return; // rate limit: 1 attempt per 30s
     last_mqtt_retry = millis();
     if (mqtt.connect("power-monitor-esp32")) {
-        Serial.println("MQTT connected");
+        LOG_PRINTLN("MQTT connected");
     } else {
-        Serial.printf("MQTT fail rc=%d\n", mqtt.state());
+        LOG_PRINT("MQTT fail rc=%d\n", mqtt.state());
     }
 }
 
@@ -345,7 +458,7 @@ const char* get_local_ip_str() { return ip_str; }
 time_t get_epoch_time() { return epoch_time; }
 
 static void print_http_error(HTTPClient& http, int rc) {
-    Serial.printf("HTTP error %d (heap=%u / largest=%u)\n",
+    LOG_PRINT("HTTP error %d (heap=%u / largest=%u)\n",
         rc, ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     if (rc < 0) return; // no body on connection-level failure
     Stream& stream = http.getStream();
@@ -358,8 +471,8 @@ static void print_http_error(HTTPClient& http, int rc) {
     }
     body[n] = '\0';
     if (n > 0) {
-        Serial.print("Response body: ");
-        Serial.println(body);
+        LOG_PRINTLN("Response body: ");
+        LOG_PRINTLN(body);
     }
     // drain any remaining bytes so they don't leak into the next request on a reused connection
     t0 = millis();
@@ -374,8 +487,8 @@ void publish_data_http(const SensorSnapshot& data, const char* json_buffer, size
     if (!settings_load_http_enabled()) return;
     char url[128], token[64];
     if (!settings_load_http_endpoint(url, token, sizeof(url))) return;
-    // Serial.printf("[HTTP] posting %d bytes to %s\n", json_len, url);
-    // Serial.printf("[JSON] %.*s\n", json_len < 256 ? json_len : 256, json_buffer);
+    // LOG_PRINT("[HTTP] posting %d bytes to %s\n", json_len, url);
+    // LOG_PRINT("[JSON] %.*s\n", json_len < 256 ? json_len : 256, json_buffer);
     HTTPClient http;
     http.begin(url);
     http.addHeader("Content-Type", "application/json");
@@ -388,76 +501,47 @@ void publish_data_http(const SensorSnapshot& data, const char* json_buffer, size
 }
 
 void init_connectivity() {
-    connect_wifi();
-
-    if (skip_network) {
-        Serial.println("Network: offline mode active");
-        return;
-    }
-
-    // Let WiFi connection stabilize before any HTTP traffic
-    Serial.println("[HTTP] waiting 3s for WiFi to stabilize...");
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    Serial.println("[HTTP] ready");
-
-    // WiFi is up — disable BLE to free ~50KB heap for TLS operations
-    Serial.println("[BLE] disabling BLE stack to free heap for TLS");
-    deinit_ble_provisioner();
-
-    char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
-    if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
-        mqtt.setServer(mqtt_broker, mqtt_port);
-        connect_mqtt();
-    } else {
-        Serial.println("MQTT: not configured (skip)");
-    }
-
-    // Blynk disabled — uncomment lib_deps in platformio.ini and set BLYNK_AUTH_TOKEN to enable
-    // if (strcmp(BLYNK_AUTH_TOKEN, "YOUR_BLYNK_TOKEN") != 0) { ... }
+    // The actual WiFi bring-up now happens inside the network task's
+    // wifi_state_tick() — see wifi_state_enter(WST_INIT) below. This keeps
+    // the Arduino loop() / networkTask creation path non-blocking and lets
+    // sensor + UI tasks run while WiFi is still associating.
+    // We do start BLE advertising here so the device is discoverable for
+    // provisioning during the WiFi connect window.
+    LOG_PRINTLN("[NET] init_connectivity: WiFi will start in networkTask");
+    s_wifi_state = WST_INIT;
+    s_wifi_state_entered_ms = millis();
+    skip_network = false;
+    g_ntp_synced = false;
 }
 
 void loop_connectivity() {
+    // Drive the WiFi state machine first so the rest of the loop sees a
+    // consistent connection state. Each tick is non-blocking: it only
+    // advances state when a deadline expires, so most calls are O(1).
+    wifi_state_tick();
+
     static bool wifi_was_connected = false;
     bool wifi_connected = (WiFi.status() == WL_CONNECTED);
 
-    // WiFi reconnection — attempt every 30s when disconnected
-    static uint32_t last_wifi_retry = 0;
-    if (!wifi_connected && millis() - last_wifi_retry > 30000) {
-        last_wifi_retry = millis();
-        if (skip_network) {
-            // Initial boot failed: try full re-init instead of simple reconnect
-            WiFi.disconnect(true);
-            vTaskDelay(pdMS_TO_TICKS(100));
-            char ssid[64] = "", pass[64] = "";
-            settings_load_wifi(ssid, pass, sizeof(ssid));
-            WiFi.begin(ssid, pass);
-        } else {
-            WiFi.reconnect();
-        }
-        Serial.println("[WiFi] reconnecting...");
-    }
-
-    // WiFi came back up after boot failure — re-enable network
-    if (skip_network && wifi_connected) {
+    // WiFi came back up after a previous failure — re-enable network.
+    if (skip_network && wifi_connected && s_wifi_state == WST_CONNECTED) {
         skip_network = false;
         IPAddress ip = WiFi.localIP();
         snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
-        Serial.println("[WiFi] connection restored — network re-enabled");
+        LOG_PRINTLN("[WiFi] connection restored — network re-enabled");
         telemetry_http_reset();  // kill stale TLS session after WiFi reconnect
-        // Disable BLE to free ~50KB heap for TLS operations
-        Serial.println("[BLE] disabling BLE stack to free heap for TLS");
-        deinit_ble_provisioner();
     }
 
-    // WiFi dropped — restart BLE advertising so device can be re-provisioned
+    // WiFi dropped — restart BLE advertising so device can be re-provisioned.
     if (wifi_was_connected && !wifi_connected) {
-        Serial.println("[WiFi] disconnected — restarting BLE advertising");
+        LOG_PRINTLN("[WiFi] disconnected — restarting BLE advertising");
         start_ble_advertising();
         telemetry_http_reset();  // kill TLS session on disconnect to prevent leak
     }
     wifi_was_connected = wifi_connected;
 
-    if (skip_network) return;
+    if (skip_network || !wifi_connected) return;
+
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
         if (!mqtt.connected()) connect_mqtt();
@@ -543,6 +627,206 @@ void publish_log_batch() {
     }
 }
 
+// =============================================================================
+// Telemetry serialization — single source of truth for the publish payload
+// =============================================================================
+// All transports (MQTT, Supabase, HTTP, BLE sensor notify) serialize the same
+// TelemetrySnapshot struct. The shape is versioned by TELEMETRY_SCHEMA_VERSION
+// in telemetry.h; the server branches on the "schema" field or the
+// Content-Profile header (telemetry_v1) to pick a parser.
+//
+// Floats are rounded to 4 decimal places to keep the payload sane — the
+// physical sensors don't need more, and the BLE MTU can't swallow a 6-byte
+// mantissa per field.
+static constexpr int  FLOAT_DECIMALS = 4;
+static constexpr size_t TELEMETRY_BUF_BYTES = 4096;
+// Compile-time guard: buffer must be enough for full saturation. The struct
+// is bounded above by static_assert in telemetry.h, so 4 KB is well over 2x
+// the worst-case JSON output.
+static_assert(TELEMETRY_BUF_BYTES >= 2048,
+              "Telemetry buffer < 2 KB; raise TELEMETRY_BUF_BYTES or shrink struct");
+
+static void write_float(JsonObject obj, const char* key, float v) {
+    obj[key] = String((double)v, FLOAT_DECIMALS);
+}
+
+static void serialize_telemetry_core(const TelemetrySnapshot& s, JsonObject root) {
+    root["v"] = s.schema_version;          // schema version (uint8)
+    root["schema"] = s.schema;             // "telemetry_v1"
+    root["ts"] = s.ts;
+    root["ts_ms"] = s.ts_ms;
+
+    JsonObject dev = root["device"].to<JsonObject>();
+    dev["id"] = s.device.id;
+    dev["fw"] = s.device.fw;
+    dev["uptime_ms"] = s.device.uptime_ms;
+
+    JsonObject wifi = root["wifi"].to<JsonObject>();
+    wifi["rssi"] = s.wifi.rssi;
+    wifi["ip"] = s.wifi.ip;
+
+    JsonArray chans = root["channels"].to<JsonArray>();
+    for (uint8_t i = 0; i < s.channel_count; i++) {
+        const TelemetryChannel& c = s.channels[i];
+        JsonObject co = chans.add<JsonObject>();
+        co["ch"] = c.ch;
+        write_float(co, "V", c.V);
+        write_float(co, "I", c.I);
+        write_float(co, "P", c.P);
+        write_float(co, "energy_Wh", c.energy_Wh);
+        write_float(co, "charge_mAh", c.charge_mAh);
+    }
+
+    JsonArray sws = root["switches"].to<JsonArray>();
+    for (uint8_t i = 0; i < s.switch_count; i++) {
+        const TelemetrySwitch& sw = s.switches[i];
+        JsonObject so = sws.add<JsonObject>();
+        so["idx"] = sw.idx;
+        so["type"] = sw.type;
+        so["state"] = sw.state;
+        so["auto"] = sw.auto_mode;
+        so["rule_tripped"] = sw.rule_tripped;
+    }
+
+    JsonArray bats = root["battery"].to<JsonArray>();
+    for (uint8_t i = 0; i < s.battery_count; i++) {
+        const TelemetryBattery& b = s.battery[i];
+        JsonObject bo = bats.add<JsonObject>();
+        bo["ch"] = b.ch;
+        bo["profile_id"] = b.profile_id;
+        bo["chemistry"] = b.chemistry;
+        write_float(bo, "rated_Ah", b.rated_Ah);
+        write_float(bo, "soc_pct", b.soc_pct);
+        write_float(bo, "V", b.V);
+        write_float(bo, "I", b.I);
+        write_float(bo, "cumulative_Ah_in", b.cumulative_Ah_in);
+        write_float(bo, "cumulative_Ah_out", b.cumulative_Ah_out);
+        write_float(bo, "equivalent_full_cycles", b.equivalent_full_cycles);
+        bo["capacity_test_active"] = b.capacity_test_active;
+        if (b.capacity_test_soh_valid) {
+            write_float(bo, "capacity_test_soh_pct", b.capacity_test_soh_pct);
+        }
+    }
+
+    JsonObject log = root["log"].to<JsonObject>();
+    log["entries"] = s.log.entries;
+    log["overflow"] = s.log.overflow;
+
+    root["heap_free"] = s.heap_free;
+}
+
+// Serialize the full snapshot into a caller-provided buffer. Returns the
+// number of bytes written (excludes the null terminator), or 0 on overflow.
+static size_t serialize_telemetry(const TelemetrySnapshot& s, char* out, size_t out_len) {
+    if (!out || out_len < 256) return 0;
+    JsonDocument doc;
+    serialize_telemetry_core(s, doc.to<JsonObject>());
+    size_t n = serializeJson(doc, out, out_len);
+    if (n == 0 || n >= out_len) return 0;
+    return n;
+}
+
+// Build a small BLE-friendly subset: ts + channels + battery. The full
+// payload doesn't fit BLE MTU at default channel count; the subset keeps
+// core metrics and drops switches/wifi/heap/log. Targets <= 200 bytes.
+static size_t serialize_telemetry_ble(const TelemetrySnapshot& s, char* out, size_t out_len) {
+    if (!out || out_len < 128) return 0;
+    JsonDocument doc;
+    doc["v"] = s.schema_version;
+    doc["ts"] = s.ts;
+    JsonArray chans = doc["channels"].to<JsonArray>();
+    for (uint8_t i = 0; i < s.channel_count; i++) {
+        const TelemetryChannel& c = s.channels[i];
+        JsonObject co = chans.add<JsonObject>();
+        co["ch"] = c.ch;
+        write_float(co, "V", c.V);
+        write_float(co, "I", c.I);
+        write_float(co, "P", c.P);
+        co["c"] = (int32_t)c.charge_mAh;  // int mAh saves bytes in BLE MTU
+    }
+    JsonArray bats = doc["battery"].to<JsonArray>();
+    for (uint8_t i = 0; i < s.battery_count; i++) {
+        const TelemetryBattery& b = s.battery[i];
+        JsonObject bo = bats.add<JsonObject>();
+        bo["ch"] = b.ch;
+        write_float(bo, "soc_pct", b.soc_pct);
+    }
+    size_t n = serializeJson(doc, out, out_len);
+    if (n == 0 || n >= out_len) return 0;
+    return n;
+}
+
+// Battery profiles heartbeat — published on a slow path (60s) and on profile
+// change. Built ad-hoc from settings_manager (does NOT use TelemetrySnapshot
+// fields because the profile list is slow-changing config, not per-sample
+// data). The server gets the same shape regardless of how the heartbeat was
+// triggered.
+static uint32_t g_last_profiles_pub_ms = 0;
+static uint32_t g_last_profiles_hash = 0;
+
+static void publish_battery_profiles_heartbeat(const char* supabase_url,
+                                               const char* anon_key) {
+    if (skip_network) return;
+    char device_key[64], api_key[64];
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
+    if (!is_valid_uuid(api_key)) return;
+
+    // Build the profile list. Hash the names+chem+cap so we can detect changes
+    // and publish eagerly when something changes (caller drives this path).
+    JsonDocument doc;
+    doc["v"] = TELEMETRY_SCHEMA_VERSION;
+    doc["kind"] = "battery_profiles";
+    JsonArray arr = doc["battery_profiles"].to<JsonArray>();
+    const char* CHEM[] = { "lead_acid", "lipol", "liion", "nimh", "lifepo4", "agm", "fla" };
+
+    uint32_t hash = 0;
+    for (uint8_t ch = 0; ch < TELEMETRY_MAX_BATTERIES; ch++) {
+        BatteryProfile bp;
+        if (!settings_load_battery_profile(ch, &bp)) continue;
+        JsonObject o = arr.add<JsonObject>();
+        o["profile_id"] = ch;
+        o["channel"] = ch;
+        o["name"] = bp.name;
+        o["chemistry"] = bp.chemistry < 7 ? CHEM[bp.chemistry] : "lead_acid";
+        o["system_voltage"] = String((double)bp.system_voltage, FLOAT_DECIMALS);
+        o["capacity_mAh"] = String((double)bp.capacity_mAh, FLOAT_DECIMALS);
+        o["initial_soc_pct"] = String((double)bp.initial_soc_pct, FLOAT_DECIMALS);
+        o["cell_count"] = String((double)bp.cell_count, FLOAT_DECIMALS);
+        o["full_voltage"] = String((double)bp.full_voltage, FLOAT_DECIMALS);
+        o["cutoff_voltage"] = String((double)bp.cutoff_voltage, FLOAT_DECIMALS);
+        o["float_voltage"] = String((double)bp.float_voltage, FLOAT_DECIMALS);
+        // FNV-1a over key fields
+        const char* p = bp.name;
+        while (*p) hash = (hash * 16777619u) ^ (uint8_t)*p++;
+        hash = (hash * 16777619u) ^ (uint8_t)bp.chemistry;
+        hash = (hash * 16777619u) ^ (uint8_t)(bp.capacity_mAh * 1000.0f);
+    }
+
+    static char buf[1024];
+    size_t len = serializeJson(doc, buf, sizeof(buf));
+    if (len == 0) return;
+
+    // Always publish on a 60s cadence. If a profile changed (hash differs),
+    // reset the timer so the next 60s window restarts from now.
+    uint32_t now = millis();
+    bool due = (now - g_last_profiles_pub_ms) >= 60000UL;
+    bool changed = (hash != g_last_profiles_hash);
+    if (!due && !changed) return;
+    g_last_profiles_pub_ms = now;
+    g_last_profiles_hash = hash;
+
+    telemetry_post("/rest/v1/rpc/sync_battery_profiles", buf, len, supabase_url, anon_key);
+}
+
+// Force a battery_profiles publish on the next opportunity. Call this from
+// settings_command handlers (set_battery, set_battery_profile, etc.) so the
+// dashboard sees new profile data without waiting 60s.
+void telemetry_kick_battery_profiles() {
+    g_last_profiles_pub_ms = 0;
+    g_last_profiles_hash = 0;
+}
+
 static JsonDocument g_supa_doc;
 
 #define LOG_BATCH_SIZE 10
@@ -565,9 +849,18 @@ static void flush_log_batch(const char* supabase_url, const char* anon_key,
         elem["p_metadata"] = JsonObject();
     }
 
-    static char buffer[4096];
-    size_t len = serializeJson(g_log_doc, buffer);
-    telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
+    // Heap-allocated buffer to keep the network task's stack frame small.
+    // LOG_BATCH_SIZE entries * ~300 bytes each ≈ 3 KB worst case.
+    size_t needed = serializeJson(g_log_doc, nullptr, 0) + 16;
+    uint8_t* buffer = (uint8_t*)malloc(needed);
+    if (!buffer) {
+        LOG_PRINTLN("[LOG] OOM in flush_log_batch — dropping batch");
+        g_log_count = 0;
+        return;
+    }
+    size_t len = serializeJson(g_log_doc, buffer, needed);
+    telemetry_post("/rest/v1/rpc/insert_telemetry", (char*)buffer, len, supabase_url, anon_key);
+    free(buffer);
     g_log_count = 0;
 }
 
@@ -674,7 +967,7 @@ void publish_log_batch_supabase() {
 
     // 8KB minimum — safe for g_supa_doc (~2KB) + stack buffers in this function
     if (ESP.getFreeHeap() < 8192) {
-        Serial.println("[WARN] Low heap, skipping Supabase log publish");
+        LOG_PRINTLN("[WARN] Low heap, skipping Supabase log publish");
         return;
     }
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
@@ -783,83 +1076,88 @@ void publish_log_batch_supabase() {
 static JsonDocument g_pub_doc;
 
 void publish_data(const SensorSnapshot& data) {
+    (void)data;
     if (skip_network) return;
 
-    g_pub_doc.clear();
+    // Build the canonical snapshot from all current sources. We do not depend
+    // on the SensorSnapshot argument here because telemetry_build() pulls
+    // fresh data from sensor_manager / counters / NVS at the moment of
+    // publish, which is the right semantic for a 5-s publish tick.
+    TelemetrySnapshot snap;
+    telemetry_build(snap);
 
+#if MQTT_LEGACY_PAYLOAD
+    // Legacy payload shape preserved for existing MQTT consumers. Re-emits
+    // the ina3221/ina226/ads1115/ch_N_V/relayN/log_* keys exactly as before.
+    g_pub_doc.clear();
     JsonArray ina3221Arr = g_pub_doc["ina3221"].to<JsonArray>();
     for (uint8_t i = 0; i < 3; i++) {
         JsonObject ch = ina3221Arr.add<JsonObject>();
         ch["v"] = get_channel_voltage(i);
         ch["i"] = get_channel_current(i);
     }
-
 #if ENABLE_INA226
     JsonObject ina226Obj = g_pub_doc["ina226"].to<JsonObject>();
     ina226Obj["v"] = get_channel_voltage(3);
     ina226Obj["i"] = get_channel_current(3);
     ina226Obj["p"] = get_channel_power(3);
 #endif
-
     JsonArray adcArr = g_pub_doc["ads1115"].to<JsonArray>();
     for (uint8_t i = 0; i < 4; i++) {
         adcArr.add(get_channel_voltage(i));
     }
-
     g_pub_doc["log_entries"] = log_entries_count();
     g_pub_doc["log_buffer_kb"] = log_buffer_capacity() / 1024;
     g_pub_doc["log_overflow"] = log_has_overflow_file();
     g_pub_doc["log_overflow_bytes"] = log_overflow_file_size();
-
-    // Relay states
     for (uint8_t i = 0; i < 4; i++) {
         char key[16];
         snprintf(key, sizeof(key), "relay%d", i);
         g_pub_doc[key] = get_switch_state(i);
     }
-
-    // Virtual channels: compute V, I, P per channel from configured sources
     for (uint8_t ch = 0; ch < 4; ch++) {
         VirtualChannelConfig vc;
         char key[16];
         float v = 0, i = 0, p = 0;
-
         if (settings_load_virtual_channel(ch, &vc) && (vc.voltage_src > 0 || vc.current_src > 0)) {
-            if (vc.voltage_src > 0) {
-                v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data);
-            }
+            if (vc.voltage_src > 0) v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data);
             if (vc.current_src > 0) {
                 i = get_sensor_current(vc.current_src, vc.current_idx, data);
-                if (vc.current_src == 3) {
-                    p = get_sensor_power(vc.current_src, vc.current_idx, data);
-                } else if (vc.voltage_src > 0) {
-                    p = v * i;
-                }
+                if (vc.current_src == 3) p = get_sensor_power(vc.current_src, vc.current_idx, data);
+                else if (vc.voltage_src > 0) p = v * i;
             }
         } else if (ch < 3) {
-            // Default fallback when no VC configured — logical channel voltage/current
             v = get_channel_voltage(ch);
             i = get_channel_current(ch);
             p = v * i;
         } else {
-            // ch == 3 → INA226 logical channel
             v = get_channel_voltage(3);
             i = get_channel_current(3);
             p = get_channel_power(3);
         }
-
-        snprintf(key, sizeof(key), "ch%d_V", ch);
-        g_pub_doc[key] = v;
-        snprintf(key, sizeof(key), "ch%d_I", ch);
-        g_pub_doc[key] = i;
-        snprintf(key, sizeof(key), "ch%d_P", ch);
-        g_pub_doc[key] = p;
+        snprintf(key, sizeof(key), "ch%d_V", ch); g_pub_doc[key] = v;
+        snprintf(key, sizeof(key), "ch%d_I", ch); g_pub_doc[key] = i;
+        snprintf(key, sizeof(key), "ch%d_P", ch); g_pub_doc[key] = p;
     }
+    char buffer[1024];
+    size_t len = serializeJson(g_pub_doc, buffer, sizeof(buffer));
+#else
+    // New shape: serialize TelemetrySnapshot into a 4 KB buffer.
+    static char buffer[TELEMETRY_BUF_BYTES];
+    size_t len = serialize_telemetry(snap, buffer, sizeof(buffer));
+    if (len == 0) {
+        // Should not happen at full saturation; bail to avoid publishing a
+        // truncated JSON.
+        return;
+    }
+#endif
+#if CORE_DEBUG_LEVEL >= 3
+    LOG_PRINT("[TELEM] %u bytes (ch=%u sw=%u bat=%u heap=%u)\n",
+        (unsigned)len, snap.channel_count, snap.switch_count, snap.battery_count,
+        ESP.getFreeHeap());
+#endif
 
-    char buffer[512];
-    size_t len = serializeJson(g_pub_doc, buffer);
-    // Serial.printf("[JSON] %s\n", buffer);
-
+    // MQTT — keep the legacy 1-second rate limit so the broker doesn't drown
     char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
     static unsigned long last_mqtt_pub = 0;
     if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
@@ -873,26 +1171,38 @@ void publish_data(const SensorSnapshot& data) {
 
     // Blynk virtual writes disabled — enable via platformio.ini lib_deps
 
-    ble_notify_sensor_data(buffer, len);
+    // BLE: small subset (channels + battery + ts) to fit default MTU.
+    static char ble_buf[256];
+    size_t blen = serialize_telemetry_ble(snap, ble_buf, sizeof(ble_buf));
+    if (blen > 0) {
+        ble_notify_sensor_data(ble_buf, blen);
+    } else {
+        // Fall back to full buffer if subset serializer fails (shouldn't, but
+        // keeps the notify path resilient).
+        ble_notify_sensor_data(buffer, len);
+    }
     vTaskDelay(pdMS_TO_TICKS(25));  // space out notifies — avoids BLE stack crowding / UX jitter
 }
 
 void publish_data_supabase(const SensorSnapshot& data) {
+    (void)data;
     if (skip_network) return;
     if (ESP.getFreeHeap() < 13000) {
         static unsigned long last_warn = 0;
         if (millis() - last_warn > 10000) {
-            Serial.printf("[WARN] Low heap (%d / largest=%d), skipping Supabase publish\n",
+            LOG_PRINT("[WARN] Low heap (%d / largest=%d), skipping Supabase publish\n",
                 ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
             last_warn = millis();
         }
         return;
     }
 
-    // Accumulate reading into batch
+    // Throttle incoming readings: keep a small window of un-pushed SensorSnapshots
+    // for the legacy / batching path, but with the new schema we send one
+    // canonical TelemetrySnapshot per call. The batching machinery is kept
+    // around because the caller's loop drains at 1 Hz and we still want to
+    // rate-limit at 1 per second downstream.
     g_batch[g_batch_count++] = data;
-
-    // Always attempt to send — drain burst when backlogged, single entry normally
     if (g_batch_count < 1) return;
 
     char supabase_url[128], anon_key[128], device_key[64], api_key[64];
@@ -901,119 +1211,49 @@ void publish_data_supabase(const SensorSnapshot& data) {
     if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) { g_batch_count = 0; return; }
     if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) { g_batch_count = 0; return; }
     if (!is_valid_uuid(api_key)) {
-        Serial.println("[WARN] device_api_key is not a valid UUID — skip Supabase publish");
+        LOG_PRINTLN("[WARN] device_api_key is not a valid UUID — skip Supabase publish");
         g_batch_count = 0;
         return;
     }
 
-    // Use the synced epoch_time directly; fall back to current system time if
-    // not yet synced. Do NOT add uptime milliseconds (ms/1000) to the epoch.
-    time_t epoch_s = (epoch_time > 0) ? epoch_time : time(nullptr);
+    // Build the canonical snapshot once and serialize it.
+    TelemetrySnapshot snap;
+    telemetry_build(snap);
 
-    uint8_t to_send = (g_batch_count >= BATCH_DRAIN_THRESHOLD)
-        ? min<uint8_t>(g_batch_count, BATCH_DRAIN_MAX)
-        : 1;  // normal: send 1, drain burst when backlogged
+    // Wrap it in the Supabase RPC envelope: array of {p_device_key,
+    // p_device_api_key, p_payload, p_recorded_at}. One row per call keeps the
+    // server-side insert trivial; the older path sent up to 5 rows at a time
+    // — we drop that batching for the v1 schema and rely on the 1-Hz call
+    // rate from main.cpp for throughput.
     g_supa_doc.clear();
     JsonArray arr = g_supa_doc.to<JsonArray>();
+    JsonObject elem = arr.add<JsonObject>();
+    elem["p_device_key"] = device_key;
+    elem["p_device_api_key"] = api_key;
+    JsonObject payload = elem["p_payload"].to<JsonObject>();
+    serialize_telemetry_core(snap, payload);
+    elem["p_recorded_at"] = snap.ts;
 
-    for (uint8_t r = 0; r < to_send; r++) {
-        const SensorSnapshot& d = g_batch[r];
-        JsonObject elem = arr.add<JsonObject>();
-        elem["p_device_key"] = device_key;
-        elem["p_device_api_key"] = api_key;
-
-        JsonObject payload = elem["p_payload"].to<JsonObject>();
-
-        for (uint8_t i = 0; i < 3; i++) {
-            char key[16];
-            snprintf(key, sizeof(key), "ina3221_v%d", i);
-            payload[key] = get_channel_voltage(d, i);
-            snprintf(key, sizeof(key), "ina3221_i%d", i);
-            payload[key] = get_channel_current(d, i);
-        }
-#if ENABLE_INA226
-        payload["ina226_v"] = get_channel_voltage(d, 3);
-        payload["ina226_i"] = get_channel_current(d, 3);
-        payload["ina226_p"] = get_channel_power(d, 3);
+#if CORE_DEBUG_LEVEL >= 3
+    LOG_PRINT("[TELEM/SUPA] v=%u ts=%u %u bytes (heap=%u)\n",
+        snap.schema_version, snap.ts,
+        (unsigned)serializeJson(g_supa_doc, nullptr, 0), ESP.getFreeHeap());
 #endif
-        for (uint8_t i = 0; i < 4; i++) {
-            char key[16];
-            snprintf(key, sizeof(key), "coulomb_mah%d", i);
-            payload[key] = get_coulomb_mAh(i);
-            snprintf(key, sizeof(key), "energy_wh%d", i);
-            payload[key] = get_energy_Wh(i);
-        }
-        for (uint8_t i = 0; i < 4; i++) {
-            BatteryConfig bat;
-            if (settings_load_battery(i, &bat) && bat.capacity_mAh > 0) {
-                float soc = bat.initial_soc_pct + (get_coulomb_mAh(i) / bat.capacity_mAh) * 100.0f;
-                soc = soc < 0 ? 0 : soc > 100 ? 100 : soc;
-                char key[16];
-                snprintf(key, sizeof(key), "soc_pct%d", i);
-                payload[key] = soc;
-            }
-        }
-        payload["log_entries"] = log_entries_count();
-        payload["log_buffer_kb"] = log_buffer_capacity() / 1024;
-        payload["log_overflow"] = log_has_overflow_file();
-        payload["log_overflow_bytes"] = log_overflow_file_size();
 
-        for (uint8_t i = 0; i < 4; i++) {
-            char key[16];
-            snprintf(key, sizeof(key), "relay%d", i);
-            payload[key] = get_switch_state(i);
-        }
-
-        for (uint8_t ch = 0; ch < 4; ch++) {
-            VirtualChannelConfig vc;
-            char key[16];
-            float v = 0, i = 0, p = 0;
-
-            if (settings_load_virtual_channel(ch, &vc) && (vc.voltage_src > 0 || vc.current_src > 0)) {
-                if (vc.voltage_src > 0) v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, d);
-                if (vc.current_src > 0) {
-                    i = get_sensor_current(vc.current_src, vc.current_idx, d);
-                    if (vc.current_src == 3) p = get_sensor_power(vc.current_src, vc.current_idx, d);
-                    else if (vc.voltage_src > 0) p = v * i;
-                }
-            } else if (ch < 3) {
-                v = get_channel_voltage(d, ch);
-                i = get_channel_current(d, ch);
-                p = v * i;
-            } else {
-                v = get_channel_voltage(d, 3);
-                i = get_channel_current(d, 3);
-                p = get_channel_power(d, 3);
-            }
-            snprintf(key, sizeof(key), "ch%d_V", ch); payload[key] = v;
-            snprintf(key, sizeof(key), "ch%d_I", ch); payload[key] = i;
-            snprintf(key, sizeof(key), "ch%d_P", ch); payload[key] = p;
-        }
-
-        for (uint8_t i = 0; i < 3; i++) {
-            char key[16];
-            SampleMeta m = sensor_get_meta(i);
-            snprintf(key, sizeof(key), "ina3221_i%d_stddev", i); payload[key] = m.stddev;
-            snprintf(key, sizeof(key), "ina3221_i%d_spike", i); payload[key] = m.spike;
-            m = sensor_get_meta(i + 3);
-            snprintf(key, sizeof(key), "ina3221_v%d_stddev", i); payload[key] = m.stddev;
-            snprintf(key, sizeof(key), "ina3221_v%d_spike", i); payload[key] = m.spike;
-        }
-
-        JsonObject metadata = elem["p_metadata"].to<JsonObject>();
-        metadata["rssi"] = WiFi.RSSI();
-        metadata["vcc"] = analogRead(0) / 4095.0f * 3.3f;
-        metadata["uptime_s"] = millis() / 1000;
-        metadata["ip"] = get_local_ip_str();
-        metadata["heap_free"] = ESP.getFreeHeap();
-        metadata["temp_c"] = temperatureRead();
-
-        elem["p_recorded_at"] = (uint32_t)epoch_s;
+    // Heap-allocated buffer to keep this function's stack frame small.
+    size_t needed = serializeJson(g_supa_doc, nullptr, 0) + 16;
+    if (needed > 16384) {
+        LOG_PRINT("[SUPA] payload too large: %u bytes — dropping\n", (unsigned)needed);
+        g_batch_count = 0;
+        return;
     }
-
-    static char buffer[4096];
-    size_t len = serializeJson(g_supa_doc, buffer);
-    // Serial.printf("[JSON] %s\n", buffer);
+    char* buffer = (char*)malloc(needed);
+    if (!buffer) {
+        LOG_PRINTLN("[SUPA] OOM serializing telemetry — dropping batch");
+        g_batch_count = 0;
+        return;
+    }
+    size_t len = serializeJson(g_supa_doc, buffer, needed);
 
     int rc = telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
     if (rc == 200 || rc == 201 || rc == 204) {
@@ -1025,17 +1265,18 @@ void publish_data_supabase(const SensorSnapshot& data) {
     } else {
         print_http_error(g_supa_http, rc);
         if (rc == 400) {
-            Serial.print("Payload preview: ");
-            Serial.println(buffer);
+            LOG_PRINTLN("Payload preview: ");
+            LOG_PRINTLN(buffer);
         }
     }
+    free(buffer);
 
-    // Compact remaining entries (those not sent) to front of batch
-    uint8_t remaining = g_batch_count - to_send;
-    for (uint8_t i = 0; i < remaining; i++) {
-        g_batch[i] = g_batch[to_send + i];
-    }
-    g_batch_count = remaining;
+    // Drain the input batch — single row sent, so any further rows in the
+    // window are dropped (legacy was 1-sensor-per-call anyway).
+    g_batch_count = 0;
+
+    // Slow path: battery profile heartbeat (60s) and eager on change.
+    publish_battery_profiles_heartbeat(supabase_url, anon_key);
 
     publish_calibration_status();
 }
@@ -1152,9 +1393,9 @@ static void sync_device_channels_to_supabase() {
     len = serializeJson(rpc_doc, buffer);
     int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
-        Serial.println("[DB] device_channels synced to Supabase");
+        LOG_PRINTLN("[DB] device_channels synced to Supabase");
     } else {
-        Serial.printf("[DB] device_channels sync failed: %d\n", rc);
+        LOG_PRINT("[DB] device_channels sync failed: %d\n", rc);
     }
 }
 
@@ -1194,9 +1435,9 @@ void sync_calibration_to_supabase() {
     snprintf(path, sizeof(path), "/rest/v1/rpc/sync_device_calibration");
     int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
-        Serial.println("Calibration synced to Supabase");
+        LOG_PRINTLN("Calibration synced to Supabase");
     } else {
-        Serial.printf("Calibration sync failed: %d\n", rc);
+        LOG_PRINT("Calibration sync failed: %d\n", rc);
     }
 }
 
@@ -1225,25 +1466,25 @@ void sync_ble_pin_to_supabase() {
     snprintf(path, sizeof(path), "/rest/v1/rpc/sync_ble_pin");
     int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
-        Serial.println("BLE PIN synced to Supabase");
+        LOG_PRINTLN("BLE PIN synced to Supabase");
     } else {
-        Serial.printf("BLE PIN sync FAILED: HTTP %d\n", rc);
+        LOG_PRINT("BLE PIN sync FAILED: HTTP %d\n", rc);
     }
 }
 
 void publish_switch_state(uint8_t idx, bool is_energized) {
-    if (skip_network) { Serial.println("[SWITCH] skip: offline mode"); return; }
-    if (ESP.getFreeHeap() < 3072) { Serial.printf("[SWITCH] skip: heap %d < 3072\n", ESP.getFreeHeap()); return; }
+    if (skip_network) { LOG_PRINTLN("[SWITCH] skip: offline mode"); return; }
+    if (ESP.getFreeHeap() < 3072) { LOG_PRINT("[SWITCH] skip: heap %d < 3072\n", ESP.getFreeHeap()); return; }
     telemetry_http_reset();
     vTaskDelay(pdMS_TO_TICKS(50));
     char supabase_url[128], anon_key[128], device_key[64];
-    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) { Serial.println("[SWITCH] skip: no supabase url"); return; }
-    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) { Serial.println("[SWITCH] skip: no anon key"); return; }
-    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) { Serial.println("[SWITCH] skip: no device key"); return; }
+    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) { LOG_PRINTLN("[SWITCH] skip: no supabase url"); return; }
+    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) { LOG_PRINTLN("[SWITCH] skip: no anon key"); return; }
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) { LOG_PRINTLN("[SWITCH] skip: no device key"); return; }
 
     SwitchChannel ch;
     SwitchRule rule;
-    if (!settings_load_switch(idx, &ch)) { Serial.printf("[SWITCH] skip: no switch config idx=%d\n", idx); return; }
+    if (!settings_load_switch(idx, &ch)) { LOG_PRINT("[SWITCH] skip: no switch config idx=%d\n", idx); return; }
     settings_load_switch_rule(idx, &rule);
 
     // Use security definer RPC to bypass RLS
@@ -1263,9 +1504,9 @@ void publish_switch_state(uint8_t idx, bool is_energized) {
     snprintf(path, sizeof(path), "/rest/v1/rpc/sync_switch_state");
     int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
-        Serial.printf("[SWITCH] synced: idx=%d energized=%d\n", idx, is_energized);
+        LOG_PRINT("[SWITCH] synced: idx=%d energized=%d\n", idx, is_energized);
     } else {
-        Serial.printf("[SWITCH] sync FAILED: HTTP %d\n", rc);
+        LOG_PRINT("[SWITCH] sync FAILED: HTTP %d\n", rc);
     }
 }
 
@@ -1276,7 +1517,7 @@ void apply_settings_posthook(const char* cmd_type) {
             WiFi.disconnect(true);
             vTaskDelay(pdMS_TO_TICKS(100));
             WiFi.begin(ssid, pass);
-            Serial.println("[CMD] WiFi reconnecting with new credentials");
+            LOG_PRINTLN("[CMD] WiFi reconnecting with new credentials");
         }
     } else if (strcmp(cmd_type, "set_mqtt") == 0) {
         char broker[64], topic[64];
@@ -1284,14 +1525,14 @@ void apply_settings_posthook(const char* cmd_type) {
         if (settings_load_mqtt(broker, &port, topic, sizeof(broker))) {
             mqtt.disconnect();
             mqtt.setServer(broker, port);
-            Serial.println("[CMD] MQTT reconnecting with new broker");
+            LOG_PRINTLN("[CMD] MQTT reconnecting with new broker");
         }
     } else if (strcmp(cmd_type, "set_supabase") == 0) {
         supabase_http_reset();
-        Serial.println("[CMD] Supabase client reset with new URL/key");
+        LOG_PRINTLN("[CMD] Supabase client reset with new URL/key");
     } else if (strcmp(cmd_type, "set_shunt") == 0 || strcmp(cmd_type, "set_volt_ratio") == 0 || strcmp(cmd_type, "set_resistors") == 0) {
         reinit_sensors();
-        Serial.println("[CMD] Sensor params reloaded from NVS");
+        LOG_PRINTLN("[CMD] Sensor params reloaded from NVS");
     }
     // sync_device_channels_to_supabase() is called by check_settings_commands after apply_settings_command returns
     // so no need to call it here for most commands
@@ -1341,9 +1582,9 @@ void publish_calibration_status() {
     snprintf(path, sizeof(path), "/rest/v1/rpc/sync_sensor_calibration_status");
     int rc = supabase_post(path, buffer, len, supabase_url, anon_key);
     if (rc >= 200 && rc < 300) {
-        Serial.printf("[CALIB] status synced: tick=%d\n", tick_count);
+        LOG_PRINT("[CALIB] status synced: tick=%d\n", tick_count);
     } else {
-        Serial.printf("[CALIB] sync FAILED: HTTP %d\n", rc);
+        LOG_PRINT("[CALIB] sync FAILED: HTTP %d\n", rc);
     }
 }
 
@@ -1415,72 +1656,99 @@ void check_settings_commands() {
 
     char full_url[256];
     snprintf(full_url, sizeof(full_url), "%s/rest/v1/rpc/claim_settings_command", supabase_url);
-    // Serial.printf("[SETTINGS] claim URL: %s\n", full_url);
-    // Serial.printf("[SETTINGS] claim body: %.*s\n", (int)len, buffer);
-    // Serial.printf("[SETTINGS] claim header apikey: %s\n", anon_key);
-    // Serial.printf("[SETTINGS] claim header Authorization: Bearer %s\n", anon_key);
+    // LOG_PRINT("[SETTINGS] claim URL: %s\n", full_url);
+    // LOG_PRINT("[SETTINGS] claim body: %.*s\n", (int)len, buffer);
+    // LOG_PRINT("[SETTINGS] claim header apikey: %s\n", anon_key);
+    // LOG_PRINT("[SETTINGS] claim header Authorization: Bearer %s\n", anon_key);
     if (!supabase_http_prepare(full_url, anon_key)) return;
     int rc = g_supa_http.POST((uint8_t*)buffer, len);
     // Retry once on rc=-1 (TLS handshake failure after WiFi reconnect)
     if (rc < 0) {
-        // Serial.println("[SETTINGS] claim rc=-1, retrying...");
+        // LOG_PRINTLN("[SETTINGS] claim rc=-1, retrying...");
         supabase_http_reset();
         delay(100);
         if (!supabase_http_prepare(full_url, anon_key)) return;
         rc = g_supa_http.POST((uint8_t*)buffer, len);
     }
-    // Serial.printf("[SETTINGS] claim HTTP rc=%d\n", rc);
+    // LOG_PRINT("[SETTINGS] claim HTTP rc=%d\n", rc);
     if (rc == 200 || rc == 201 || rc == 204) {
-        char body[1536];
+        // Heap-allocate the body buffer so this function's stack frame stays
+        // under ~1 KB even on a 4 KB-stack task. 1.5 KB was the worst case.
+        const size_t BODY_CAP = 2048;
+        char* body = (char*)malloc(BODY_CAP);
+        if (!body) { supabase_http_reset(); return; }
         size_t body_len = 0;
         Stream& stream = g_supa_http.getStream();
         unsigned long t0 = millis();
-        while (stream.available() && body_len < sizeof(body)-1 && millis()-t0 < 2000) {
+        while (stream.available() && body_len < BODY_CAP-1 && millis()-t0 < 2000) {
             int c = stream.read();
             if (c >= 0) body[body_len++] = (char)c;
         }
         body[body_len] = '\0';
         drain_response();
 
-        // Serial.printf("[SETTINGS] claim body_len=%d body: %.*s\n", body_len, (int)body_len, body);
-        if (body_len == 0) { supabase_http_reset(); return; }
+        // LOG_PRINT("[SETTINGS] claim body_len=%d body: %.*s\n", body_len, (int)body_len, body);
+        if (body_len == 0) { supabase_http_reset(); free(body); return; }
         // Skip HTTP chunked encoding size prefix if present (e.g. "f2\r\n...")
         const char* json_start = body;
         if (body_len > 2 && body[0] != '{') {
             const char* newline = strstr(body, "\r\n");
             if (newline) {
                 json_start = newline + 2;
-                // Serial.printf("[SETTINGS] chunked prefix skipped, json_start at offset %d\n", json_start - body);
+                // LOG_PRINT("[SETTINGS] chunked prefix skipped, json_start at offset %d\n", json_start - body);
             }
         }
-        Serial.printf("[SETTINGS] raw response: %.256s\n", body);
-        if (json_start[0] == '\0' || strncmp(json_start, "null", 4) == 0) { supabase_http_reset(); return; }
+        LOG_PRINT("[SETTINGS] raw response: %.256s\n", body);
+        if (json_start[0] == '\0' || strncmp(json_start, "null", 4) == 0) {
+            supabase_http_reset();
+            free(body);
+            return;
+        }
 
-        static char resp_buf[1536];
+        // Heap-allocate the JSON parse buffer too — same reason. 2 KB is more
+        // than enough for any reasonable claim_settings_command payload.
+        const size_t RESP_CAP = 2048;
+        char* resp_buf = (char*)malloc(RESP_CAP);
+        if (!resp_buf) { supabase_http_reset(); free(body); return; }
         size_t json_offset = json_start - body;
         size_t json_len = body_len - json_offset;
-        if (json_len > sizeof(resp_buf) - 1) json_len = sizeof(resp_buf) - 1;
+        if (json_len > RESP_CAP - 1) json_len = RESP_CAP - 1;
         memcpy(resp_buf, json_start, json_len);
         resp_buf[json_len] = '\0';
-        // Serial.printf("[SETTINGS] parse attempt: %.128s\n", resp_buf);
+        // LOG_PRINT("[SETTINGS] parse attempt: %.128s\n", resp_buf);
 
         g_cal_doc.clear();
         DeserializationError err = deserializeJson(g_cal_doc, resp_buf);
         if (err) {
-            // Serial.printf("[SETTINGS] parse error: %s | body: %.200s\n", err.c_str(), resp_buf);
+            // LOG_PRINT("[SETTINGS] parse error: %s | body: %.200s\n", err.c_str(), resp_buf);
             supabase_http_reset();
+            free(body);
+            free(resp_buf);
             return;
         }
 
         const char* cmd_type = g_cal_doc["cmd_type"] | "";
-        if (strlen(cmd_type) == 0) { supabase_http_reset(); return; }
+        if (strlen(cmd_type) == 0) {
+            supabase_http_reset();
+            free(body);
+            free(resp_buf);
+            return;
+        }
 
-        char payload_buf[1024];
+        // payload_buf was 1 KB on the stack — heap it. 1 KB still plenty.
+        const size_t PAY_CAP = 1024;
+        char* payload_buf = (char*)malloc(PAY_CAP);
+        if (!payload_buf) {
+            supabase_http_reset();
+            free(body);
+            free(resp_buf);
+            return;
+        }
         JsonVariant payload_var = g_cal_doc["payload"];
         if (payload_var.is<const char*>()) {
-            strlcpy(payload_buf, payload_var.as<const char*>(), sizeof(payload_buf));
+            strlcpy(payload_buf, payload_var.as<const char*>(), PAY_CAP);
         } else {
-            serializeJson(payload_var, payload_buf, sizeof(payload_buf));
+            serializeJson(payload_var, payload_buf, PAY_CAP);
         }
         apply_settings_command(cmd_type, payload_buf);
         apply_settings_posthook(cmd_type);
@@ -1490,7 +1758,7 @@ void check_settings_commands() {
             bool energize = false;
             if (JsonObject obj = g_cal_doc["payload"]) {
                 idx = obj["idx"] | 0;
-                Serial.printf("[SETTINGS] set_relay idx=%d has_is_energized=%d val=%d\n",
+                LOG_PRINT("[SETTINGS] set_relay idx=%d has_is_energized=%d val=%d\n",
                     idx, !obj["is_energized"].isNull(), obj["is_energized"].as<int>());
                 if (!obj["is_energized"].isNull()) {
                     energize = obj["is_energized"].as<bool>();
@@ -1503,22 +1771,31 @@ void check_settings_commands() {
                 }
             }
         }
+        // Done with the heap-allocated read buffers — release before next tick.
+        supabase_http_reset();
+        free(body);
+        free(resp_buf);
+        free(payload_buf);
     } else {
-        // Read any error body before resetting — stale response data corrupts subsequent requests
-        char err_body[256];
-        size_t err_len = 0;
-        Stream& err_stream = g_supa_http.getStream();
-        unsigned long t0 = millis();
-        while (err_stream.available() && err_len < sizeof(err_body)-1 && millis()-t0 < 1000) {
-            int c = err_stream.read();
-            if (c >= 0) err_body[err_len++] = (char)c;
+        // Read any error body before resetting — stale response data corrupts subsequent requests.
+        // Heap-allocate the 256 B so it doesn't compound with the 1.5 KB+ in the success path.
+        char* err_body = (char*)malloc(256);
+        if (err_body) {
+            size_t err_len = 0;
+            Stream& err_stream = g_supa_http.getStream();
+            unsigned long t0 = millis();
+            while (err_stream.available() && err_len < 255 && millis()-t0 < 1000) {
+                int c = err_stream.read();
+                if (c >= 0) err_body[err_len++] = (char)c;
+            }
+            err_body[err_len] = '\0';
+            free(err_body);
         }
-        err_body[err_len] = '\0';
         drain_response();
         supabase_http_reset();
         static int settings_fail_count = 0;
-        // Serial.printf("[SETTINGS] claim failed rc=%d fail_count=%d err_body(%d): %.*s\n", ...);
-        // Serial.printf("[SETTINGS] claim failed rc=%d fail_count=%d err_body: (empty)\n", ...);
+        // LOG_PRINT("[SETTINGS] claim failed rc=%d fail_count=%d err_body(%d): %.*s\n", ...);
+        // LOG_PRINT("[SETTINGS] claim failed rc=%d fail_count=%d err_body: (empty)\n", ...);
         if (++settings_fail_count >= 3) {
             settings_fail_count = 0;
         }

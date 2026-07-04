@@ -36,4 +36,8 @@ void apply_settings_posthook(const char* cmd_type);  // reconnect WiFi/MQTT, res
 // Relay state publishing
 void publish_switch_state(uint8_t idx, bool is_energized);
 
+// Telemetry heartbeat helpers (telemetry.h is the schema definition; these
+// functions live here because they talk to Supabase).
+void telemetry_kick_battery_profiles();  // request eager profile heartbeat
+
 #endif
