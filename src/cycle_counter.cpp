@@ -127,14 +127,27 @@ void update_cycle_counter(const SensorSnapshot& snap, float dt_seconds) {
         float soc = compute_soc_pct(ch, bp);
         if (soc >= 0.0f) st.last_SoC_pct = soc;
 
+        // First directional tick for this channel: seed last_session_start_pct
+        // with the post-tick SoC so the first flip measures from the new
+        // session start, not from a stale initial value.
+        if (g_last_dir[ch] == 0 && new_dir != 0) {
+            st.last_session_start_pct = st.last_SoC_pct;
+        }
+
         // Direction flip detection
         if (g_last_dir[ch] != 0 && new_dir != 0 && g_last_dir[ch] != new_dir) {
             float delta = st.last_SoC_pct - st.last_session_start_pct;
             if (delta < 0.0f) delta = -delta;
             if (delta > CYCLE_DOD_HYSTERESIS_PCT) {
                 st.equivalent_full_cycles += delta / 100.0f;
-                st.last_session_start_pct = st.last_SoC_pct;
-                st.current_session_dod_Ah = 0.0f;
+            }
+            // Whether or not the delta cleared the hysteresis, the new
+            // session starts here. The sub-5% portion is absorbed: it
+            // contributes 0 cycles now and is included in the next leg's
+            // measurement.
+            st.last_session_start_pct = st.last_SoC_pct;
+            st.current_session_dod_Ah = 0.0f;
+            if (delta > CYCLE_DOD_HYSTERESIS_PCT) {
                 persist_state(ch);
             }
         }
@@ -172,6 +185,8 @@ void cycle_counter_reset(uint8_t channel) {
     if (g_loaded[channel]) {
         // Preserve test state? Simpler: zero everything for clarity.
         g_state[channel] = BatteryState{};
+        g_last_dir[channel] = 0;  // forget prior direction so the next
+                                  // tick re-seeds last_session_start_pct
         persist_state(channel);
     } else {
         battery_state_reset(channel);

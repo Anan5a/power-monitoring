@@ -25,7 +25,7 @@ OBJS = $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(notdir $(SRCS)))
 
 vpath %.cpp .:shims:hal:mock:../src
 
-.PHONY: all clean run
+.PHONY: all clean run test_cycle_counter
 
 all: $(TARGET)
 
@@ -44,3 +44,40 @@ clean:
 
 run: $(TARGET)
 	./$(TARGET)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unit tests
+# ─────────────────────────────────────────────────────────────────────────────
+# test_cycle_counter: host-side test for the DoD-weighted cycle counter.
+# Compiles the real cycle_counter.cpp, battery_state.cpp, battery_profile.cpp,
+# coulomb_counter.cpp, and settings_manager.cpp against the existing HAL
+# stubs. Drives scenarios through the public update_cycle_counter() API
+# and asserts equivalent_full_cycles.
+
+TEST_CC_SRCS = \
+    test_cycle_counter.cpp \
+    shims/sensor_manager.cpp \
+    hal/arduino_stubs.cpp \
+    hal/preferences_stub.cpp \
+    hal/wifi_stub.cpp \
+    hal/littlefs_stub.cpp \
+    hal/wire_stub.cpp \
+    hal/gpio_stub.cpp \
+    ../src/cycle_counter.cpp \
+    ../src/coulomb_counter.cpp \
+    ../src/settings_manager.cpp \
+    ../src/battery_state.cpp \
+    ../src/battery_profile.cpp
+
+TEST_CC_OBJS = $(patsubst %.cpp,$(BUILD_DIR)/test_cc_%.o,$(notdir $(TEST_CC_SRCS)))
+TEST_CC_TARGET = $(BUILD_DIR)/test_cycle_counter
+
+test_cycle_counter: $(TEST_CC_TARGET)
+	./$(TEST_CC_TARGET)
+
+$(TEST_CC_TARGET): $(TEST_CC_OBJS)
+	@mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD_DIR)/test_cc_%.o: %.cpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
