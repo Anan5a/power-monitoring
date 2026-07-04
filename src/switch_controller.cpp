@@ -1,8 +1,8 @@
 // switch_controller.cpp
 // =============================================================================
 // Struct sizes (compile-time, asserted via static_assert below):
-//   sizeof(SwitchCondition) = 32 bytes  (1+1+1+1+4+21 + 2 bytes tail pad)
-//   sizeof(SwitchRule)      = 272 bytes (SwitchCondition * 8 + header + hysteresis)
+//   sizeof(SwitchCondition) = 32 bytes  (1+1+1+1+4+21 + 3 bytes tail pad)
+//   sizeof(SwitchRule)      = 148 bytes (header 20 + 4×SwitchCondition 128)
 //   NVS blob format: [version:u8 = SWITCH_RULE_NVS_VERSION] [SwitchRule]
 //   Legacy v1 blob (23 bytes) is auto-migrated to v2 on load: a single OR-rule
 //   containing the original overcurrent/undervoltage/SoC fields (whichever were
@@ -15,6 +15,7 @@
 #include "config.h"
 #include "log_serial.h"
 #include "connectivity_manager.h"
+#include "data_logger.h"  // log_epoch_valid() for SCHEDULE_WINDOW gate
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -30,9 +31,9 @@
 #define SC_ALLOW_DIFFERENT_SIZES 1
 #endif
 #if !SC_ALLOW_DIFFERENT_SIZES
-static_assert(sizeof(SwitchCondition) == 36,
+static_assert(sizeof(SwitchCondition) == 32,
               "SwitchCondition layout changed; update NVS migration code");
-static_assert(sizeof(SwitchRule) == 164,
+static_assert(sizeof(SwitchRule) == 148,
               "SwitchRule layout changed; bump SWITCH_RULE_NVS_VERSION");
 #endif
 static const uint8_t default_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
@@ -63,10 +64,49 @@ static bool switch_auto_enabled = false;  // off by default — user enables via
 // the board header included from config.h.
 #define BOARD_GPIO_MAX 21
 #endif
+
+// Per-board denylist of GPIOs that may never be driven by the switch
+// controller (strapping pins, USB, flash, etc.). The lists are defined in
+// include/boards/<board>.h and selected at compile time via the BOARD_*
+// build flags in platformio.ini.
+#if defined(BOARD_ESP32DEV)
+    static const int* BAD_GPIO_PINS     = BAD_GPIO_PINS_ESP32DEV;
+    static const int  BAD_GPIO_COUNT    = BAD_GPIO_COUNT_ESP32DEV;
+#elif defined(BOARD_ESP32C3)
+    static const int* BAD_GPIO_PINS     = BAD_GPIO_PINS_ESP32C3;
+    static const int  BAD_GPIO_COUNT    = BAD_GPIO_COUNT_ESP32C3;
+#elif defined(BOARD_ESP32S3)
+    static const int* BAD_GPIO_PINS     = BAD_GPIO_PINS_ESP32S3;
+    static const int  BAD_GPIO_COUNT    = BAD_GPIO_COUNT_ESP32S3;
+#else
+    // Fallback: no denylist beyond the range check. Compile-time warning
+    // is already emitted by config.h, but a defined() check keeps the
+    // list zero-length instead of failing the build.
+    static const int  BAD_GPIO_PINS_DUMMY[1] = { -1 };
+    static const int* BAD_GPIO_PINS     = BAD_GPIO_PINS_DUMMY;
+    static const int  BAD_GPIO_COUNT    = 0;
+#endif
+
 static bool gpio_in_range(int8_t pin) {
     if (pin < 0 || pin > BOARD_GPIO_MAX) return false;
-    // Strapping / boot-critical pins on the C3 (2, 8, 9) are still legal
-    // numerically — caller decides whether to actually drive them.
+    for (int i = 0; i < BAD_GPIO_COUNT; i++) {
+        if (pin == BAD_GPIO_PINS[i]) return false;
+    }
+    return true;
+}
+
+// Public so the BLE / serial path can validate a pin before saving it to
+// NVS. Returns false with a one-shot log if the pin is reserved.
+bool switch_gpio_allowed(int8_t pin) {
+    if (!gpio_in_range(pin)) {
+        static bool logged = false;
+        if (!logged) {
+            LOG_PRINT("[SWITCH] pin %d is reserved (out of range or strapping/USB) — refusing\n",
+                          (int)pin);
+            logged = true;
+        }
+        return false;
+    }
     return true;
 }
 
@@ -125,20 +165,73 @@ static bool read_condition_value(const SwitchCondition& c, uint8_t rule_channel,
         case SCK_OVERCURRENT:    *out = pc->current; return true;
         case SCK_UNDERVOLTAGE:   *out = pc->voltage; return true;
         case SCK_CHANNEL_ABOVE:
-        case SCK_CHANNEL_BELOW:  *out = pc->power;   return true;
+        case SCK_CHANNEL_BELOW:  *out = pc->current; return true;  // current, not power
         default:                 return false;
     }
 }
 
-// Evaluate a single condition with epsilon-aware comparison.
-static bool eval_condition(const SwitchCondition& c, float reading) {
+// Eval direction for hysteresis-aware per-condition latching.
+enum EvalDir { DIR_RISING = 0, DIR_FALLING };
+
+// Evaluate a single condition with epsilon-aware comparison. Hysteresis is
+// applied against the threshold: on a RISING direction the condition only
+// trips when reading > value + hyst, and on a FALLING direction it only
+// resets when reading < value - hyst. When hyst <= 0 the original threshold
+// is used and behaviour matches a non-hysteretic trip/reset.
+//
+// Hysteresis sign convention per kind:
+//   - OVERCURRENT, CHANNEL_ABOVE, SOC_HIGH: trip above value, reset below value - hyst
+//   - UNDERVOLTAGE, CHANNEL_BELOW, SOC_LOW: trip below value, reset above value + hyst
+//   - SCO_EQ / SCO_GTE / SCO_LTE: hyst is ignored (compatibility) — these
+//     conditions are not the canonical hysteresis targets.
+//
+// The caller's `latched` flag carries the previous per-condition state so
+// this function is a pure mapping from (reading, latched, hyst) to bool.
+static bool eval_condition(const SwitchCondition& c, float reading, EvalDir dir,
+                           bool latched, float hyst) {
     const float v = c.value;
+    float trip_v = v;
+    float reset_v = v;
+    if (hyst > 0.0f) {
+        switch (c.kind) {
+            case SCK_OVERCURRENT:
+            case SCK_CHANNEL_ABOVE:
+            case SCK_SOC_HIGH:
+                trip_v  = v + hyst;
+                reset_v = v;
+                break;
+            case SCK_UNDERVOLTAGE:
+            case SCK_CHANNEL_BELOW:
+            case SCK_SOC_LOW:
+                trip_v  = v;
+                reset_v = v + hyst;
+                break;
+            default:
+                trip_v  = v;
+                reset_v = v;
+                break;
+        }
+    }
+
     switch (c.op) {
-        case SCO_GT:  return reading >  v + ELEC_EPS;
-        case SCO_GTE: return reading >= v - ELEC_EPS;
-        case SCO_LT:  return reading <  v - ELEC_EPS;
-        case SCO_LTE: return reading <= v + ELEC_EPS;
-        case SCO_EQ:  {
+        case SCO_GT: {
+            if (dir == DIR_RISING) return reading > trip_v + ELEC_EPS;
+            // FALLING: must drop below reset threshold
+            return reading < reset_v - ELEC_EPS;
+        }
+        case SCO_GTE: {
+            if (dir == DIR_RISING) return reading >= trip_v - ELEC_EPS;
+            return reading <= reset_v + ELEC_EPS;
+        }
+        case SCO_LT: {
+            if (dir == DIR_RISING) return reading < trip_v - ELEC_EPS;
+            return reading > reset_v + ELEC_EPS;
+        }
+        case SCO_LTE: {
+            if (dir == DIR_RISING) return reading <= trip_v + ELEC_EPS;
+            return reading >= reset_v - ELEC_EPS;
+        }
+        case SCO_EQ: {
             // Use SOC eps for SoC, electrical eps for current/voltage, scaled eps for power.
             float eps = (c.kind == SCK_SOC_LOW || c.kind == SCK_SOC_HIGH)
                             ? SOC_EPS
@@ -152,9 +245,11 @@ static bool eval_condition(const SwitchCondition& c, float reading) {
 }
 
 // SCHEDULE_WINDOW test: bit (dow * 24 + hour) of schedule_mask.
-// Falls back to "always false" if epoch is unset.
+// Falls back to "always false" if epoch is unset or not yet trusted (NTP
+// never synced — we don't want a stale epoch to act on a stale schedule).
 static bool eval_schedule(const SwitchCondition& c) {
     if (c.kind != SCK_SCHEDULE_WINDOW) return false;
+    if (!log_epoch_valid()) return false;
     time_t t = get_epoch_time();
     if (t == 0) return false;
     struct tm* tm = localtime(&t);
@@ -162,59 +257,17 @@ static bool eval_schedule(const SwitchCondition& c) {
     uint8_t hour = (uint8_t)tm->tm_hour;
     uint8_t dow  = (uint8_t)tm->tm_wday;  // 0=Sun..6=Sat
     uint16_t bit_index = (uint16_t)dow * 24u + hour;
+    if (bit_index >= 168) return false;  // defensive: 7×24
     uint8_t  byte_idx  = bit_index >> 3;
     uint8_t  bit_mask  = (uint8_t)(1u << (bit_index & 7));
     if (byte_idx >= SC_SCHEDULE_BYTES) return false;
     return (c.schedule_mask[byte_idx] & bit_mask) != 0;
 }
 
-// Public helper: evaluate a rule's combined conditions against the snapshot.
-// Writes the latest voltage/current/soc of the rule's primary channel for
-// diagnostics. Returns true if the combined condition is satisfied.
-bool switch_rule_evaluate_combined(const SwitchRule& rule,
-                                   const SensorSnapshot& snap,
-                                   float* out_voltage, float* out_current,
-                                   float* out_soc_pct) {
-    if (out_voltage) *out_voltage  = NAN;
-    if (out_current) *out_current  = NAN;
-    if (out_soc_pct) *out_soc_pct  = NAN;
-
-    if (rule.channel < snap.total_logical_channels) {
-        const PhysicalChannel* pc = sensor_get_logical_channel(snap, rule.channel);
-        if (pc) {
-            if (out_voltage) *out_voltage = pc->voltage;
-            if (out_current) *out_current = pc->current;
-        }
-    }
-    if (rule.channel < MAX_LOGICAL_CHANNELS) {
-        float soc = -1.0f;
-        if (compute_soc(rule.channel, &soc) && out_soc_pct) {
-            *out_soc_pct = soc;
-        }
-    }
-
-    if (rule.condition_count == 0) return false;
-
-    uint8_t true_count = 0;
-    for (uint8_t i = 0; i < rule.condition_count && i < SC_MAX_CONDITIONS; i++) {
-        const SwitchCondition& c = rule.conditions[i];
-        if (c.kind == SCK_DISABLED) continue;
-        if (c.kind == SCK_SCHEDULE_WINDOW) {
-            if (eval_schedule(c)) true_count++;
-            continue;
-        }
-        float reading = 0.0f;
-        if (!read_condition_value(c, rule.channel, snap, &reading)) continue;
-        if (eval_condition(c, reading)) true_count++;
-    }
-
-    if (rule.logic == SL_AND) {
-        return true_count >= rule.condition_count;
-    }
-    // SL_OR
-    uint8_t need = rule.min_conditions ? rule.min_conditions : 1;
-    return true_count >= need;
-}
+// Per-condition hysteresis-aware latching lives in evaluate_switches()
+// (the only caller) — the per-rule combined result is built inline there
+// so we can update condition_latched[] in place. SCHEDULE_WINDOW conditions
+// are stateless bit lookups in eval_schedule().
 
 void switch_rule_default_init(SwitchRule* rule, uint8_t switch_idx, uint8_t channel) {
     // Zero out, then build a single OR-rule with one overcurrent condition
@@ -316,9 +369,18 @@ void init_switches() {
                                   (int)ch.gpio_pin, (unsigned)i);
                 } else {
                     pinMode(ch.gpio_pin, OUTPUT);
-                    digitalWrite(ch.gpio_pin, ch.active_high ? LOW : HIGH); // OFF
+                    // Restore persisted physical state: if the switch was
+                    // energized when we last shut down, drive it active on
+                    // boot. Otherwise keep it OFF.
+                    bool drive_high = ch.active_high ? ch.is_energized : !ch.is_energized;
+                    digitalWrite(ch.gpio_pin, drive_high ? HIGH : LOW);
                 }
-                switch_states[i] = { false, false, 0, false };
+                // Sync runtime mirror with the persisted state we just
+                // drove to the pin.
+                switch_states[i].energized     = ch.is_energized;
+                switch_states[i].was_energized = ch.is_energized;
+                switch_states[i].condition_start_ms = 0;
+                switch_states[i].condition_active   = false;
             }
         }
     }
@@ -343,8 +405,45 @@ void evaluate_switches(const SensorSnapshot& snapshot) {
         if (!settings_load_switch_rule(i, &rule) || !rule.enabled) continue;
         if (rule.channel >= snapshot.total_logical_channels) continue;
 
-        bool condition_met = switch_rule_evaluate_combined(
-            rule, snapshot, nullptr, nullptr, nullptr);
+        // Per-condition hysteresis-aware latching. We update
+        // rule.condition_latched[i] in place based on the eval result.
+        bool cond_satisfied[SC_MAX_CONDITIONS] = { false };
+        for (uint8_t j = 0; j < rule.condition_count && j < SC_MAX_CONDITIONS; j++) {
+            const SwitchCondition& c = rule.conditions[j];
+            if (c.kind == SCK_DISABLED) {
+                rule.condition_latched[j] = false;
+                continue;
+            }
+            if (c.kind == SCK_SCHEDULE_WINDOW) {
+                if (eval_schedule(c)) {
+                    cond_satisfied[j] = true;
+                    rule.condition_latched[j] = true;
+                } else {
+                    rule.condition_latched[j] = false;
+                }
+                continue;
+            }
+            float reading = 0.0f;
+            if (!read_condition_value(c, rule.channel, snapshot, &reading)) continue;
+            bool latched = rule.condition_latched[j];
+            EvalDir dir = latched ? DIR_FALLING : DIR_RISING;
+            bool sat = eval_condition(c, reading, dir, latched, rule.hysteresis);
+            rule.condition_latched[j] = sat;
+            cond_satisfied[j] = sat;
+        }
+
+        // Combine per OR/AND/min_conditions
+        uint8_t true_count = 0;
+        for (uint8_t j = 0; j < rule.condition_count && j < SC_MAX_CONDITIONS; j++) {
+            if (cond_satisfied[j]) true_count++;
+        }
+        bool condition_met;
+        if (rule.logic == SL_AND) {
+            condition_met = (true_count >= rule.condition_count);
+        } else {
+            uint8_t need = rule.min_conditions ? rule.min_conditions : 1;
+            condition_met = (true_count >= need);
+        }
 
         SwitchState& st = switch_states[i];
 
@@ -352,37 +451,75 @@ void evaluate_switches(const SensorSnapshot& snapshot) {
             if (!st.condition_active) {
                 st.condition_active = true;
                 st.condition_start_ms = now;
-            } else if (!st.energized && (now - st.condition_start_ms >= rule.trip_delay_ms)) {
-                st.energized = true;
-                if (!st.was_energized) {
-                    st.was_energized = true;
-                    publish_switch_state(i, true);
+            } else if (!st.energized) {
+                int32_t elapsed = (int32_t)(now - st.condition_start_ms);
+                if (elapsed >= (int32_t)rule.trip_delay_ms) {
+                    st.energized = true;
+                    if (!st.was_energized) {
+                        st.was_energized = true;
+                        publish_switch_state(i, true);
+                    }
+                    set_switch_pin(ch, true);
+                    LOG_PRINT("Switch %d TRIPPED (ch=%d, pin=%d, type=%d, conds=%u, logic=%s)\n",
+                                  i, rule.channel, ch.gpio_pin, (int)ch.type,
+                                  rule.condition_count, switch_logic_name(rule.logic));
                 }
-                set_switch_pin(ch, true);
-                LOG_PRINT("Switch %d TRIPPED (ch=%d, pin=%d, type=%d, conds=%u, logic=%s)\n",
-                              i, rule.channel, ch.gpio_pin, (int)ch.type,
-                              rule.condition_count, switch_logic_name(rule.logic));
             }
         } else {
             if (st.condition_active) {
                 st.condition_active = false;
                 st.condition_start_ms = now;
-            } else if (st.energized && (now - st.condition_start_ms >= rule.reset_delay_ms)) {
-                st.energized = false;
-                if (st.was_energized) {
-                    st.was_energized = false;
-                    publish_switch_state(i, false);
+            } else if (st.energized) {
+                int32_t elapsed = (int32_t)(now - st.condition_start_ms);
+                if (elapsed >= (int32_t)rule.reset_delay_ms) {
+                    st.energized = false;
+                    if (st.was_energized) {
+                        st.was_energized = false;
+                        publish_switch_state(i, false);
+                    }
+                    set_switch_pin(ch, false);
+                    LOG_PRINT("Switch %d RESET (ch=%d, pin=%d, type=%d)\n",
+                                  i, rule.channel, ch.gpio_pin, (int)ch.type);
                 }
-                set_switch_pin(ch, false);
-                LOG_PRINT("Switch %d RESET (ch=%d, pin=%d, type=%d)\n",
-                              i, rule.channel, ch.gpio_pin, (int)ch.type);
             }
         }
+
+        // Persist updated per-condition latched state and is_energized so
+        // a reboot resumes with the same hysteresis memory.
+        if (ch.is_energized != st.energized) {
+            ch.is_energized = st.energized;
+            settings_save_switch(i, &ch);
+        }
+        settings_save_switch_rule(i, &rule);
     }
 }
 
 void switch_set_auto(bool enabled) {
     switch_auto_enabled = enabled;
+    // When auto is turned OFF, the rule-based reset path can no longer
+    // fire, so any switch that is currently energized under a rule must
+    // be force-reset immediately. Otherwise it would stay stuck ON
+    // forever (or until the next `switch auto on` cycle). Manual control
+    // is the only way out from this point.
+    if (!enabled) {
+        uint8_t count = settings_load_switch_count();
+        for (uint8_t i = 0; i < count && i < MAX_SWITCHES; i++) {
+            SwitchChannel ch;
+            SwitchRule rule;
+            if (!settings_load_switch(i, &ch)) continue;
+            if (!settings_load_switch_rule(i, &rule)) continue;
+            if (!rule.enabled) continue;
+            if (!switch_states[i].energized) continue;
+            // Force-reset: drive pin low, clear runtime state, persist.
+            set_switch_pin(ch, false);
+            switch_states[i].energized = false;
+            switch_states[i].was_energized = false;
+            ch.is_energized = false;
+            settings_save_switch(i, &ch);
+            publish_switch_state(i, false);
+            LOG_PRINT("Switch %d force-reset (auto off)\n", i);
+        }
+    }
 }
 
 bool switch_get_auto_enabled() {

@@ -10,6 +10,13 @@
 // to reject out-of-range pins in NVS before pinMode() is called.
 #define BOARD_GPIO_MAX 48
 
+// Pins that must never be used as switch GPIOs on an ESP32-S3.
+// 0 = BOOT, 3/45/46 = strapping pins. 19/20 = native USB D-/D+.
+// 26-32 = SPI0/SPI1 flash, 33/34 = PSRAM on most modules.
+// 35-37 are used by octal flash/PSRAM on some modules; reserved to be safe.
+static const int BAD_GPIO_PINS_ESP32S3[] = { 0, 3, 19, 20, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 45, 46 };
+#define BAD_GPIO_COUNT_ESP32S3 (sizeof(BAD_GPIO_PINS_ESP32S3)/sizeof(int))
+
 // I2C bus pins
 #define I2C_SDA         8
 #define I2C_SCL         9

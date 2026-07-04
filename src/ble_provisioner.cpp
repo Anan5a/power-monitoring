@@ -33,6 +33,8 @@ static unsigned long rate_window_start = 0;
 static unsigned long rate_last_cmd = 0;
 
 static void handle_command(const char* json);
+static void send_response(const char* msg);
+static void send_error(const char* cmd, const char* err);
 
 static bool ble_advertising_active = false;
 
@@ -58,6 +60,14 @@ class CmdCallbacks : public NimBLECharacteristicCallbacks {
         std::string val = pCharacteristic->getValue();
         LOG_PRINT("[BLE] onWrite len=%d\n", val.length());
         if (val.empty()) return;
+        // Reject oversized writes: 1024 is well over any reasonable command
+        // JSON (largest legitimate command is ~600 bytes) and stops a bad
+        // client from holding RAM during JSON parse + handler dispatch.
+        if (val.length() > 1024) {
+            LOG_PRINT("[BLE] rejecting oversized write: %u bytes\n", (unsigned)val.length());
+            send_response("{\"ok\":false,\"error\":\"payload_too_large\"}");
+            return;
+        }
         handle_command(val.c_str());
     }
 };
@@ -151,14 +161,41 @@ static void handle_command(const char* json) {
         // switch_controller supports up to 8 switches (MAX_SWITCHES).
         if (idx > 7) { send_error(cmd, "invalid_idx"); return; }
         uint8_t default_switch_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
+        // Validate the pin BEFORE we save to NVS — refusing a strapping /
+        // USB / out-of-range pin avoids corrupting a future boot. Only
+        // validate when the caller explicitly provides a gpio_pin; the
+        // default is always in range on supported boards.
+        int8_t pin_in = (int8_t)(doc["gpio_pin"] | default_switch_pins[idx]);
+        if (doc["gpio_pin"].is<int>() && !switch_gpio_allowed(pin_in)) {
+            send_error(cmd, "gpio_reserved");
+            return;
+        }
         SwitchChannel ch = {};
         ch.idx = idx;
         ch.type = doc["type"] | SW_RELAY;
-        ch.gpio_pin = doc["gpio_pin"] | default_switch_pins[idx];
+        ch.gpio_pin = pin_in;
         ch.active_high = doc["active_high"] | true;
         ch.enabled = doc["enabled"] | true;
         ch.is_energized = get_switch_state(idx);
-        snprintf(ch.name, sizeof(ch.name), "Switch %u", (unsigned)idx);
+        // Only set the friendly name from JSON if provided. If a follow-up
+        // payload omits `name`, the existing stored name is preserved instead
+        // of being clobbered back to the default "Switch N".
+        if (doc["name"].is<const char*>()) {
+            strlcpy(ch.name, doc["name"].as<const char*>(), sizeof(ch.name));
+        } else {
+            // First save: keep the default. Subsequent saves: load existing
+            // name so we don't wipe a friendly name the dashboard already set.
+            if (idx < settings_load_switch_count()) {
+                SwitchChannel existing;
+                if (settings_load_switch(idx, &existing) && existing.name[0] != '\0') {
+                    strlcpy(ch.name, existing.name, sizeof(ch.name));
+                } else {
+                    snprintf(ch.name, sizeof(ch.name), "Switch %u", (unsigned)idx);
+                }
+            } else {
+                snprintf(ch.name, sizeof(ch.name), "Switch %u", (unsigned)idx);
+            }
+        }
         settings_save_switch(idx, &ch);
 
         // New list-shape: { conditions:[{kind,op,value,ref_channel,schedule_mask}],
@@ -243,15 +280,48 @@ static void handle_command(const char* json) {
         settings_save_switch_rule(idx, &rule);
 
         publish_switch_state(idx, ch.is_energized);
+        // NOTE: this command only persists the rule and channel config. It
+        // does NOT change the energised state. To force a switch ON or OFF
+        // out-of-band, the caller must issue a separate `switch N 0|1` over
+        // the serial CLI (or use switch_set() in code). If `switch auto on`
+        // is in effect, any manual set will be overwritten by the sensor
+        // task within ~1 second.
         send_response("{\"ok\":true,\"msg\":\"switch_saved\"}");
     } else if (strcmp(cmd, "set_battery") == 0) {
         if (!check_pin(doc)) return;
-        BatteryConfig bat = {};
-        bat.channel = doc["channel"] | 0;
-        bat.capacity_mAh = doc["capacity_mAh"] | 0.0f;
-        bat.initial_soc_pct = doc["initial_soc_pct"] | 100.0f;
-        settings_save_battery(bat.channel, &bat);
-        send_response("{\"ok\":true,\"msg\":\"battery_saved\"}");
+        // Shape discrimination: payload with `v: 2` binds a BatteryChemistryProfile
+        // to a channel (new id-based path). Without `v`, treat as legacy flat
+        // BatteryConfig payload (capacity_mAh/initial_soc_pct) so older dashboards
+        // that haven't migrated keep working. Remove the legacy branch once the
+        // dashboard is updated to always send `v: 2`.
+        if (doc["v"].is<int>() && doc["v"].as<int>() == 2) {
+            uint8_t ch = doc["channel"] | 0;
+            int pid_in = doc["profile_id"] | -1;
+            uint8_t pid;
+            if (pid_in < 0) {
+                battery_channel_clear(ch);
+                pid = BATTERY_CHANNEL_NO_BINDING;
+            } else {
+                pid = (uint8_t)pid_in;
+                if (!battery_channel_set_profile(ch, pid)) {
+                    send_response("{\"ok\":false,\"error\":\"set_failed\"}");
+                    return;
+                }
+            }
+            char buf[128];
+            snprintf(buf, sizeof(buf),
+                "{\"ok\":true,\"msg\":\"battery_bound\",\"channel\":%u,\"profile_id\":%d}",
+                (unsigned)ch,
+                (pid == BATTERY_CHANNEL_NO_BINDING) ? -1 : (int)pid);
+            send_response(buf);
+        } else {
+            BatteryConfig bat = {};
+            bat.channel = doc["channel"] | 0;
+            bat.capacity_mAh = doc["capacity_mAh"] | 0.0f;
+            bat.initial_soc_pct = doc["initial_soc_pct"] | 100.0f;
+            settings_save_battery(bat.channel, &bat);
+            send_response("{\"ok\":true,\"msg\":\"battery_saved\"}");
+        }
     } else if (strcmp(cmd, "set_shunt") == 0) {
         if (!check_pin(doc)) return;
         uint8_t ch = doc["channel"] | 0;
@@ -278,8 +348,12 @@ static void handle_command(const char* json) {
             return;
         }
         uint32_t new_pin = doc["new_pin"] | 0;
-        // 0 = clear security, 1..999999 = valid 6-digit PINs.
-        if (new_pin > 999999) { send_error(cmd, "invalid_value"); return; }
+        // 0 is rejected to prevent the "open device" state where any client
+        // can reconfigure the device. Allowed range: 1..999999.
+        if (new_pin == 0 || new_pin > 999999) {
+            send_error(cmd, "pin must be 1..999999, 0 not allowed");
+            return;
+        }
         settings_save_ble_pin(new_pin);
         sync_ble_pin_to_supabase();
         send_response("{\"ok\":true,\"msg\":\"pin_updated\"}");
@@ -473,18 +547,51 @@ static void handle_command(const char* json) {
         send_response(buf);
     } else if (strcmp(cmd, "set_battery_profile") == 0) {
         if (!check_pin(doc)) return;
-        BatteryProfile bp = {};
-        bp.channel = doc["channel"] | 0;
-        strlcpy(bp.name, doc["name"] | "", sizeof(bp.name));
-        bp.chemistry = doc["chemistry"] | 0;
-        bp.capacity_mAh = doc["capacity_mAh"] | 0.0f;
-        bp.initial_soc_pct = doc["initial_soc_pct"] | 100.0f;
-        bp.cell_count = doc["cell_count"] | 1.0f;
-        bp.full_voltage = doc["full_voltage"] | 0.0f;
-        bp.cutoff_voltage = doc["cutoff_voltage"] | 0.0f;
-        bp.float_voltage = doc["float_voltage"] | 0.0f;
-        settings_save_battery_profile(bp.channel, &bp);
-        send_response("{\"ok\":true,\"msg\":\"battery_profile_saved\"}");
+        // Shape discrimination: payload with `v: 2` addresses the new
+        // BatteryChemistryProfile (id-based, runtime-mutable). Without `v`,
+        // treat as legacy per-channel BatteryProfile payload so older
+        // dashboards keep working. Remove the legacy branch once the
+        // dashboard is updated to always send `v: 2`.
+        if (doc["v"].is<int>() && doc["v"].as<int>() == 2) {
+            uint8_t id = doc["id"] | 0;
+            if (id >= BATTERY_MAX_PROFILES) {
+                send_error(cmd, "invalid_id");
+                return;
+            }
+            BatteryChemistryProfile p = {};
+            const BatteryChemistryProfile* existing = battery_profile_get(id);
+            if (existing) p = *existing;
+            p.id = id;
+            if (doc["name"].is<const char*>()) strlcpy(p.name, doc["name"] | "", sizeof(p.name));
+            if (doc["chemistry"].is<int>()) p.chemistry = doc["chemistry"] | p.chemistry;
+            p.nominal_voltage = doc["nominal_voltage"] | p.nominal_voltage;
+            p.rated_capacity_Ah = doc["rated_capacity_Ah"] | p.rated_capacity_Ah;
+            p.c_rating = doc["c_rating"] | p.c_rating;
+            p.cutoff_voltage = doc["cutoff_voltage"] | p.cutoff_voltage;
+            p.float_voltage = doc["float_voltage"] | p.float_voltage;
+            p.charge_efficiency = doc["charge_efficiency"] | p.charge_efficiency;
+            p.cycle_life_rated = doc["cycle_life_rated"] | p.cycle_life_rated;
+            p.min_soc_pct = doc["min_soc_pct"] | p.min_soc_pct;
+            p.max_soc_pct = doc["max_soc_pct"] | p.max_soc_pct;
+            if (!battery_profile_set(&p)) {
+                send_response("{\"ok\":false,\"error\":\"set_failed\"}");
+                return;
+            }
+            send_response("{\"ok\":true,\"msg\":\"profile_saved\"}");
+        } else {
+            BatteryProfile bp = {};
+            bp.channel = doc["channel"] | 0;
+            strlcpy(bp.name, doc["name"] | "", sizeof(bp.name));
+            bp.chemistry = doc["chemistry"] | 0;
+            bp.capacity_mAh = doc["capacity_mAh"] | 0.0f;
+            bp.initial_soc_pct = doc["initial_soc_pct"] | 100.0f;
+            bp.cell_count = doc["cell_count"] | 1.0f;
+            bp.full_voltage = doc["full_voltage"] | 0.0f;
+            bp.cutoff_voltage = doc["cutoff_voltage"] | 0.0f;
+            bp.float_voltage = doc["float_voltage"] | 0.0f;
+            settings_save_battery_profile(bp.channel, &bp);
+            send_response("{\"ok\":true,\"msg\":\"battery_profile_saved\"}");
+        }
     } else if (strcmp(cmd, "get_battery_profile") == 0) {
         if (!check_pin(doc)) return;
         uint8_t ch = doc["channel"] | 0;
@@ -682,33 +789,6 @@ static void handle_command(const char* json) {
         char buf[512];
         serializeJson(resp, buf);
         send_response(buf);
-    } else if (strcmp(cmd, "set_battery_profile") == 0) {
-        if (!check_pin(doc)) return;
-        uint8_t id = doc["id"] | 0;
-        if (id >= BATTERY_MAX_PROFILES) {
-            send_error(cmd, "invalid_id");
-            return;
-        }
-        BatteryChemistryProfile p = {};
-        const BatteryChemistryProfile* existing = battery_profile_get(id);
-        if (existing) p = *existing;
-        p.id = id;
-        if (doc["name"].is<const char*>()) strlcpy(p.name, doc["name"] | "", sizeof(p.name));
-        if (doc["chemistry"].is<int>()) p.chemistry = doc["chemistry"] | p.chemistry;
-        p.nominal_voltage = doc["nominal_voltage"] | p.nominal_voltage;
-        p.rated_capacity_Ah = doc["rated_capacity_Ah"] | p.rated_capacity_Ah;
-        p.c_rating = doc["c_rating"] | p.c_rating;
-        p.cutoff_voltage = doc["cutoff_voltage"] | p.cutoff_voltage;
-        p.float_voltage = doc["float_voltage"] | p.float_voltage;
-        p.charge_efficiency = doc["charge_efficiency"] | p.charge_efficiency;
-        p.cycle_life_rated = doc["cycle_life_rated"] | p.cycle_life_rated;
-        p.min_soc_pct = doc["min_soc_pct"] | p.min_soc_pct;
-        p.max_soc_pct = doc["max_soc_pct"] | p.max_soc_pct;
-        if (!battery_profile_set(&p)) {
-            send_response("{\"ok\":false,\"error\":\"set_failed\"}");
-            return;
-        }
-        send_response("{\"ok\":true,\"msg\":\"profile_saved\"}");
     } else if (strcmp(cmd, "delete_battery_profile") == 0) {
         if (!check_pin(doc)) return;
         uint8_t id = doc["id"] | 0;
@@ -737,28 +817,6 @@ static void handle_command(const char* json) {
         char buf[384];
         serializeJson(resp, buf);
         send_response(buf);
-    } else if (strcmp(cmd, "set_battery") == 0) {
-        if (!check_pin(doc)) return;
-        uint8_t ch = doc["channel"] | 0;
-        int pid_in = doc["profile_id"] | -1;
-        uint8_t pid;
-        if (pid_in < 0) {
-            battery_channel_clear(ch);
-            pid = BATTERY_CHANNEL_NO_BINDING;
-        } else {
-            pid = (uint8_t)pid_in;
-            if (!battery_channel_set_profile(ch, pid)) {
-                send_response("{\"ok\":false,\"error\":\"set_failed\"}");
-                return;
-            }
-        }
-        JsonDocument resp;
-        resp["ok"] = true;
-        resp["channel"] = ch;
-        resp["profile_id"] = (pid == BATTERY_CHANNEL_NO_BINDING) ? -1 : (int)pid;
-        char buf[128];
-        serializeJson(resp, buf);
-        send_response(buf);
     } else if (strcmp(cmd, "reset_battery") == 0) {
         if (!check_pin(doc)) return;
         uint8_t ch = doc["channel"] | 0;
@@ -775,7 +833,6 @@ static void handle_command(const char* json) {
         resp["cumulative_Ah_in"] = st.cumulative_Ah_in;
         resp["cumulative_Ah_out"] = st.cumulative_Ah_out;
         resp["equivalent_full_cycles"] = st.equivalent_full_cycles;
-        resp["current_session_dod_Ah"] = st.current_session_dod_Ah;
         resp["last_session_start_pct"] = st.last_session_start_pct;
         resp["last_SoC_pct"] = st.last_SoC_pct;
         char buf[256];
@@ -856,59 +913,109 @@ static void handle_command(const char* json) {
     }
 }
 
-// Apply a settings command from Supabase (no PIN check — Supabase auth is trusted)
+// Apply a settings command from Supabase (no PIN check — Supabase auth is trusted).
 // Reuses the same command dispatch logic from handle_command, but without PIN requirement.
 // cmd_type: command name string (e.g. "set_wifi", "set_calibration")
 // payload_json: JSON string containing the command parameters
-void apply_settings_command(const char* cmd_type, const char* payload_json) {
+//
+// Returns true on successful apply, false on rejection (unknown command,
+// bad payload, invalid value). Callers should only run the post-hook
+// (WiFi/MQTT reconnect, supabase client reset) when this returns true.
+//
+// TODO: Supabase auth is the trust boundary; device_api_key verification is a
+// schema-side concern. The schema-fix agent will add a device_api_key column
+// and validation on claim_settings_command. Until then any caller able to
+// insert a row into the claimed-commands table can run these — but that is
+// the pre-fix behavior, and the schema fix is the proper fix.
+bool apply_settings_command(const char* cmd_type, const char* payload_json) {
     LOG_PRINT("[CMD] applying: %s\n", cmd_type);
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload_json);
-    if (err) { LOG_PRINTLN("[CMD] bad json payload"); return; }
+    if (err) { LOG_PRINTLN("[CMD] bad json payload"); return false; }
 
     if (strcmp(cmd_type, "set_wifi") == 0) {
         if (doc["ssid"] && doc["pass"]) {
             settings_save_wifi(doc["ssid"], doc["pass"]);
             LOG_PRINTLN("[CMD] wifi saved");
+            return true;
         }
+        return false;
     } else if (strcmp(cmd_type, "set_mqtt") == 0) {
         if (doc["broker"]) {
-            settings_save_mqtt(doc["broker"], doc["port"] | 1883, doc["topic"] | "");
+            // Partial-update safety: don't clobber topic with empty strings.
+            const char* broker = doc["broker"] | "";
+            uint16_t port     = doc["port"]     | 1883;
+            if (doc["topic"].is<const char*>()) {
+                const char* t = doc["topic"].as<const char*>();
+                settings_save_mqtt(broker, port, t);
+            } else {
+                char cur_topic[64] = ""; uint16_t cur_port = 0; char cur_broker[64] = "";
+                if (settings_load_mqtt(cur_broker, &cur_port, cur_topic, sizeof(cur_broker))) {
+                    settings_save_mqtt(broker, port, cur_topic);
+                } else {
+                    settings_save_mqtt(broker, port, "");
+                }
+            }
             LOG_PRINTLN("[CMD] mqtt saved");
+            return true;
         }
+        return false;
     } else if (strcmp(cmd_type, "set_http") == 0) {
         if (doc["url"]) {
             settings_save_http_endpoint(doc["url"], doc["token"] | "");
             settings_save_http_enabled(doc["enabled"] | true);
             LOG_PRINTLN("[CMD] http saved");
+            return true;
         }
+        return false;
     } else if (strcmp(cmd_type, "set_supabase") == 0) {
         if (doc["url"]) {
             settings_save_supabase_url(doc["url"]);
-            settings_save_supabase_anon_key(doc["anon_key"] | "");
-            settings_save_supabase_api_key(doc["api_key"] | "");
-            settings_save_supabase_device_key(doc["device_key"] | "");
+            // Partial-update safety: a payload that omits api_key /
+            // device_key / anon_key must not silently clear them. Only
+            // overwrite when the field is present and non-empty.
+            if (doc["anon_key"].is<const char*>() && strlen(doc["anon_key"].as<const char*>()) > 0) {
+                settings_save_supabase_anon_key(doc["anon_key"]);
+            }
+            if (doc["api_key"].is<const char*>() && strlen(doc["api_key"].as<const char*>()) > 0) {
+                settings_save_supabase_api_key(doc["api_key"]);
+            }
+            if (doc["device_key"].is<const char*>() && strlen(doc["device_key"].as<const char*>()) > 0) {
+                settings_save_supabase_device_key(doc["device_key"]);
+            }
             LOG_PRINTLN("[CMD] supabase saved");
+            return true;
         }
+        return false;
     } else if (strcmp(cmd_type, "set_shunt") == 0) {
         uint8_t ch = doc["channel"] | 0;
         settings_save_shunt(ch, doc["ohms"] | 0.0f);
         LOG_PRINTLN("[CMD] shunt saved");
+        return true;
     } else if (strcmp(cmd_type, "set_volt_ratio") == 0) {
         uint8_t ch = doc["channel"] | 0;
         settings_save_volt_ratio(ch, doc["ratio"] | 0.0f);
         LOG_PRINTLN("[CMD] volt_ratio saved");
+        return true;
     } else if (strcmp(cmd_type, "set_resistors") == 0) {
         uint8_t ch = doc["channel"] | 0;
         settings_save_resistors(ch, doc["r_high"] | 0.0f, doc["r_low"] | 0.0f);
         LOG_PRINTLN("[CMD] resistors saved");
+        return true;
     } else if (strcmp(cmd_type, "set_switch") == 0 || strcmp(cmd_type, "set_relay") == 0) {
         uint8_t idx = doc["idx"] | 0;
+        if (idx > 7) { LOG_PRINTLN("[CMD] invalid switch idx"); return false; }
         uint8_t default_switch_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
+        // Validate pin if explicit (mirrors the BLE set_switch path).
+        int8_t pin_in2 = (int8_t)(doc["gpio_pin"] | default_switch_pins[idx]);
+        if (doc["gpio_pin"].is<int>() && !switch_gpio_allowed(pin_in2)) {
+            LOG_PRINTLN("[CMD] gpio_reserved");
+            return false;
+        }
         SwitchChannel ch = {};
         ch.idx = idx;
         ch.type = doc["type"] | SW_RELAY;
-        ch.gpio_pin = default_switch_pins[idx];
+        ch.gpio_pin = pin_in2;
         ch.active_high = doc["active_high"] | true;
         ch.enabled = doc["enabled"] | true;
         snprintf(ch.name, sizeof(ch.name), "Switch %u", (unsigned)idx);
@@ -941,8 +1048,33 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
                 else if (strcmp(kind, "CHANNEL_ABOVE")   == 0) c.kind = SCK_CHANNEL_ABOVE;
                 else if (strcmp(kind, "CHANNEL_BELOW")   == 0) c.kind = SCK_CHANNEL_BELOW;
                 else if (strcmp(kind, "SCHEDULE_WINDOW") == 0) c.kind = SCK_SCHEDULE_WINDOW;
-                c.value = co["value"] | 0.0f;
+                else                                            c.kind = SCK_DISABLED;
+
+                // op — accept strings (">", "<", ">=", "<=", "==") or fall
+                // back to "gt". Matches the BLE path.
+                const char* op = co["op"] | "gt";
+                if      (strcmp(op, ">")  == 0) c.op = SCO_GT;
+                else if (strcmp(op, "<")  == 0) c.op = SCO_LT;
+                else if (strcmp(op, ">=") == 0) c.op = SCO_GTE;
+                else if (strcmp(op, "<=") == 0) c.op = SCO_LTE;
+                else if (strcmp(op, "==") == 0) c.op = SCO_EQ;
+                else if (strcmp(op, "gt")  == 0) c.op = SCO_GT;
+                else if (strcmp(op, "lt")  == 0) c.op = SCO_LT;
+                else if (strcmp(op, "gte") == 0) c.op = SCO_GTE;
+                else if (strcmp(op, "lte") == 0) c.op = SCO_LTE;
+                else if (strcmp(op, "eq")  == 0) c.op = SCO_EQ;
+                else                                c.op = SCO_GT;
+
+                c.value       = co["value"] | 0.0f;
                 c.ref_channel = (int8_t)(co["ref_channel"] | -1);
+
+                // schedule_mask — copy byte-by-byte, clamped to SC_SCHEDULE_BYTES
+                JsonArray mask = co["schedule_mask"].as<JsonArray>();
+                if (mask) {
+                    for (uint8_t bi = 0; bi < SC_SCHEDULE_BYTES && bi < mask.size(); bi++) {
+                        c.schedule_mask[bi] = mask[bi].as<uint8_t>();
+                    }
+                }
                 n++;
             }
             rule.condition_count = n;
@@ -951,7 +1083,11 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
             float overA = doc["overcurrent_A"]  | 0.0f;
             float undV  = doc["undervoltage_V"] | 0.0f;
             float socLo = doc["soc_low_pct"]    | 0.0f;
-            float socHi = doc["soc_high_pct"]   | 100.0f;
+            // Legacy default: omit SoC conditions unless the dashboard
+            // explicitly sets them. A 100% high SoC trip would trip
+            // immediately on any finite SoC, which is almost certainly
+            // not what the user wants.
+            float socHi = doc["soc_high_pct"]   | 0.0f;
             if (overA > 1e-6f && n < SC_MAX_CONDITIONS) {
                 SwitchCondition& c = rule.conditions[n++];
                 c.kind = SCK_OVERCURRENT; c.op = SCO_GT; c.ref_channel = -1; c.value = overA;
@@ -972,6 +1108,7 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         }
         settings_save_switch_rule(idx, &rule);
         LOG_PRINTLN("[CMD] switch saved");
+        return true;
     } else if (strcmp(cmd_type, "set_battery") == 0) {
         BatteryConfig bat = {};
         bat.channel = doc["channel"] | 0;
@@ -979,7 +1116,44 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         bat.initial_soc_pct = doc["initial_soc_pct"] | 100.0f;
         settings_save_battery(bat.channel, &bat);
         LOG_PRINTLN("[CMD] battery saved");
+        return true;
     } else if (strcmp(cmd_type, "set_battery_profile") == 0) {
+        // Two distinct shapes hit this branch:
+        //   1. settings_manager's per-channel BatteryProfile (channel-bound,
+        //      has `system_voltage`, `cell_count`, `full_voltage`).
+        //   2. battery_profile's chemistry registry (`id`,
+        //      `nominal_voltage`, `c_rating`, `charge_efficiency`,
+        //      `cycle_life_rated`, `min_soc_pct`, `max_soc_pct`) — the
+        //      shape the dashboard sends.
+        if (doc["id"].is<int>() || doc["id"].is<unsigned int>()) {
+            uint8_t id = doc["id"] | 0;
+            if (id >= BATTERY_MAX_PROFILES) {
+                LOG_PRINTLN("[CMD] battery_profile id out of range");
+                return false;
+            }
+            BatteryChemistryProfile p = {};
+            const BatteryChemistryProfile* existing = battery_profile_get(id);
+            if (existing) p = *existing;
+            p.id = id;
+            if (doc["name"].is<const char*>()) strlcpy(p.name, doc["name"] | "", sizeof(p.name));
+            if (doc["chemistry"].is<int>()) p.chemistry = doc["chemistry"] | p.chemistry;
+            p.nominal_voltage    = doc["nominal_voltage"]    | p.nominal_voltage;
+            p.rated_capacity_Ah  = doc["rated_capacity_Ah"]  | p.rated_capacity_Ah;
+            p.c_rating           = doc["c_rating"]           | p.c_rating;
+            p.cutoff_voltage     = doc["cutoff_voltage"]     | p.cutoff_voltage;
+            p.float_voltage      = doc["float_voltage"]      | p.float_voltage;
+            p.charge_efficiency  = doc["charge_efficiency"]  | p.charge_efficiency;
+            p.cycle_life_rated   = doc["cycle_life_rated"]   | p.cycle_life_rated;
+            p.min_soc_pct        = doc["min_soc_pct"]        | p.min_soc_pct;
+            p.max_soc_pct        = doc["max_soc_pct"]        | p.max_soc_pct;
+            if (!battery_profile_set(&p)) {
+                LOG_PRINTLN("[CMD] battery_profile_set failed");
+                return false;
+            }
+            LOG_PRINTLN("[CMD] battery_profile (chemistry) saved");
+            return true;
+        }
+        // Legacy per-channel BatteryProfile
         BatteryProfile bp = {};
         bp.channel = doc["channel"] | 0;
         strlcpy(bp.name, doc["name"] | "", sizeof(bp.name));
@@ -1002,24 +1176,61 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         bp.cutoff_voltage = doc["cutoff_voltage"] | 0.0f;
         bp.float_voltage = doc["float_voltage"] | 0.0f;
         settings_save_battery_profile(bp.channel, &bp);
-        LOG_PRINTLN("[CMD] battery_profile saved");
+        LOG_PRINTLN("[CMD] battery_profile (channel) saved");
+        return true;
+    } else if (strcmp(cmd_type, "delete_battery_profile") == 0) {
+        uint8_t id = doc["id"] | 0;
+        if (!battery_profile_delete(id)) {
+            LOG_PRINTLN("[CMD] delete_battery_profile failed");
+            return false;
+        }
+        LOG_PRINTLN("[CMD] battery_profile deleted");
+        return true;
+    } else if (strcmp(cmd_type, "reset_battery") == 0) {
+        uint8_t ch = doc["channel"] | 0;
+        if (ch >= MAX_LOGICAL_CHANNELS) {
+            LOG_PRINTLN("[CMD] reset_battery: invalid channel");
+            return false;
+        }
+        cycle_counter_reset(ch);
+        reset_coulomb_counter(ch);
+        battery_state_reset(ch);
+        LOG_PRINTLN("[CMD] battery reset");
+        return true;
     } else if (strcmp(cmd_type, "set_calibration") == 0) {
         uint8_t ch = doc["channel"] | 0;
+        if (ch > 2) { LOG_PRINTLN("[CMD] invalid calibration channel"); return false; }
         uint8_t type = doc["type"] | 0;
         float value = doc["value"] | 0.0f;
         sensor_set_calibration(ch, type, value);
         LOG_PRINTLN("[CMD] calibration saved");
+        return true;
+    } else if (strcmp(cmd_type, "reset_calibration") == 0) {
+        uint8_t ch = doc["channel"] | 0;
+        if (ch > 2) { LOG_PRINTLN("[CMD] invalid calibration channel"); return false; }
+        sensor_reset_calibration(ch);
+        LOG_PRINTLN("[CMD] calibration reset");
+        return true;
     } else if (strcmp(cmd_type, "set_invert_curr") == 0) {
         uint8_t ch = doc["channel"] | 0;
+        if (ch > 2) { LOG_PRINTLN("[CMD] invalid invert_curr channel"); return false; }
         sensor_set_invert_curr(ch, doc["invert"] | false);
         LOG_PRINTLN("[CMD] invert_curr saved");
+        return true;
+    } else if (strcmp(cmd_type, "reset_invert_curr") == 0) {
+        uint8_t ch = doc["channel"] | 0;
+        if (ch > 2) { LOG_PRINTLN("[CMD] invalid invert_curr channel"); return false; }
+        sensor_reset_invert_curr(ch);
+        LOG_PRINTLN("[CMD] invert_curr reset");
+        return true;
     } else if (strcmp(cmd_type, "reset_coulomb") == 0) {
         uint8_t ch = doc["channel"] | 0;
         reset_coulomb_counter(ch);
         LOG_PRINTLN("[CMD] coulomb_reset done");
+        return true;
     } else if (strcmp(cmd_type, "set_virtual_channel") == 0) {
         uint8_t ch = doc["channel"] | 0;
-        if (ch > 3) return;
+        if (ch > 3) { LOG_PRINTLN("[CMD] invalid virtual_channel"); return false; }
         VirtualChannelConfig vc = {};
         vc.voltage_src = doc["voltage_src"] | 0;
         vc.voltage_idx = doc["voltage_idx"] | 0;
@@ -1027,6 +1238,7 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         vc.current_idx = doc["current_idx"] | 0;
         settings_save_virtual_channel(ch, &vc);
         LOG_PRINTLN("[CMD] virtual_channel saved");
+        return true;
     } else if (strcmp(cmd_type, "set_channel_group") == 0) {
         ChannelGroup cg = {};
         cg.group_id = doc["group_id"] | 0;
@@ -1035,32 +1247,47 @@ void apply_settings_command(const char* cmd_type, const char* payload_json) {
         cg.channel_mask = doc["channel_mask"] | 0;
         settings_save_channel_group(cg.group_id, &cg);
         LOG_PRINTLN("[CMD] channel_group saved");
+        return true;
     } else if (strcmp(cmd_type, "set_channel_name") == 0) {
         uint8_t ch = doc["channel"] | 0;
         settings_save_channel_name(ch, doc["name"] | "");
         LOG_PRINTLN("[CMD] channel_name saved");
+        return true;
     } else if (strcmp(cmd_type, "set_pin") == 0) {
-        settings_save_ble_pin(doc["new_pin"] | 0);
+        // Reject 0 — that puts the device in an "open" state where any
+        // client can reconfigure it. Also reject > 999999 (6-digit limit).
+        uint32_t new_pin = doc["new_pin"] | 0;
+        if (new_pin == 0 || new_pin > 999999) {
+            LOG_PRINTLN("[CMD] set_pin rejected (must be 1..999999)");
+            return false;
+        }
+        settings_save_ble_pin(new_pin);
         sync_ble_pin_to_supabase();
         LOG_PRINTLN("[CMD] ble_pin updated");
+        return true;
     } else if (strcmp(cmd_type, "calibrate_baseline") == 0) {
         sensor_calibrate_baseline();
         sync_calibration_to_supabase();
         LOG_PRINTLN("[CMD] baseline calibration started");
+        return true;
     } else if (strcmp(cmd_type, "discover_sensors") == 0) {
         discover_sensors();
         LOG_PRINTLN("[CMD] sensor discovery complete");
+        return true;
     } else if (strcmp(cmd_type, "factory_reset") == 0) {
         settings_factory_reset();
         LOG_PRINTLN("[CMD] factory_reset done — rebooting");
         vTaskDelay(pdMS_TO_TICKS(100));
         ESP.restart();
+        return true;  // unreachable
     } else if (strcmp(cmd_type, "reboot") == 0) {
         LOG_PRINTLN("[CMD] rebooting");
         vTaskDelay(pdMS_TO_TICKS(100));
         ESP.restart();
+        return true;  // unreachable
     } else {
         LOG_PRINT("[CMD] unknown: %s\n", cmd_type);
+        return false;
     }
 }
 

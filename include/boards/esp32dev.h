@@ -9,6 +9,14 @@
 // to reject out-of-range pins in NVS before pinMode() is called.
 #define BOARD_GPIO_MAX 39
 
+// Pins that must never be used as switch GPIOs on a classic ESP32 (xtensa).
+// 0 = BOOT button, 1 = TX0 (serial console), 3 = RX0.
+// 6-11 are internal SPI flash on most modules and not broken out.
+// 12 = MTDI strapping pin (flash voltage on classic ESP32).
+// 15 = MTDO strapping pin (silences boot logs if pulled low at boot).
+static const int BAD_GPIO_PINS_ESP32DEV[] = { 0, 1, 3, 6, 7, 8, 9, 10, 11, 12, 15 };
+#define BAD_GPIO_COUNT_ESP32DEV (sizeof(BAD_GPIO_PINS_ESP32DEV)/sizeof(int))
+
 // I2C bus pins
 #define I2C_SDA         21
 #define I2C_SCL         22

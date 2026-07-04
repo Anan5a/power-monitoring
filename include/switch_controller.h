@@ -30,7 +30,7 @@ struct SwitchChannel {
 // non-zero field. The struct below always stores the new shape; the BLE/serial
 // path is responsible for translation.
 #define SC_MAX_CONDITIONS    4
-#define SC_SCHEDULE_BYTES    28   // 4 × 7 days bitmask
+#define SC_SCHEDULE_BYTES    21   // 168 bits = 21 bytes, 7×24h bitmask
 
 enum SwitchConditionKind {
     SCK_DISABLED = 0,
@@ -75,6 +75,7 @@ struct SwitchRule {
     uint8_t  condition_count;  // number of populated conditions
     uint8_t  enabled;
     float    hysteresis;       // dead-band on/off threshold difference
+    bool     condition_latched[SC_MAX_CONDITIONS]; // per-condition trip state
     SwitchCondition conditions[SC_MAX_CONDITIONS];
 };
 
@@ -86,10 +87,32 @@ bool get_switch_state(uint8_t idx);
 void switch_set_auto(bool enabled);
 bool switch_get_auto_enabled();  // telemetry snapshot accessor
 
+// THREADING MODEL:
+//   switch_set(), switch_pulse(), switch_set_auto() and get_switch_state()
+//   may be called from any context (loop, BLE task, serial CLI). They are
+//   short and write through NVS / GPIO directly.
+//
+//   evaluate_switches() is the single writer of switch_states[i] in the
+//   automatic (rule-driven) path and runs on the sensor task (Core 1) at
+//   1 Hz. The auto path never races with itself, but the manual path
+//   (switch_set) and the auto path can collide: a manual set can be
+//   overwritten by the next sensor tick if `switch auto on` is in effect.
+//   Callers that want durable manual control must `switch auto off` first.
+//
+//   The legacy relay-controller mutex is NOT used here; switches are
+//   accessed from a single auto-writer + concurrent manual callers, and
+//   each NVS row update is independent.
+
 // Human-readable names for SwitchConditionKind / SwitchConditionOp / SwitchLogic
 const char* switch_condition_kind_name(uint8_t kind);
 const char* switch_condition_op_name(uint8_t op);
 const char* switch_logic_name(uint8_t logic);
+
+// Validate a GPIO for use as a switch pin. Returns false if the pin is
+// outside the board's legal range OR is on the per-board denylist
+// (strapping pins, USB, flash). Used by the BLE / serial set_switch path
+// to refuse unsafe pins before they reach NVS.
+bool switch_gpio_allowed(int8_t pin);
 
 // Initialize a SwitchRule with a single OR overcurrent condition.
 void switch_rule_default_init(SwitchRule* rule, uint8_t switch_idx, uint8_t channel);

@@ -11,6 +11,13 @@
 // to reject out-of-range pins in NVS before pinMode() is called.
 #define BOARD_GPIO_MAX 21
 
+// Pins that must never be used as switch GPIOs on an ESP32-C3.
+// 0 = BOOT button, 2/8/9 = strapping pins (boot mode / boot log).
+// 18/19 = native USB D-/D+. The USB-Serial/JTAG pins (20/21) are also
+// reserved by the on-board USB-Serial chip on most dev boards.
+static const int BAD_GPIO_PINS_ESP32C3[] = { 0, 2, 8, 9, 18, 19, 20, 21 };
+#define BAD_GPIO_COUNT_ESP32C3 (sizeof(BAD_GPIO_PINS_ESP32C3)/sizeof(int))
+
 // I2C bus pins
 #define I2C_SDA         5
 #define I2C_SCL         6
