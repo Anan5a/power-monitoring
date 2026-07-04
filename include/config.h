@@ -79,6 +79,10 @@
 #define OLED_ADDR       0x3C
 
 // Sampling and display timing
+// LEGACY — superseded by FreeRTOS task timing in src/main.cpp. These
+// constants are kept because other modules (and the serial CLI) still
+// reference them as display/intervals. New timing should be set via the
+// FreeRTOS task periods in main.cpp.
 #define SAMPLE_INTERVAL_MS  5000
 #define FAST_SAMPLE_INTERVAL_MS 500
 #define DISPLAY_INTERVAL_MS 1000

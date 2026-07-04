@@ -779,8 +779,14 @@ static void handle_serial_cli() {
                 sensor_calibrate_baseline();
                 LOG_PRINTLN("Baseline recalibration started — collecting new baseline over next 10 ticks");
             } else if (strcmp(line, "ble_on") == 0) {
+                // The WiFi-state machine deinits the BLE stack to free ~50KB
+                // heap for TLS. The first reconnect re-initialises
+                // automatically, but if the user wants to provision via BLE
+                // while WiFi is up, they need a way to bring it back.
+                // init_ble_provisioner() is a no-op if already initialised.
+                init_ble_provisioner();
                 start_ble_advertising();
-                LOG_PRINTLN("BLE advertising restarted");
+                LOG_PRINTLN("BLE (re-)initialised and advertising");
             } else if (strcmp(line, "wifi_show") == 0) {
                 char ssid[64] = "", pass[64] = "";
                 if (settings_load_wifi(ssid, pass, sizeof(ssid))) {

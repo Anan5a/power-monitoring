@@ -183,19 +183,20 @@ void update_display(const SensorSnapshot& data, const char* ip_str, float total_
     
     unsigned long now = millis();
     if (now - last_page_switch >= 3000) {
-        current_page = (current_page + 1) % 4;
+        current_page = (current_page + 1) % 5;
         last_page_switch = now;
     }
     display->clearDisplay();
     display->setTextSize(1);
     display->setTextColor(SSD1306_WHITE);
-    
+
     if (current_page == 0) {
         draw_status_page(ip_str, total_power, temperatureRead());
     } else {
+        // Pages 1..4 map to logical channels 0..3.
         draw_channel_page(current_page - 1, data);
     }
-    
+
     display->display();
 }
 

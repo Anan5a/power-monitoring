@@ -39,10 +39,22 @@ static float volt_ratios[3] = {
 };
 
 static ChannelCalibration cal = {
-    .volt_offset_mv = {CAL_VOLT_OFFSET_MV_CH0, CAL_VOLT_OFFSET_MV_CH1, CAL_VOLT_OFFSET_MV_CH2},
-    .volt_gain = {CAL_VOLT_GAIN_CH0, CAL_VOLT_GAIN_CH1, CAL_VOLT_GAIN_CH2},
-    .curr_offset_ma = {CAL_CURR_OFFSET_MA_CH0, CAL_CURR_OFFSET_MA_CH1, CAL_CURR_OFFSET_MA_CH2},
-    .curr_gain = {CAL_CURR_GAIN_CH0, CAL_CURR_GAIN_CH1, CAL_CURR_GAIN_CH2},
+    .volt_offset_mv = {
+        CAL_VOLT_OFFSET_MV_CH0, CAL_VOLT_OFFSET_MV_CH1, CAL_VOLT_OFFSET_MV_CH2,
+        0,0,0,0,0,0,0,0,0,0,0,0,0
+    },
+    .volt_gain = {
+        CAL_VOLT_GAIN_CH0, CAL_VOLT_GAIN_CH1, CAL_VOLT_GAIN_CH2,
+        1,1,1,1,1,1,1,1,1,1,1,1,1
+    },
+    .curr_offset_ma = {
+        CAL_CURR_OFFSET_MA_CH0, CAL_CURR_OFFSET_MA_CH1, CAL_CURR_OFFSET_MA_CH2,
+        0,0,0,0,0,0,0,0,0,0,0,0,0
+    },
+    .curr_gain = {
+        CAL_CURR_GAIN_CH0, CAL_CURR_GAIN_CH1, CAL_CURR_GAIN_CH2,
+        1,1,1,1,1,1,1,1,1,1,1,1,1
+    },
 };
 
 // Burst sample metadata — indexed by logical channel
@@ -195,9 +207,19 @@ static void clear_pods() {
 
 #if ENABLE_INA226
 static void discover_ina226() {
+    // When the legacy INA3221 modules are enabled, reserve the 0x40-0x43
+    // range so the scan probe doesn't trash the INA3221's configuration
+    // registers with a stray INA226 init attempt. The INA3221 sits at
+    // 0x40 (current) and 0x42 (voltage); 0x41 and 0x43 are reserved for
+    // future INA3221 expansions. New builds can flip ENABLE_INA3221=0 to
+    // open up the full 0x40-0x4F range.
+    uint8_t scan_lo = 0x40, scan_hi = 0x4F;
+#if ENABLE_INA3221 || ENABLE_INA3221_VOLT
+    scan_lo = 0x44;
+#endif
     uint8_t found = 0;
-    LOG_PRINTLN("[DISC] Scanning I2C for INA226 (0x40-0x4F)...");
-    for (uint8_t addr = 0x40; addr <= 0x4F; addr++) {
+    LOG_PRINT("[DISC] Scanning I2C for INA226 (0x%02X-0x%02X)...\n", scan_lo, scan_hi);
+    for (uint8_t addr = scan_lo; addr <= scan_hi; addr++) {
         Wire.beginTransmission(addr);
         if (Wire.endTransmission() != 0) continue; // no ACK
 
@@ -225,6 +247,9 @@ static void discover_ina226() {
         ina226_devices[found] = dev;
         ina226_device_for_pod[found] = found;
 
+        // Persist the discovered address so the next boot can skip the scan.
+        settings_save_discovered_ina_addr(found, addr);
+
         char name[16];
         snprintf(name, sizeof(name), "INA226@0x%02X", addr);
         register_pod(POD_INA226, name, 1, pod_ina226_read);
@@ -234,10 +259,8 @@ static void discover_ina226() {
         if (found >= MAX_INA226) break;
     }
 
-    // Note: addresses are saved in the loop above; this is a placeholder.
-    // The actual addresses are stored per-device in the discovery loop.
-    // Shunt/vratio defaults are set; user can override via BLE/CLI later.
-    (void)0;
+    // Persist the final count so init_sensors() can use the cache next boot.
+    settings_save_discovered_ina_count(found);
     LOG_PRINT("[DISC] INA226 scan complete: %d found\n", found);
 }
 #endif
@@ -266,26 +289,12 @@ void init_sensors() {
         }
     }
 
-#if ENABLE_INA3221
-    if (!ina3221.begin(INA3221_ADDR, &Wire)) {
-        LOG_PRINTLN("INA3221 current (0x40) init failed");
-    } else {
-        for (uint8_t ch = 0; ch < 3; ch++) {
-            float shunt = 0.0f;
-            if (settings_load_shunt(ch, &shunt) && shunt > 0.0f) {
-                ina3221.setShuntResistance(ch, shunt);
-            }
-        }
-    }
-#endif
-
-#if ENABLE_INA3221_VOLT
-    if (!ina3221_volt.begin(0x42, &Wire)) {
-        LOG_PRINTLN("INA3221 voltage (0x42) init failed");
-    }
-#endif
-
-    // Auto-discovery: try NVS cache first, then scan I2C
+    // INA226 discovery MUST happen before the INA3221 init. The discovery
+    // probe pokes every address in its scan range; if INA3221 has already
+    // been begin()'d, the probe can trash its configuration registers
+    // (Adafruit_INA3221.reset() is called from begin() too). The scan range
+    // is restricted inside discover_ina226() when ENABLE_INA3221 is on,
+    // but doing the INA3221 init last is belt-and-braces.
 #if ENABLE_INA226
     uint8_t disc_count = settings_load_discovered_ina_count();
     if (disc_count > 0) {
@@ -319,6 +328,25 @@ void init_sensors() {
     }
 #else
     LOG_PRINTLN("INA226 disabled");
+#endif
+
+#if ENABLE_INA3221
+    if (!ina3221.begin(INA3221_ADDR, &Wire)) {
+        LOG_PRINTLN("INA3221 current (0x40) init failed");
+    } else {
+        for (uint8_t ch = 0; ch < 3; ch++) {
+            float shunt = 0.0f;
+            if (settings_load_shunt(ch, &shunt) && shunt > 0.0f) {
+                ina3221.setShuntResistance(ch, shunt);
+            }
+        }
+    }
+#endif
+
+#if ENABLE_INA3221_VOLT
+    if (!ina3221_volt.begin(0x42, &Wire)) {
+        LOG_PRINTLN("INA3221 voltage (0x42) init failed");
+    }
 #endif
 
 #if ENABLE_ADS1115
@@ -552,7 +580,7 @@ float ina3221_getVoltModuleBusVoltage(uint8_t ch) {
 }
 
 void sensor_set_calibration(uint8_t ch, uint8_t type, float value) {
-    if (ch >= 3) return;
+    if (ch >= MAX_LOGICAL_CHANNELS) return;
     switch (type) {
         case 0: cal.volt_offset_mv[ch] = value; break;
         case 1: cal.volt_gain[ch] = value; break;
@@ -564,7 +592,7 @@ void sensor_set_calibration(uint8_t ch, uint8_t type, float value) {
 }
 
 void sensor_get_calibration(uint8_t ch, float* volt_offset_mv, float* volt_gain, float* curr_offset_mv, float* curr_gain) {
-    if (ch >= 3) ch = 0; // guard, though callers should validate
+    if (ch >= MAX_LOGICAL_CHANNELS) ch = 0; // guard, though callers should validate
     *volt_offset_mv = cal.volt_offset_mv[ch];
     *volt_gain = cal.volt_gain[ch];
     *curr_offset_mv = cal.curr_offset_ma[ch];
@@ -572,7 +600,7 @@ void sensor_get_calibration(uint8_t ch, float* volt_offset_mv, float* volt_gain,
 }
 
 void sensor_reset_calibration(uint8_t ch) {
-    if (ch >= 3) return;
+    if (ch >= MAX_LOGICAL_CHANNELS) return;
     cal.volt_offset_mv[ch] = 0.0f;
     cal.volt_gain[ch] = 1.0f;
     cal.curr_offset_ma[ch] = 0.0f;
@@ -582,13 +610,13 @@ void sensor_reset_calibration(uint8_t ch) {
 }
 
 void sensor_set_invert_curr(uint8_t ch, bool invert) {
-    if (ch >= 3) return;
+    if (ch >= MAX_LOGICAL_CHANNELS) return;
     cal.invert_curr[ch] = invert;
     settings_save_channel_calibration(&cal);
 }
 
 void sensor_reset_invert_curr(uint8_t ch) {
-    if (ch >= 3) return;
+    if (ch >= MAX_LOGICAL_CHANNELS) return;
     cal.invert_curr[ch] = false;
     settings_save_channel_calibration(&cal);
 }

@@ -39,6 +39,13 @@ bool log_epoch_valid() { return g_log_epoch_valid; }
 void log_epoch_valid_set(bool valid) { g_log_epoch_valid = valid; }
 
 time_t log_to_epoch(uint32_t timestamp_ms) {
+    // Gate on epoch validity. Until log_set_epoch() has been called with a
+    // trusted (post-2023) value the math is uptime-derived and will drift
+    // from real wall-clock. Return -1 as a sentinel so callers can detect
+    // "untrusted" and stamp 0 (or skip) instead of writing a bogus epoch.
+    if (!g_log_epoch_valid) {
+        return (time_t)-1;
+    }
     return epoch_offset + timestamp_ms / 1000;
 }
 
@@ -77,6 +84,12 @@ static size_t pop_ring(uint8_t* out, size_t out_len) {
 static File g_overflow_file;
 
 // ── Flush ring buffer to LittleFS overflow file ─────────────────────
+// 1 MB cap on the overflow file. LittleFS doesn't support truncating-from-
+// middle, so the simplest correct safety cap is to close and remove the
+// file when it reaches the limit. The data is lost; this prevents the
+// flash from filling up and bricking the device on a long network outage.
+static const size_t LOG_OVERFLOW_MAX_BYTES = 1UL * 1024UL * 1024UL;
+
 static void flush_to_littlefs() {
     if (tail == head) return;
     // Close read handle first — LittleFS can't have same file open twice
@@ -84,6 +97,24 @@ static void flush_to_littlefs() {
         g_overflow_file.close();
         g_overflow_file = File();
     }
+
+    // Cap check: if the overflow file is at or above the limit, drop it
+    // entirely and start fresh. The data currently in the ring buffer is
+    // also lost (the next iteration will re-flush, but we already chose
+    // to drop history).
+    if (LittleFS.exists(LOG_OVERFLOW_FILE)) {
+        File existing = LittleFS.open(LOG_OVERFLOW_FILE, FILE_READ);
+        if (existing) {
+            size_t sz = existing.size();
+            existing.close();
+            if (sz >= LOG_OVERFLOW_MAX_BYTES) {
+                LOG_PRINT("[LittleFS] overflow file at %u bytes (cap %u) — wiping\n",
+                          (unsigned)sz, (unsigned)LOG_OVERFLOW_MAX_BYTES);
+                LittleFS.remove(LOG_OVERFLOW_FILE);
+            }
+        }
+    }
+
     File f = LittleFS.open(LOG_OVERFLOW_FILE, FILE_APPEND);
     if (!f) {
         LOG_PRINTLN("[LittleFS] open failed for log append");
@@ -130,7 +161,6 @@ void init_data_logger() {
 }
 
 void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms) {
-    (void)data;
     // One-shot warning: if NTP has not synced, log timestamps are uptime-based
     // and will drift from real time. Mark this once per boot so the operator
     // can decide to fix the network or NTP config. The timestamp math itself
@@ -140,22 +170,22 @@ void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms) {
         g_log_untrusted_warned = true;
     }
     int16_t v[4] = {
-        (int16_t)(get_channel_voltage(0) * 1000),
-        (int16_t)(get_channel_voltage(1) * 1000),
-        (int16_t)(get_channel_voltage(2) * 1000),
-        (int16_t)(get_channel_voltage(3) * 1000)
+        (int16_t)(get_channel_voltage(data, 0) * 1000),
+        (int16_t)(get_channel_voltage(data, 1) * 1000),
+        (int16_t)(get_channel_voltage(data, 2) * 1000),
+        (int16_t)(get_channel_voltage(data, 3) * 1000)
     };
     int16_t i[4] = {
-        (int16_t)(get_channel_current(0) * 1000),
-        (int16_t)(get_channel_current(1) * 1000),
-        (int16_t)(get_channel_current(2) * 1000),
-        (int16_t)(get_channel_current(3) * 1000)
+        (int16_t)(get_channel_current(data, 0) * 1000),
+        (int16_t)(get_channel_current(data, 1) * 1000),
+        (int16_t)(get_channel_current(data, 2) * 1000),
+        (int16_t)(get_channel_current(data, 3) * 1000)
     };
     int16_t p[4] = {
-        (int16_t)(get_channel_power(0)),
-        (int16_t)(get_channel_power(1)),
-        (int16_t)(get_channel_power(2)),
-        (int16_t)(get_channel_power(3))
+        (int16_t)(get_channel_power(data, 0)),
+        (int16_t)(get_channel_power(data, 1)),
+        (int16_t)(get_channel_power(data, 2)),
+        (int16_t)(get_channel_power(data, 3))
     };
 
     bool is_base;
