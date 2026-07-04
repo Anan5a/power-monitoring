@@ -1,6 +1,14 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import type { DeviceChannels, RelayRule, VirtualChannelConfig, BatteryConfig } from '../lib/types'
+import {
+  setWifi as dcSetWifi,
+  setMqtt as dcSetMqtt,
+  setHttp as dcSetHttp,
+  setSupabase as dcSetSupabase,
+  reboot as dcReboot,
+  factoryReset as dcFactoryReset,
+} from '../lib/deviceCommands'
 
 const EMPTY_CHANNELS: DeviceChannels = {
   device_key: '',
@@ -57,38 +65,80 @@ export default function SettingsPage() {
     loadChannels()
   }, [selectedKey])
 
-  async function sendCommand(cmd_type: string, payload: Record<string, unknown>) {
-    if (!selectedKey) return
+  /**
+   * Enqueue a command to the device via the Supabase settings_commands
+   * queue. Throws on error so the caller can surface the failure.
+   *
+   * The audited sendCommand used to swallow errors and just set a message —
+   * that hid failures from the user. The Supabase path now throws; the BLE
+   * path (used by legacy provisioning flows) keeps the silent-success
+   * contract for backward compatibility.
+   */
+  async function sendSupabaseCommand(cmd_type: string, payload: Record<string, unknown>) {
+    if (!selectedKey) throw new Error('No device selected')
     const { error } = await supabase.from('settings_commands').insert({
       device_key: selectedKey,
       cmd_type,
       payload,
       status: 'pending',
     })
-    if (error) {
-      setMessage(`Error: ${error.message}`)
-    } else {
+    if (error) throw error
+  }
+
+  /**
+   * Legacy catch-all for items that haven't migrated to lib/deviceCommands
+   * yet (e.g. virtual channels, channel groups, the legacy battery-profile
+   * path). Errors are surfaced via the on-page message banner rather than
+   * thrown, to preserve the existing UX.
+   */
+  async function sendCommand(cmd_type: string, payload: Record<string, unknown>) {
+    if (!selectedKey) return
+    try {
+      await sendSupabaseCommand(cmd_type, payload)
       setMessage(`Command queued: ${cmd_type}`)
+      setTimeout(() => setMessage(''), 3000)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'unknown error'
+      setMessage(`Error: ${msg}`)
       setTimeout(() => setMessage(''), 3000)
     }
   }
 
   async function saveWifi() {
-    await sendCommand('set_wifi', { ssid: wifi.ssid, pass: wifi.pass })
+    try {
+      await dcSetWifi(selectedKey, wifi.ssid, wifi.pass)
+      setMessage('WiFi queued')
+      setTimeout(() => setMessage(''), 3000)
+    } catch (e) {
+      setMessage(`Error: ${e instanceof Error ? e.message : 'unknown'}`)
+    }
   }
   async function saveMqtt() {
-    await sendCommand('set_mqtt', { broker: mqtt.broker, port: parseInt(mqtt.port) || 1883, topic: mqtt.topic })
+    try {
+      await dcSetMqtt(selectedKey, mqtt.broker, parseInt(mqtt.port) || 1883, mqtt.topic)
+      setMessage('MQTT queued')
+      setTimeout(() => setMessage(''), 3000)
+    } catch (e) {
+      setMessage(`Error: ${e instanceof Error ? e.message : 'unknown'}`)
+    }
   }
   async function saveHttp() {
-    await sendCommand('set_http', { url: http.url, token: http.token, enabled: http.enabled })
+    try {
+      await dcSetHttp(selectedKey, http.url, http.token, http.enabled)
+      setMessage('HTTP queued')
+      setTimeout(() => setMessage(''), 3000)
+    } catch (e) {
+      setMessage(`Error: ${e instanceof Error ? e.message : 'unknown'}`)
+    }
   }
   async function saveSupabase() {
-    await sendCommand('set_supabase', {
-      url: supabaseCfg.url,
-      anon_key: supabaseCfg.anon_key,
-      api_key: supabaseCfg.api_key,
-      device_key: supabaseCfg.device_key,
-    })
+    try {
+      await dcSetSupabase(selectedKey, supabaseCfg.url, supabaseCfg.anon_key, supabaseCfg.api_key, supabaseCfg.device_key)
+      setMessage('Supabase queued')
+      setTimeout(() => setMessage(''), 3000)
+    } catch (e) {
+      setMessage(`Error: ${e instanceof Error ? e.message : 'unknown'}`)
+    }
   }
 
   const tabs = ['network', 'supabase', 'relays', 'batteries', 'calibration', 'sensors', 'virtual', 'groups', 'names', 'system']
@@ -236,8 +286,11 @@ export default function SettingsPage() {
             {/* Calibration tab */}
             {activeTab === 'calibration' && (
               <CalibrationTab deviceChannels={deviceChannels} onSave={(ch, type, value) =>
-                sendCommand('set_calibration', { channel: ch, type, value })
-              } sendCommand={sendCommand} />
+                sendSupabaseCommand('set_calibration', { channel: ch, type, value }).then(() => {
+                  setMessage('Calibration queued')
+                  setTimeout(() => setMessage(''), 3000)
+                }).catch((e) => setMessage(`Error: ${e.message ?? e}`))
+              } sendSupabaseCommand={sendSupabaseCommand} />
             )}
 
             {/* Sensors tab */}
@@ -378,7 +431,14 @@ export default function SettingsPage() {
               } />
             )}
 
-            {/* Batteries tab */}
+            {/* Batteries tab — legacy shape. The firmware polled handler is
+                being fixed in parallel by the firmware-fix agent; once the
+                new BatteryChemistryProfile shape lands, migrate this tab
+                to use dcSetBattery / dcSetBatteryProfile from
+                lib/deviceCommands. The legacy set_battery (capacity_mAh +
+                initial_soc_pct) and legacy set_battery_profile (with
+                system_voltage / cell_count / full_voltage) are mapped
+                server-side by the firmware's compatibility layer. */}
             {activeTab === 'batteries' && (
               <BatteriesTab onSave={(ch, bat) =>
                 sendCommand('set_battery', { channel: ch, ...bat })
@@ -389,13 +449,23 @@ export default function SettingsPage() {
             {activeTab === 'system' && (
               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-4">
                 <h3 className="font-semibold text-slate-800">System</h3>
-                <button onClick={() => sendCommand('reboot', {})}
+                <button onClick={() => {
+                  if (!selectedKey) return
+                  dcReboot(selectedKey, '').then(() => {
+                    setMessage('Reboot queued')
+                    setTimeout(() => setMessage(''), 3000)
+                  }).catch((e) => setMessage(`Error: ${e.message ?? e}`))
+                }}
                   className="bg-amber-500 text-white px-4 py-2 rounded-xl hover:bg-amber-600 text-sm font-medium mr-2 transition-colors">
                   Reboot Device
                 </button>
                 <button onClick={() => {
-                  if (confirm('Factory reset will erase ALL settings. Continue?'))
-                    sendCommand('factory_reset', {})
+                  if (!confirm('Factory reset will erase ALL settings. Continue?')) return
+                  if (!selectedKey) return
+                  dcFactoryReset(selectedKey, '').then(() => {
+                    setMessage('Factory reset queued')
+                    setTimeout(() => setMessage(''), 3000)
+                  }).catch((e) => setMessage(`Error: ${e.message ?? e}`))
                 }}
                   className="bg-red-600 text-white px-4 py-2 rounded-xl hover:bg-red-700 text-sm font-medium transition-colors">
                   Factory Reset
@@ -418,7 +488,7 @@ export default function SettingsPage() {
   )
 }
 
-function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannels: DeviceChannels; onSave: (ch: number, type: number, value: number) => void; sendCommand?: (cmd_type: string, payload: Record<string, unknown>) => void }) {
+function CalibrationTab({ deviceChannels, onSave, sendSupabaseCommand }: { deviceChannels: DeviceChannels; onSave: (ch: number, type: number, value: number) => void; sendSupabaseCommand?: (cmd_type: string, payload: Record<string, unknown>) => Promise<void> }) {
   const cal = deviceChannels.channel_calibration
   const [vals, setVals] = useState({
     volt_offset_mv: ['0','0','0'],
@@ -487,7 +557,7 @@ function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannel
                     const key = type === 'volt_offset_mv' ? 'volt_offset_mv' : type === 'volt_gain' ? 'volt_gain' : type === 'curr_offset_ma' ? 'curr_offset_ma' : 'curr_gain'
                     onSave(ch, ti, parseFloat(vals[key][ch]) || 0)
                   })
-                  sendCommand?.('set_invert_curr', { channel: ch, invert: invertCurr[ch] })
+                  sendSupabaseCommand?.('set_invert_curr', { channel: ch, invert: invertCurr[ch] })
                 }}
                   className="text-xs bg-brand-600 text-white px-2 py-1.5 rounded-lg">Save</button>
               </td>
@@ -505,7 +575,7 @@ function CalibrationTab({ deviceChannels, onSave, sendCommand }: { deviceChannel
         {baselineMsg && <p className="text-xs text-blue-600 mb-2">{baselineMsg}</p>}
         <button
           onClick={() => {
-            sendCommand?.('calibrate_baseline', {})
+            sendSupabaseCommand?.('calibrate_baseline', {})
             setBaselineMsg('Baseline calibration started — check device serial for progress.')
             setTimeout(() => setBaselineMsg(''), 6000)
           }}
@@ -673,7 +743,13 @@ function BatteriesTab({ onSave, sendCommand }: { onSave: (ch: number, bat: Batte
   const [vals, setVals] = useState([{ capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }, { capacity_mAh: '', initial_soc_pct: '100' }])
   const [profiles, setProfiles] = useState([{ name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }, { name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }, { name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }, { name: '', chemistry: 'lead_acid', system_voltage: '', cell_count: '', full_voltage: '', cutoff_voltage: '', float_voltage: '' }])
   const [expanded, setExpanded] = useState<number | null>(null)
-  const chemistries = ['lead_acid', 'liion', 'lifepo4', 'lipol', 'nimh', 'agm', 'fla']
+  // The chemistries array must mirror the canonical BatteryChemistry
+  // tuple in lib/deviceCommands.ts (see the static assert at the top of
+  // that file). The legacy strings (lipol / lifepo4 / agm / fla) are
+  // mapped to the new short forms server-side by the firmware's
+  // compatibility layer. New code should import BatteryChemistry from
+  // lib/deviceCommands and not redeclare this list.
+  const chemistries = ['lead_acid', 'liion', 'lfp', 'lipo', 'nicd', 'nimh', 'custom']
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">

@@ -47,7 +47,10 @@ export interface RelayState {
   last_tripped_at: string | null
 }
 
-export type BatteryChemistry = 'lead_acid' | 'lipol' | 'liion' | 'nimh' | 'lifepo4' | 'agm' | 'fla'
+// BatteryChemistry is defined in lib/deviceCommands.ts as the single canonical
+// type. Re-exported here for legacy code that imports it from lib/types. The
+// tuple length and order must match firmware/include/battery_profile.h.
+export type { BatteryChemistry } from './deviceCommands'
 
 export interface ChannelGroup {
   group_id: number
@@ -67,10 +70,16 @@ export interface BatteryConfig {
   initial_soc_pct: number
 }
 
+// BatteryProfile is the LEGACY shape (system_voltage / cell_count / capacity_mAh).
+// The new chemistry-aware shape lives in lib/deviceCommands.ts as
+// BatteryChemistryProfile. New code should not import this; existing legacy
+// pages (SettingsPage) still use it until they migrate.
 export interface BatteryProfile {
   channel: number
   name: string
-  chemistry: BatteryChemistry
+  // Legacy strings. The new canonical type is in lib/deviceCommands.ts.
+  // We intentionally keep this enum disjoint to avoid silent type confusion.
+  chemistry: 'lead_acid' | 'lipol' | 'liion' | 'nimh' | 'lifepo4' | 'agm' | 'fla'
   system_voltage: number
   capacity_mAh: number
   initial_soc_pct: number

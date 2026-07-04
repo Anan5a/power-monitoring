@@ -2,6 +2,7 @@ import type { Store } from 'jotai/vanilla/store'
 import { supabase } from '../../lib/supabase'
 import { relayStatesAtomFamily } from '../atoms'
 import type { RelayState } from '../../lib/types'
+import { setRelayEnergized } from '../../lib/deviceCommands'
 
 let currentChannel: ReturnType<typeof supabase.channel> | null = null
 
@@ -60,24 +61,9 @@ export async function toggleRelay(
   store.set(relayStatesAtomFamily(deviceKey), (prev) =>
     prev.map(r => r.id === relay.id ? { ...r, is_energized: newState } : r),
   )
-  const { error } = await supabase.from('settings_commands').insert({
-    device_key: deviceKey,
-    cmd_type: 'set_relay',
-    payload: {
-      idx: relay.relay_index,
-      is_energized: newState,
-      active_high: relay.active_high ?? true,
-      enabled: true,
-      overcurrent_A: 0,
-      undervoltage_V: 0,
-      soc_low_pct: 0,
-      soc_high_pct: 100,
-      trip_delay_ms: 500,
-      reset_delay_ms: 5000,
-    },
-    status: 'pending',
-  })
-  if (error) {
+  try {
+    await setRelayEnergized(deviceKey, relay.relay_index, newState, relay.active_high ?? true)
+  } catch {
     // Revert on error
     store.set(relayStatesAtomFamily(deviceKey), (prev) =>
       prev.map(r => r.id === relay.id ? { ...r, is_energized: relay.is_energized } : r),

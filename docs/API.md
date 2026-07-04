@@ -744,10 +744,30 @@ server can route by schema even when parsing succeeds.
 
 #### Battery profiles heartbeat
 
-`POST /rest/v1/rpc/sync_battery_profiles` is sent on a slow path
-(every 60 s) and eagerly on profile change. Triggering an eager publish:
-call `telemetry_kick_battery_profiles()` from the settings-command handler
-when a `set_battery_profile` or `set_battery` command is applied.
+Two new Supabase tables back the new chemistry-aware battery profile shape
+(`battery_profiles` and `battery_bindings` in the public schema, defined in
+`backend/supabase/migrations/2026_07_04_battery_profiles.sql`). The firmware
+publishes to them via two `security definer` RPCs that bypass RLS:
+
+- `POST /rest/v1/rpc/sync_battery_profiles` with body
+  `{"p_device_key": "...", "p_profiles": [...]}` — full replace of the
+  profile list for the device. Each profile element matches the
+  `BatteryChemistryProfile` shape from `lib/deviceCommands.ts` (id, name,
+  chemistry as integer 0-6, nominal_voltage, rated_capacity_Ah, c_rating,
+  cutoff_voltage, float_voltage, charge_efficiency, cycle_life_rated,
+  min_soc_pct, max_soc_pct).
+- `POST /rest/v1/rpc/sync_battery_bindings` with body
+  `{"p_device_key": "...", "p_bindings": [...]}` — full replace of
+  channel→profile bindings. Each element is `{channel, profile_id}`.
+
+Both RPCs validate `device_key` against the `devices` table, delete the
+device's existing rows, and re-insert. The web UI subscribes to these
+tables via the Supabase realtime publication; the heartbeat fires every
+60s and eagerly on profile/binding change.
+
+Eager-publish trigger: call `telemetry_kick_battery_profiles()` from the
+settings-command handler when a `set_battery_profile` or `set_battery`
+command is applied.
 
 ```json
 {

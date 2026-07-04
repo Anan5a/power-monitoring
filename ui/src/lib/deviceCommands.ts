@@ -61,24 +61,54 @@ export interface SwitchRuleConfig {
  * web code should always send the list-shape.
  */
 export async function setSwitch(deviceKey: string, channel: SwitchChannelConfig, rule: SwitchRuleConfig) {
+  if (!Number.isInteger(channel.idx) || channel.idx < 0 || channel.idx > 7) {
+    throw new Error('switch idx must be an integer in 0..7')
+  }
   return enqueue(deviceKey, 'set_switch', { ...channel, ...rule })
 }
 
-export async function getSwitch(deviceKey: string, idx: number) {
-  // Reads are not pushed via settings_commands; the device populates relay_states
-  // and we read from there. The web hook layer should expose a getSwitch helper
-  // that queries the relay_states table directly. Stub here for API symmetry.
-  return enqueue(deviceKey, 'get_switch', { idx })
+/**
+ * Energize or de-energize a relay. Thin wrapper around set_switch that
+ * sends only the relay-state fields. Used by ChannelsPage and relayService
+ * for manual override without disturbing the rule configuration.
+ */
+export async function setRelayEnergized(
+  deviceKey: string,
+  idx: number,
+  is_energized: boolean,
+  active_high: boolean = true,
+) {
+  if (!Number.isInteger(idx) || idx < 0 || idx > 7) {
+    throw new Error('relay idx must be an integer in 0..7')
+  }
+  return enqueue(deviceKey, 'set_relay', { idx, is_energized, active_high, enabled: true })
 }
 
 // ── Battery ──────────────────────────────────────────────────────────────────
 
 // Matches BatteryChemistryEnum in firmware/include/battery_profile.h:
 //   BAT_CHEM_LEAD_ACID = 0, LIION, LFP, LIPO, NICD, NIMH, CUSTOM
-// Do NOT conflate with the legacy BatteryChemistry in lib/types.ts (which
-// uses different strings for an older schema). The web surface here is
-// canonical for the new command set; legacy pages still use the old type.
-export type BatteryChemistry = 'lead_acid' | 'liion' | 'lfp' | 'lipo' | 'nicd' | 'nimh' | 'custom'
+// This is the SINGLE CANONICAL BatteryChemistry type across the UI. Legacy
+// pages import this from here rather than defining their own. lib/types.ts
+// re-exports it for older call sites; do not introduce a second alias.
+//
+// Static invariant: the order and length of this tuple MUST match the
+// firmware's BatteryChemistryEnum. If you add a chemistry here, also add
+// the matching enum value in firmware/include/battery_profile.h and bump
+// BATTERY_NUM_CHEM in firmware.
+export type BatteryChemistry =
+  | 'lead_acid' | 'liion' | 'lfp' | 'lipo' | 'nicd' | 'nimh' | 'custom'
+
+// Compile-time guard: tuple length must equal 7 (the firmware's
+// BatteryChemistryEnum width). The runtime throw only fires if the tuple
+// is mutated at runtime via `as any`; the static type-check is the real
+// protection.
+const _BATTERY_CHEMISTRY_TUPLE: readonly BatteryChemistry[] = [
+  'lead_acid', 'liion', 'lfp', 'lipo', 'nicd', 'nimh', 'custom',
+] as const
+if (_BATTERY_CHEMISTRY_TUPLE.length !== 7) {
+  throw new Error('BatteryChemistry tuple length does not match BatteryChemistryEnum')
+}
 
 export interface BatteryChemistryProfile {
   id: number
@@ -100,24 +130,61 @@ export interface BatteryBinding {
   profile_id: number
 }
 
-/** Bind a logical channel to a battery profile. */
+/**
+ * Bind a logical channel to a battery profile.
+ *
+ * Binds a channel to a battery profile. Replaces the legacy
+ * capacity_mAh-based set_battery. The legacy set_battery (capacity_mAh +
+ * initial_soc_pct) is still handled by the device's polled handler as a
+ * fallback for older firmware; new code should always use this new shape.
+ */
 export async function setBattery(deviceKey: string, channel: number, profile_id: number) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 15) {
+    throw new Error('channel must be an integer in 0..15')
+  }
+  if (!Number.isInteger(profile_id) || profile_id < 0 || profile_id > 15) {
+    throw new Error('profile_id must be an integer in 0..15')
+  }
   return enqueue(deviceKey, 'set_battery', { channel, profile_id })
 }
 
 /** Create or update a custom battery profile (or overwrite a built-in). */
 export async function setBatteryProfile(deviceKey: string, profile: BatteryChemistryProfile) {
+  if (!Number.isInteger(profile.id) || profile.id < 0 || profile.id > 15) {
+    throw new Error('profile.id must be an integer in 0..15')
+  }
   return enqueue(deviceKey, 'set_battery_profile', profile as unknown as Record<string, unknown>)
 }
 
 /** Delete a custom battery profile (built-ins cannot be deleted). */
 export async function deleteBatteryProfile(deviceKey: string, id: number) {
+  if (!Number.isInteger(id) || id < 0 || id > 15) {
+    throw new Error('id must be an integer in 0..15')
+  }
   return enqueue(deviceKey, 'delete_battery_profile', { id })
 }
 
 /** Reset a channel's cycle accumulator + capacity test state. */
 export async function resetBattery(deviceKey: string, channel: number) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 15) {
+    throw new Error('channel must be an integer in 0..15')
+  }
   return enqueue(deviceKey, 'reset_battery', { channel })
+}
+
+/**
+ * Read the bound battery profile id for a channel.
+ *
+ * STUB: do not call this. Reads do not flow through settings_commands.
+ * The web should read directly from the `battery_bindings` table; the
+ * polled-command path does not have a `get_battery` branch and adding one
+ * would cost a round-trip per page load. Kept here for API symmetry; the
+ * implementation throws if invoked.
+ */
+export async function getBattery(_deviceKey: string, _channel: number): Promise<never> {
+  throw new Error(
+    'getBattery is not implemented — read from the battery_bindings table directly.',
+  )
 }
 
 // ── Capacity test ────────────────────────────────────────────────────────────
@@ -153,26 +220,62 @@ export interface ChannelCalibration {
 }
 
 export async function setCalibration(deviceKey: string, channel: number, type: number, value: number) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 15) {
+    throw new Error('channel must be an integer in 0..15')
+  }
+  if (!Number.isInteger(type) || type < 0 || type > 3) {
+    throw new Error('type must be 0..3 (volt_offset_mv, volt_gain, curr_offset_ma, curr_gain)')
+  }
+  if (!Number.isFinite(value)) {
+    throw new Error('value must be a finite number')
+  }
   return enqueue(deviceKey, 'set_calibration', { channel, type, value })
 }
 
 export async function resetCalibration(deviceKey: string, channel: number) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 15) {
+    throw new Error('channel must be an integer in 0..15')
+  }
   return enqueue(deviceKey, 'reset_calibration', { channel })
 }
 
 export async function setInvertCurrent(deviceKey: string, channel: number, invert: boolean) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 15) {
+    throw new Error('channel must be an integer in 0..15')
+  }
   return enqueue(deviceKey, 'set_invert_curr', { channel, invert })
 }
 
 export async function setShunt(deviceKey: string, channel: number, ohms: number) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 15) {
+    throw new Error('channel must be an integer in 0..15')
+  }
+  if (!Number.isFinite(ohms) || ohms < 0) {
+    throw new Error('ohms must be a non-negative finite number')
+  }
   return enqueue(deviceKey, 'set_shunt', { channel, ohms })
 }
 
 export async function setVoltRatio(deviceKey: string, channel: number, ratio: number) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 15) {
+    throw new Error('channel must be an integer in 0..15')
+  }
+  if (!Number.isFinite(ratio) || ratio <= 0) {
+    throw new Error('ratio must be a positive finite number')
+  }
   return enqueue(deviceKey, 'set_volt_ratio', { channel, ratio })
 }
 
 export async function setResistors(deviceKey: string, channel: number, r_high: number, r_low: number) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 15) {
+    throw new Error('channel must be an integer in 0..15')
+  }
+  if (!Number.isFinite(r_high) || r_high <= 0) {
+    throw new Error('r_high must be a positive finite number')
+  }
+  if (!Number.isFinite(r_low) || r_low <= 0) {
+    throw new Error('r_low must be a positive finite number')
+  }
   return enqueue(deviceKey, 'set_resistors', { channel, r_high, r_low })
 }
 
@@ -181,29 +284,97 @@ export async function calibrateBaseline(deviceKey: string) {
 }
 
 export async function resetCoulomb(deviceKey: string, channel: number) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 15) {
+    throw new Error('channel must be an integer in 0..15')
+  }
   return enqueue(deviceKey, 'reset_coulomb', { channel })
 }
 
 export async function setChannelName(deviceKey: string, channel: number, name: string) {
+  if (!Number.isInteger(channel) || channel < 0 || channel > 15) {
+    throw new Error('channel must be an integer in 0..15')
+  }
+  if (typeof name !== 'string') {
+    throw new Error('name must be a string')
+  }
   return enqueue(deviceKey, 'set_channel_name', { channel, name })
 }
 
 // ── Connectivity / provisioning ──────────────────────────────────────────────
 
+/**
+ * Configure the device's WiFi. The SSID is required; an empty string is
+ * rejected so the device does not blank out an existing credential.
+ */
 export async function setWifi(deviceKey: string, ssid: string, pass: string) {
+  if (typeof ssid !== 'string' || ssid.length === 0) {
+    throw new Error('ssid is required and must be a non-empty string')
+  }
+  if (typeof pass !== 'string') {
+    throw new Error('pass must be a string (empty string is allowed)')
+  }
   return enqueue(deviceKey, 'set_wifi', { ssid, pass })
 }
 
-export async function setMqtt(deviceKey: string, broker: string, port: number, topic: string, user?: string, pass?: string) {
-  return enqueue(deviceKey, 'set_mqtt', { broker, port, topic, user, pass })
+/**
+ * Configure the device's MQTT broker. The firmware polled handler currently
+ * does not save `user` / `pass`; this wrapper accepts broker/port/topic only
+ * to match the audited surface. MQTT auth is a future firmware addition.
+ */
+export async function setMqtt(deviceKey: string, broker: string, port: number, topic: string) {
+  if (typeof broker !== 'string' || broker.length === 0) {
+    throw new Error('broker is required and must be a non-empty string')
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('port must be an integer in 1..65535')
+  }
+  if (typeof topic !== 'string') {
+    throw new Error('topic must be a string')
+  }
+  return enqueue(deviceKey, 'set_mqtt', { broker, port, topic })
 }
 
-export async function setHttp(deviceKey: string, url: string, token?: string) {
-  return enqueue(deviceKey, 'set_http', { url, token })
+/**
+ * Configure the optional HTTP publish endpoint. The `enabled` flag controls
+ * whether the device POSTs to this URL on each sample. The audited set_http
+ * was previously dropping `enabled`; it is now included in the payload.
+ */
+export async function setHttp(deviceKey: string, url: string, token?: string, enabled: boolean = true) {
+  if (typeof url !== 'string') {
+    throw new Error('url must be a string')
+  }
+  if (typeof enabled !== 'boolean') {
+    throw new Error('enabled must be a boolean')
+  }
+  return enqueue(deviceKey, 'set_http', { url, token: token ?? '', enabled })
 }
 
-export async function setSupabase(deviceKey: string, url: string, anon_key: string) {
-  return enqueue(deviceKey, 'set_supabase', { url, anon_key })
+/**
+ * Configure the device's Supabase connection. The firmware polled handler
+ * uses non-empty `api_key` and `device_key` to overwrite the existing
+ * values; empty strings are treated as "do not change" so partial updates
+ * from the legacy form don't wipe credentials. The default of '' here
+ * matches the firmware's defensive behavior.
+ */
+export async function setSupabase(
+  deviceKey: string,
+  url: string,
+  anon_key: string,
+  api_key?: string,
+  device_key_arg?: string,
+) {
+  if (typeof url !== 'string' || url.length === 0) {
+    throw new Error('url is required and must be a non-empty string')
+  }
+  if (typeof anon_key !== 'string' || anon_key.length === 0) {
+    throw new Error('anon_key is required and must be a non-empty string')
+  }
+  return enqueue(deviceKey, 'set_supabase', {
+    url,
+    anon_key,
+    api_key: api_key ?? '',
+    device_key: device_key_arg ?? '',
+  })
 }
 
 // ── Misc ─────────────────────────────────────────────────────────────────────

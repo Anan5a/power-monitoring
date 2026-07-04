@@ -38,6 +38,12 @@ const CHEMISTRIES: BatteryChemistry[] = ['lead_acid', 'liion', 'lfp', 'lipo', 'n
 export default function BatteryPage({ deviceKey, channelCount }: Props) {
   const [profiles, setProfiles] = useState<BatteryChemistryProfile[]>([])
   const [bindings, setBindings] = useState<Record<number, number>>({})
+  // Pending bindings: keys are channel numbers whose binding change has been
+  // queued to the device but not yet confirmed by the next heartbeat. The
+  // 60s heartbeat will eventually overwrite the local bindings from
+  // battery_bindings; until then we display a "pending" badge so the user
+  // knows the device hasn't applied the change yet.
+  const [pendingBindings, setPendingBindings] = useState<Set<number>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [testStatus, setTestStatus] = useState<Record<number, string>>({})
 
@@ -53,6 +59,10 @@ export default function BatteryPage({ deviceKey, channelCount }: Props) {
         const m: Record<number, number> = {}
         for (const b of bind as Array<{ channel: number; profile_id: number }>) m[b.channel] = b.profile_id
         setBindings(m)
+        // Heartbeat arrived: clear any pending markers. We do this even if
+        // the value didn't change, because the firmware applied (or ignored)
+        // the queued command by now.
+        setPendingBindings(new Set())
       }
     }
     load()
@@ -66,11 +76,24 @@ export default function BatteryPage({ deviceKey, channelCount }: Props) {
 
   const bindChannel = async (channel: number, profileId: number) => {
     setError(null)
+    // Mark the binding as pending BEFORE the network call so the badge
+    // appears instantly. We do not update the local bindings map yet —
+    // the value is only committed when the next heartbeat confirms it.
+    // This avoids a brief flash of the wrong value if the device rejects
+    // the queued command.
+    setPendingBindings(p => new Set(p).add(channel))
     try {
       await setBattery(deviceKey, channel, profileId)
-      setBindings(b => ({ ...b, [channel]: profileId }))
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'bind failed')
+      // Drop the pending marker on hard failure so the UI doesn't stay
+      // stuck. The local bindings map was never updated, so it still
+      // shows the last-confirmed value.
+      setPendingBindings(p => {
+        const next = new Set(p)
+        next.delete(channel)
+        return next
+      })
     }
   }
 
@@ -143,28 +166,41 @@ export default function BatteryPage({ deviceKey, channelCount }: Props) {
       <section>
         <h2 className="text-lg font-semibold mb-3">Channel bindings</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-          {Array.from({ length: channelCount }).map((_, ch) => (
-            <div key={ch} className="border rounded p-3 bg-white">
-              <div className="text-sm font-medium mb-2">Channel {ch}</div>
-              <select
-                className="border rounded px-2 py-1 w-full text-sm"
-                value={bindings[ch] ?? ''}
-                onChange={e => bindChannel(ch, parseInt(e.target.value, 10))}
-              >
-                <option value="">— no battery —</option>
-                {profiles.map(p => (
-                  <option key={p.id} value={p.id}>{p.name} ({p.chemistry})</option>
-                ))}
-              </select>
-              <div className="mt-2 flex gap-2 text-xs">
-                <button onClick={() => resetChannel(ch)} className="text-red-600 hover:underline">Reset cycle</button>
-                <button onClick={() => startTest(ch)} className="text-blue-600 hover:underline">Cap test</button>
-                <button onClick={() => stopTest(ch)} className="text-gray-600 hover:underline">Stop</button>
-                <button onClick={() => fetchStatus(ch)} className="text-gray-600 hover:underline">Status</button>
+          {Array.from({ length: channelCount }).map((_, ch) => {
+            const isPending = pendingBindings.has(ch)
+            return (
+              <div key={ch} className="border rounded p-3 bg-white">
+                <div className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <span>Channel {ch}</span>
+                  {isPending && (
+                    <span
+                      title="Queued to device — will appear in the dropdown after the next 60s heartbeat."
+                      className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-100 text-amber-800"
+                    >
+                      Pending device sync
+                    </span>
+                  )}
+                </div>
+                <select
+                  className="border rounded px-2 py-1 w-full text-sm"
+                  value={bindings[ch] ?? ''}
+                  onChange={e => bindChannel(ch, parseInt(e.target.value, 10))}
+                >
+                  <option value="">— no battery —</option>
+                  {profiles.map(p => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.chemistry})</option>
+                  ))}
+                </select>
+                <div className="mt-2 flex gap-2 text-xs">
+                  <button onClick={() => resetChannel(ch)} className="text-red-600 hover:underline">Reset cycle</button>
+                  <button onClick={() => startTest(ch)} className="text-blue-600 hover:underline">Cap test</button>
+                  <button onClick={() => stopTest(ch)} className="text-gray-600 hover:underline">Stop</button>
+                  <button onClick={() => fetchStatus(ch)} className="text-gray-600 hover:underline">Status</button>
+                </div>
+                {testStatus[ch] && <div className="mt-1 text-xs text-gray-500">test: {testStatus[ch]}</div>}
               </div>
-              {testStatus[ch] && <div className="mt-1 text-xs text-gray-500">test: {testStatus[ch]}</div>}
-            </div>
-          ))}
+            )
+          })}
         </div>
       </section>
 

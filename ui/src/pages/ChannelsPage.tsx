@@ -4,6 +4,7 @@ import { supabase, fetchDeviceChannels } from '../lib/supabase'
 import { latestAtom, selectedDeviceAtom } from '../state/atoms'
 import type { DeviceChannels, Device } from '../lib/types'
 import type { ReactNode } from 'react'
+import { setRelayEnergized } from '../lib/deviceCommands'
 
 type Tab = 'sensors' | 'virtual' | 'battery' | 'relays'
 
@@ -323,12 +324,11 @@ export default function ChannelsPage() {
     const rs = relayStates.find(r => r.relay_index === idx)
     const isOn = rs?.is_energized ?? false
     const activeHigh = rs?.active_high ?? true
-    await supabase.from('settings_commands').insert({
-      device_key: selectedDevice.device_key,
-      cmd_type: 'set_relay',
-      payload: { idx, is_energized: !isOn, active_high: activeHigh, enabled: true, overcurrent_A: 0, undervoltage_V: 0, soc_low_pct: 0, soc_high_pct: 100, trip_delay_ms: 500, reset_delay_ms: 5000 },
-      status: 'pending',
-    })
+    try {
+      await setRelayEnergized(selectedDevice.device_key, idx, !isOn, activeHigh)
+    } catch (e) {
+      console.error('[ChannelsPage] setRelayEnergized failed', e)
+    }
   }
 
   if (!selectedDevice) {
