@@ -8,6 +8,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
 // TelemetryStore is the interface for storing telemetry. The real
@@ -89,4 +91,31 @@ func (bw *BatchWriter) FlushLoop(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// ── ClickHouse Store ─────────────────────────────────────────────────
+
+type CHStore struct {
+	conn clickhouse.Conn
+}
+
+func NewCHStore(conn clickhouse.Conn) *CHStore {
+	return &CHStore{conn: conn}
+}
+
+func (s *CHStore) Write(ctx context.Context, row TelemetryRow) error {
+	return s.conn.Exec(ctx, `
+		INSERT INTO device_telemetry (
+			device_id, device_type, ts, rssi, uptime_ms,
+			pv_power, battery_power, inverter_power, dc_load_power, system_status,
+			min_soc_pct, max_soc_pct, total_energy_wh, fields, ingested_at
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8, $9, $10,
+			$11, $12, $13, $14, now()
+		)`,
+		row.DeviceID, row.DeviceType, row.Timestamp, row.RSSI, row.UptimeMS,
+		row.PVPower, row.BatteryPower, row.InverterPower, row.DCLoadPower, row.SystemStatus,
+		row.MinSOCPct, row.MaxSOCPct, row.TotalEnergyWh, row.Fields,
+	)
 }

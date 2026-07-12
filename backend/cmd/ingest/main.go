@@ -46,7 +46,8 @@ func main() {
 	// Build pipeline
 	resolver := internal.NewDeviceResolver(pg) // Phase 2: add caching
 	enricher := internal.NewEnricher()
-	store := internal.NewBatchWriter(nil, ch, pg) // Phase 2: real ClickHouse writer
+	chStore := internal.NewCHStore(ch)
+	store := internal.NewBatchWriter(chStore, ch, pg)
 	mqttPub := &mqttPublisher{client: nil}        // Phase 2: real MQTT publisher
 	clock := internal.RealClock{}
 
