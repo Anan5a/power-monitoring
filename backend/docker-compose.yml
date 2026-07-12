@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: powermon
+      POSTGRES_USER: powermon
+      POSTGRES_PASSWORD: powermon
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U powermon"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    ports: ["8123:8123", "9000:9000"]
+    ulimits: { nofile: 262144 }
+    volumes:
+      - chdata:/var/lib/clickhouse
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports: ["1883:1883", "9001:9001"]
+    volumes:
+      - mqtt_data:/mosquitto/data
+      - ./mosquitto/config:/mosquitto/config:ro
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio
+    ports: ["9000:9000", "9001:9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      clickhouse: { condition: service_started }
+      mosquitto: { condition: service_started }
+    env_file: .env
+    restart: unless-stopped
+
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    depends_on:
+      postgres: { condition: service_healthy }
+      clickhouse: { condition: service_started }
+      mosquitto: { condition: service_started }
+    env_file: .env
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  chdata:
+  mqtt_data:
+  minio_data:

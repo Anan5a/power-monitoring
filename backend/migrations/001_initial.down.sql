@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS audit_log;
+DROP TABLE IF EXISTS device_config;
+DROP TABLE IF EXISTS device_commands;
+DROP TABLE IF EXISTS devices;
+DROP TABLE IF EXISTS users;
