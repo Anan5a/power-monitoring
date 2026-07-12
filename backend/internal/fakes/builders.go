@@ -15,7 +15,7 @@ type DeviceBuilder struct {
 	d internal.Device
 }
 
-func aDevice(key string) *DeviceBuilder {
+func ADevice(key string) *DeviceBuilder {
 	return &DeviceBuilder{d: internal.Device{
 		DeviceKey:  key,
 		DeviceName: "Test Device",
@@ -63,15 +63,15 @@ func (b *TelemetryRowBuilder) build() internal.TelemetryRow { return b.r }
 
 // ── MQTT message helper ─────────────────────────────────────────────
 
-type fakeMQTTMessage struct {
+type FakeMQTTMessage struct {
 	topic   string
 	payload []byte
 }
 
-func (m fakeMQTTMessage) Topic() string  { return m.topic }
-func (m fakeMQTTMessage) Payload() []byte { return m.payload }
-func (m fakeMQTTMessage) Ack()            {}
+func (m FakeMQTTMessage) Topic() string  { return m.topic }
+func (m FakeMQTTMessage) Payload() []byte { return m.payload }
+func (m FakeMQTTMessage) Ack()            {}
 
-func aMQTTMessage(topic string, payload []byte) fakeMQTTMessage {
-	return fakeMQTTMessage{topic: topic, payload: payload}
+func AMQTTMessage(topic string, payload []byte) FakeMQTTMessage {
+	return FakeMQTTMessage{topic: topic, payload: payload}
 }
