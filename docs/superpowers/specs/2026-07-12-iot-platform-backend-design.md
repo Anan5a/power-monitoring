@@ -1243,7 +1243,15 @@ backend/
 │   ├── enricher.go           # Channel classification (ingest)
 │   ├── store.go              # ClickHouse batch writer + retention (ingest)
 │   ├── audit.go              # Audit log writer (shared)
-│   └── mqttauth.go           # Mosquitto HTTP auth backend endpoint (api)
+│   ├── mqttauth.go           # Mosquitto HTTP auth backend endpoint (api)
+│   └── fakes/
+│       ├── clock.go          # FixedClock — deterministic time for tests
+│       ├── idgen.go          # SequentialIDGen — predictable UUIDs
+│       ├── mqtt.go           # FakePublisher — captures published messages
+│       ├── resolver.go       # StubResolver — returns canned devices
+│       ├── store.go          # MemStore — in-memory telemetry + email capture
+│       ├── email.go          # FakeSender — records sent emails
+│       └── builders.go       # Test data builders: aDevice(), anAlertRule()...
 ├── migrations/
 │   ├── 001_initial.up.sql
 │   └── 001_initial.down.sql
@@ -1260,19 +1268,218 @@ backend/
 
 **Docker:** one multi-stage `Dockerfile` builds both binaries into a slim image, or two per-binary images (`Dockerfile.api`, `Dockerfile.ingest`) for smaller deploys. Docker Compose runs them as separate services.
 
+## Testing Strategy
+
+Testability is a design constraint, not an afterthought. Two rules make the codebase testable:
+
+1. **Every external dependency is a small interface.** Databases, MQTT, SMTP, the clock, ID generation — all injected, all fakeable. No package calls `time.Now()` or `uuid.New()` directly.
+2. **Pure logic has no dependencies.** The enricher, alert condition evaluator, quiet-hours check, and payload parser are pure functions: input → output, no I/O. These get exhaustive unit tests; the wiring around them gets integration tests.
+
+### Injectable Boundaries
+
+```go
+// internal/model.go — interfaces at the seams. Real implementations live in
+// database.go / email.go / ingest.go; tests pass fakes from internal/fakes.
+
+// Clock replaces time.Now() so time-based logic (quiet hours, retention
+// cutoffs, alert duration counters, JWT expiry) is deterministic in tests.
+type Clock interface {
+    Now() time.Time
+}
+type realClock struct{}
+func (realClock) Now() time.Time { return time.Now() }
+
+// IDGenerator replaces uuid.New() so tests get predictable IDs.
+type IDGenerator interface {
+    New() string
+}
+
+// MQTTPublisher is the republish seam. The real one wraps paho; the fake
+// captures published messages for assertions.
+type MQTTPublisher interface {
+    Publish(topic string, qos byte, retained bool, payload []byte) error
+}
+
+// DeviceResolver is the device-lookup seam. Real one hits PG with a cache;
+// the fake returns a canned Device.
+type DeviceResolver interface {
+    Resolve(ctx context.Context, deviceKey string) (*Device, error)
+}
+
+// TelemetryStore is the ClickHouse write seam.
+type TelemetryStore interface {
+    Write(ctx context.Context, row TelemetryRow) error
+    Flush(ctx context.Context) error
+}
+
+// EmailSender is the SMTP seam. The fake records messages in memory; tests
+// never hit a real SMTP server.
+type EmailSender interface {
+    Send(ctx context.Context, msg EmailMessage) error
+}
+```
+
+Every struct (`Pipeline`, `AlertEngine`, `EmailService`, handlers) takes these as constructor args. `cmd/*/main.go` wires the real implementations; tests wire fakes.
+
+### Test Layers
+
+| Layer | What | Tool | Speed |
+|---|---|---|---|
+| **Unit** | Pure logic: enricher, alert condition eval, quiet hours, payload parse, channel classification, validation | stdlib `testing` | ms |
+| **Handler** | HTTP handlers with fake services, `httptest.NewRecorder`, chi router | `net/http/httptest` | ms |
+| **Pipeline** | `Pipeline.Process()` with fake resolver/store/publisher — no real MQTT or DB | fakes | ms |
+| **Integration** | Real PG + ClickHouse via testcontainers; runs migrations, tests SQL + batch writer + retention | `testcontainers-go` | seconds |
+| **MQTT** | Real Mosquitto via testcontainers; end-to-end publish → ingest → store | `testcontainers-go` | seconds |
+| **Email** | `EmailService.DrainLoop` with fake `EmailSender`; asserts queue state + retry/backoff | fakes | ms |
+
+### Fake Package
+
+```
+internal/
+├── fakes/
+│   ├── clock.go           # FixedClock — returns a set time
+│   ├── idgen.go           # SequentialIDGen — predictable UUIDs
+│   ├── mqtt.go            # FakePublisher — captures published messages
+│   ├── resolver.go        # StubResolver — returns canned devices
+│   ├── store.go           # MemStore — in-memory telemetry rows
+│   ├── email.go           # FakeSender — records sent emails
+│   └── builders.go        # Test data builders: aDevice(), anAlertRule(), anEnriched()
+```
+
+`builders.go` gives fluent constructors so tests read like specs:
+```go
+dev := aDevice("AABBCCDDEEFF").withType("power_monitor_v2").ownedBy(user).build()
+rule := anAlertRule("High PV").field("pv_power").gt(5000).forDuration(30 * time.Second).build()
+```
+
+### Example: Pipeline unit test (no DB, no MQTT)
+
+```go
+func TestPipeline_Process_RepublishesEnrichedToLive(t *testing.T) {
+    clock := fakes.FixedClock(at("2026-07-12T10:00:00Z"))
+    pub := &fakes.FakePublisher{}
+    pipe := ingest.NewPipeline(
+        &fakes.StubResolver{Device: aDevice("AABBCCDDEEFF").build()},
+        ingest.NewValidator(),
+        ingest.NewEnricher(),
+        ingest.NewLicenseChecker(fakes.StubLicensor{Allow: true}),
+        &fakes.MemStore{},
+        pub,                       // MQTTPublisher fake
+        audit.New(audit.NewMemSink()),
+        clock,
+    )
+
+    msg := fakes.aMQTTMessage("telemetry/power_monitor_v2/AABBCCDDEEFF", samplePayload())
+    err := pipe.Process(context.Background(), msg)
+    require.NoError(t, err)
+
+    require.Len(t, pub.Messages, 1)
+    assert.Equal(t, "live/AABBCCDDEEFF", pub.Messages[0].Topic)
+    // assert enriched fields present in the republished payload
+}
+```
+
+### Example: Enricher pure-function test
+
+```go
+func TestEnricher_ClassifiesChannelsByGroup(t *testing.T) {
+    e := ingest.NewEnricher()
+    groups := []ChannelGroup{{Icon: 0, ChannelMask: 0b0001}} // ch0 = solar
+    raw := payload{"ch0_P": 19.8, "ch1_P": -6.4}
+
+    got := e.Enrich(aDevice("X").withGroups(groups).build(), raw)
+
+    assert.Equal(t, 19.8, got.PvPower)        // ch0 classified as PV
+    assert.Equal(t, -6.4, got.BatteryPower)    // ch1 (unclassified) falls to battery fallback
+    assert.Equal(t, SystemCharging, got.SystemStatus)
+}
+```
+
+### Example: Quiet-hours test (the clock matters)
+
+```go
+func TestShouldSend_QuietHoursWrapMidnight(t *testing.T) {
+    svc := email.New(pgFake, fakes.FixedClock(at("2026-07-12T23:30:00Z")))
+    setUserPrefs(t, svc, user, quietHours(22, 7)) // 10pm-7am
+
+    assert.False(t, svc.ShouldSend(ctx, user, "alert_fired")) // 23:30 is in quiet hours
+}
+```
+
+Without the injectable clock, this test would be flaky (depends on when it runs). With it, it's deterministic.
+
+### Integration tests with testcontainers
+
+```go
+//go:build integration
+
+func TestBatchWriter_WritesToClickHouse(t *testing.T) {
+    ctx := context.Background()
+    chContainer, _ := testcontainers.Run(ctx, "clickhouse/clickhouse-server:24.3-alpine")
+    defer chContainer.Terminate(ctx)
+    chConn := connectClickHouse(t, chContainer)
+    applyClickHouseSchema(t, chConn)
+
+    bw := ingest.NewBatchWriter(chConn, pgFake, fakes.RealClock())
+    for i := 0; i < 5; i++ {
+        bw.Write(ctx, aTelemetryRow("AABBCCDDEEFF", sample))
+    }
+    bw.Flush(ctx)
+
+    var count uint64
+    chConn.QueryRow(ctx, "SELECT count() FROM device_telemetry").Scan(&count)
+    assert.Equal(t, uint64(5), count)
+}
+```
+
+PostgreSQL integration tests follow the same pattern — `testcontainers.Run` a `postgres:16-alpine`, run migrations via `golang-migrate`, test queries. Build tag `//go:build integration` keeps them out of the fast unit-test run.
+
+### Makefile targets
+
+```makefile
+test:                 ## fast unit + handler + pipeline tests (no Docker)
+	go test ./...
+
+test-integration:    ## spins up PG + CH + Mosquitto via testcontainers
+	go test -tags integration ./...
+
+test-cover:          ## coverage report for internal/
+	go test -coverprofile=cover.out ./internal/...
+	go tool cover -html=cover.out
+
+bench:                ## enricher / alert eval hot paths
+	go test -bench=. ./internal/ingest
+```
+
+CI runs `make test` on every push (fast, <10s); `make test-integration` on PRs (spins containers, ~60s).
+
+### Coverage expectations
+
+| Package | Target | Why |
+|---|---|---|
+| `internal/enricher` | 95% | pure logic, security-relevant (classification drives alerts) |
+| `internal/alerts` (condition eval) | 95% | pure logic |
+| `internal/ingest` (pipeline) | 85% | wiring, covered by unit + integration |
+| `internal/email` (queue + quiet hours) | 90% | time-sensitive, retry logic |
+| `internal/handlers` | 80% | HTTP wiring, validated via handler tests |
+| `internal/database` | 70% | thin wrappers, real coverage from integration tests |
+
+Coverage is a floor, not a goal — a missing branch on the enricher matters more than 100% on a getter.
+
 ## Ingestion Pipeline (Go)
 
 ```go
 // internal/ingest.go — MQTT → Parse → Validate → Enrich → Store
 
 type Pipeline struct {
-    resolver *DeviceResolver    // cache + PG lookup
-    validator *Validator         // schema-based validation
-    enricher  *Enricher          // channel classification, system status
+    resolver DeviceResolver     // cache + PG lookup (interface — fakeable in tests)
+    validator *Validator         // schema-based validation (pure logic)
+    enricher  *Enricher          // channel classification, system status (pure logic)
     licensor  *LicenseChecker    // plan enforcement
-    store     *BatchWriter       // ClickHouse batch writer
+    store     TelemetryStore     // ClickHouse batch writer (interface — fakeable)
     mqtt      MQTTPublisher      // republish enriched data to live/{key}
     auditor   *Auditor           // audit log writer
+    clock     Clock              // injectable time — see Testing Strategy
 }
 
 // Process runs in the ingest worker. It is the hot path — keep it fast and
