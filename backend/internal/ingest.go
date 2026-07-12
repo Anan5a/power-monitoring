@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ── Interfaces ──────────────────────────────────────────────────────
@@ -127,6 +129,31 @@ func (p *Pipeline) Process(ctx context.Context, msg MQTTMessage) error {
 	}
 
 	return nil
+}
+
+// ── Device Resolver (PostgreSQL) ─────────────────────────────────────
+
+type PGDeviceResolver struct {
+	pg *pgxpool.Pool
+}
+
+func NewDeviceResolver(pg *pgxpool.Pool) *PGDeviceResolver {
+	return &PGDeviceResolver{pg: pg}
+}
+
+func (r *PGDeviceResolver) Resolve(ctx context.Context, deviceKey string) (*Device, error) {
+	var d Device
+	err := r.pg.QueryRow(ctx,
+		`SELECT id, device_key, device_name, device_type, owner_id::text, is_active,
+		        coalesce(firmware_ver, ''), last_seen_at, created_at
+		 FROM devices WHERE device_key = $1`,
+		deviceKey).Scan(
+		&d.ID, &d.DeviceKey, &d.DeviceName, &d.DeviceType, &d.OwnerID,
+		&d.IsActive, &d.FirmwareVer, &d.LastSeenAt, &d.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("resolve device %s: %w", deviceKey, err)
+	}
+	return &d, nil
 }
 
 func extractDeviceKey(topic string) string {
