@@ -138,3 +138,23 @@ type Pagination struct {
 	Offset  int  `json:"offset"`
 	HasMore bool `json:"has_more"`
 }
+
+// ── Channel Groups ─────────────────────────────────────────────────
+
+type ChannelGroup struct {
+	GroupID     int    `json:"group_id"`
+	Name        string `json:"name"`
+	Icon        int    `json:"icon"`        // 0=solar, 1=battery, 2=load, 3=generic
+	ChannelMask int    `json:"channel_mask"` // bitmask: bit 0 = ch0, bit 1 = ch1, etc.
+}
+
+type EnrichmentResult struct {
+	PVPower       float32
+	BatteryPower  float32
+	InverterPower float32
+	DCLoadPower   float32
+	SystemStatus  uint8
+	MinSOCPct     float32
+	MaxSOCPct     float32
+	TotalEnergyWh float32
+}
