@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -55,6 +56,13 @@ func main() {
 	// JWT manager
 	jwt := internal.NewJWTManager(cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
 
+	// Email service
+	emailSvc := internal.NewEmailService(pg, cfg.SMTPFrom, cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass)
+	go emailSvc.DrainLoop(ctx)
+
+	// Alert engine
+	alertEngine := internal.NewAlertEngine(pg, emailSvc)
+
 	// WebSocket hub
 	hub := internal.NewWebSocketHub()
 
@@ -67,6 +75,11 @@ func main() {
 		slog.Info("MQTT connected (api)")
 		c.Subscribe("live/#", 0, func(_ mqtt.Client, msg mqtt.Message) {
 			hub.OnLiveMessage(msg.Topic(), msg.Payload())
+			// Parse and evaluate alerts
+			var enriched internal.EnrichedTelemetry
+			if err := json.Unmarshal(msg.Payload(), &enriched); err == nil {
+				alertEngine.Evaluate(context.Background(), enriched.DeviceKey, &enriched)
+			}
 		})
 	}
 	mqttClient := mqtt.NewClient(mqttOpts)
@@ -78,6 +91,9 @@ func main() {
 
 	// Handlers
 	h := internal.NewHandlers(pg, jwt, ch)
+	otaHandler := internal.NewOTAHandler(pg)
+	groupHandler := internal.NewGroupHandler(pg)
+	searchHandler := internal.NewSearchHandler(pg)
 
 	// Router
 	r := chi.NewRouter()
@@ -88,14 +104,17 @@ func main() {
 	r.Use(chimw.Recoverer)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// Public
-		r.Post("/auth/register", h.Register)
-		r.Post("/auth/login", h.Login)
+		// Public (with rate limiting)
+		r.With(internal.RateLimitMiddleware(5, time.Minute)).Post("/auth/register", h.Register)
+		r.With(internal.RateLimitMiddleware(10, time.Minute)).Post("/auth/login", h.Login)
 		r.Post("/auth/refresh", h.RefreshToken)
 		r.Get("/health", h.Health)
 
 		// Mosquitto auth (called by Mosquitto HTTP plugin)
 		r.Post("/mqtt/auth", internal.NewMQTTAuthHandler(pg).ServeHTTP)
+
+		// OTA check (polled by devices, no auth — device_key is the identifier)
+		r.Get("/ota/check/{key}", otaHandler.CheckOTA)
 
 		// Protected
 		r.Group(func(r chi.Router) {
@@ -105,6 +124,27 @@ func main() {
 			r.Post("/devices/{key}/claim", h.ClaimDevice)
 			r.Get("/telemetry/{key}/latest", h.GetLatestTelemetry)
 			r.Get("/ws", hub.HandleWS)
+
+			// OTA admin
+			r.Post("/ota/releases", otaHandler.CreateRelease)
+
+			// Device groups
+			r.Get("/groups", groupHandler.ListGroups)
+			r.Post("/groups", groupHandler.CreateGroup)
+			r.Post("/groups/{id}/devices/{key}", groupHandler.AddDeviceToGroup)
+			r.Delete("/groups/{id}/devices/{key}", groupHandler.RemoveDeviceFromGroup)
+
+			// Device tags
+			r.Get("/devices/{key}/tags", groupHandler.ListTags)
+			r.Post("/devices/{key}/tags/{tag_key}", groupHandler.SetTag)
+			r.Delete("/devices/{key}/tags/{tag_key}", groupHandler.DeleteTag)
+
+			// Search
+			r.Get("/search", searchHandler.Search)
+
+			// Notification preferences
+			r.Get("/users/me/notifications", h.GetNotificationPrefs)
+			r.Patch("/users/me/notifications", h.UpdateNotificationPrefs)
 		})
 	})
 

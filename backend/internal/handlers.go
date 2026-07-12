@@ -243,6 +243,52 @@ func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ── Notification Preferences ────────────────────────────────────────
+
+func (h *Handlers) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(ContextUserID).(string)
+	var prefs struct {
+		AlertFired    bool `json:"alert_fired_email"`
+		AlertResolved bool `json:"alert_resolved_email"`
+		QuietStart    *int `json:"quiet_hours_start,omitempty"`
+		QuietEnd      *int `json:"quiet_hours_end,omitempty"`
+	}
+	err := h.pg.QueryRow(r.Context(),
+		`SELECT alert_fired_email, alert_resolved_email, quiet_hours_start, quiet_hours_end
+		 FROM notification_preferences WHERE user_id = $1`, userID).
+		Scan(&prefs.AlertFired, &prefs.AlertResolved, &prefs.QuietStart, &prefs.QuietEnd)
+	if err != nil {
+		writeJSON(w, http.StatusOK, prefs) // defaults
+		return
+	}
+	writeJSON(w, http.StatusOK, prefs)
+}
+
+func (h *Handlers) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value(ContextUserID).(string)
+	var req struct {
+		AlertFired    *bool `json:"alert_fired_email"`
+		AlertResolved *bool `json:"alert_resolved_email"`
+		QuietStart    *int  `json:"quiet_hours_start"`
+		QuietEnd      *int  `json:"quiet_hours_end"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "bad_request", "invalid body", http.StatusBadRequest)
+		return
+	}
+	h.pg.Exec(r.Context(), `
+		INSERT INTO notification_preferences (user_id, alert_fired_email, alert_resolved_email, quiet_hours_start, quiet_hours_end)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (user_id) DO UPDATE SET
+		    alert_fired_email = COALESCE($2, notification_preferences.alert_fired_email),
+		    alert_resolved_email = COALESCE($3, notification_preferences.alert_resolved_email),
+		    quiet_hours_start = $4,
+		    quiet_hours_end = $5,
+		    updated_at = now()`,
+		userID, req.AlertFired, req.AlertResolved, req.QuietStart, req.QuietEnd)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 func contains(s, substr string) bool {
