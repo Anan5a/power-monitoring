@@ -23,6 +23,8 @@ func (s *MemStore) Write(_ context.Context, row internal.TelemetryRow) error {
 
 func (s *MemStore) Flush(_ context.Context) error { return nil }
 
+func NewMemStore() *MemStore { return &MemStore{} }
+
 func (s *MemStore) Count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

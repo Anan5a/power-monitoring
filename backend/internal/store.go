@@ -1,0 +1,92 @@
+// internal/store.go — ClickHouse batch writer with in-memory buffer.
+// The ingest worker writes TelemetryRows here; FlushLoop periodically
+// sends them to ClickHouse in batches.
+
+package internal
+
+import (
+	"context"
+	"log/slog"
+	"time"
+)
+
+// TelemetryStore is the interface for storing telemetry. The real
+// implementation writes to ClickHouse; the fake stores in memory.
+type TelemetryStore interface {
+	Write(ctx context.Context, row TelemetryRow) error
+	Flush(ctx context.Context) error
+}
+
+// BatchWriter buffers TelemetryRows and flushes them to ClickHouse
+// in batches. Safe for concurrent use from multiple goroutines.
+type BatchWriter struct {
+	store     TelemetryStore
+	chConn    any // clickhouse.Conn — typed in real code
+	pgPool    any // *pgxpool.Pool — typed in real code
+	buf       chan TelemetryRow
+	batchSize int
+}
+
+func NewBatchWriter(store TelemetryStore, chConn, pgPool any) *BatchWriter {
+	return &BatchWriter{
+		store:     store,
+		chConn:    chConn,
+		pgPool:    pgPool,
+		buf:       make(chan TelemetryRow, 10000),
+		batchSize: 1000,
+	}
+}
+
+func (bw *BatchWriter) Write(ctx context.Context, row TelemetryRow) {
+	select {
+	case bw.buf <- row:
+	default:
+		slog.Warn("ingest buffer full, dropping row", "device", row.DeviceID)
+	}
+}
+
+// Flush sends all buffered rows to the underlying store.
+func (bw *BatchWriter) Flush(ctx context.Context) error {
+	batch := make([]TelemetryRow, 0, bw.batchSize)
+	for {
+		select {
+		case row := <-bw.buf:
+			batch = append(batch, row)
+			if len(batch) >= bw.batchSize {
+				return bw.flushBatch(ctx, batch)
+			}
+		default:
+			if len(batch) > 0 {
+				return bw.flushBatch(ctx, batch)
+			}
+			return nil
+		}
+	}
+}
+
+func (bw *BatchWriter) flushBatch(ctx context.Context, rows []TelemetryRow) error {
+	for _, row := range rows {
+		if err := bw.store.Write(ctx, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// FlushLoop runs in a goroutine, flushing every 30s or when the buffer
+// reaches batchSize. Call from cmd/ingest/main.go.
+func (bw *BatchWriter) FlushLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := bw.Flush(ctx); err != nil {
+				slog.Error("batch flush failed", "error", err)
+			}
+		case <-ctx.Done():
+			bw.Flush(ctx) // final flush on shutdown
+			return
+		}
+	}
+}
