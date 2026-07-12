@@ -11,8 +11,8 @@ A self-hosted IoT platform backend replacing Supabase for the power-monitoring e
 
 | Component | Technology | Role |
 |---|---|---|
-| API Server | Go + chi router (`cmd/api`) | Auth, REST, WebSocket, OTA check, Mosquitto auth backend, admin, billing |
-| Ingest Worker | Go (`cmd/ingest`) | MQTT consumer, parse/validate/enrich/store, alerts, email, batch writer |
+| API Server | Go + chi router (`cmd/api`) | Auth, REST, WebSocket, OTA check, Mosquitto auth backend, **alert engine, email service**, admin, billing |
+| Ingest Worker | Go (`cmd/ingest`) | MQTT consumer, parse/validate/enrich/store, batch writer — **pure data plumbing, no business logic** |
 | MQTT Broker | Mosquitto 2 | Device ingestion, command delivery, live fan-out bus |
 | Relational DB | PostgreSQL 16 | Users, orgs, devices, configs, commands, alerts, email templates, invoices, audit |
 | Time-Series DB | ClickHouse 24.3 | Device telemetry, materialized views |
@@ -24,33 +24,38 @@ A self-hosted IoT platform backend replacing Supabase for the power-monitoring e
 
 The API server and ingest worker are **separate binaries** sharing one Go module and the `internal/` packages. They fail independently: an ingest panic (e.g. malformed payload from a new device type) does not take down login or the dashboard, and an API restart does not pause telemetry storage (Mosquitto buffers).
 
+**Principle: ingest is pure data plumbing.** It parses, validates, enriches, stores, and republishes — nothing else. All business logic (alerts, email, billing, OTA, auth) lives in the API. This keeps the 5s ingestion path fast and reliable: a bad alert rule or a slow SMTP server can never block or endanger telemetry storage.
+
 ```
 ESP32s ──MQTT──▶ Mosquitto ──telemetry/#──▶ ingest worker
                       │                          ├─ parse/validate/enrich
                       │                          ├─ write ClickHouse (batched)
-                      │                          ├─ write PG (last_seen, alerts)
-                      │                          ├─ evaluate alert rules
+                      │                          ├─ write PG (last_seen)
                       │                          └─ republish live/{device_key} ──┐
                       │                                                          │
                       └──live/#──▶ api server ◀──────────────────────────────────┘
                       │              ├─ WebSocket push to browsers
+                      │              ├─ alert rule evaluation (on live/# stream)
+                      │              ├─ async email (auth, alerts, billing)
                       │              ├─ REST (auth, devices, OTA check, admin)
                       │              └─ Mosquitto auth backend (validates device creds)
                       │
 Web UI ──HTTP/WS──▶ Caddy ──▶ api server
 ```
 
-**Live WebSocket fan-out via Mosquitto:** the ingest worker republishes each enriched reading to `live/{device_key}`. The API subscribes to `live/#` and pushes to connected browser sessions. This reuses the existing broker — no Redis/NATS needed for v1. Add Redis later only if rate-limit state must be shared across multiple API instances.
+**Live stream does double duty:** the API subscribes to `live/#` once and uses each message for both WebSocket fan-out AND alert evaluation. The ingest worker republishes the full enriched payload (computed columns + raw fields), so the API has everything alert eval needs without re-querying.
+
+**Email is async:** the API pushes email jobs to a `email_queue` table; a background goroutine drains it and sends via SMTP with retry. SMTP latency (100ms-2s) never blocks a request or the alert eval loop. All email triggers (welcome, password reset, alert fired/resolved, payment confirmed) originate in the API.
 
 **Shared state (no write conflicts):**
-- API writes: `device_commands`, `alert_rules`, `ota_releases`, `invoices`, `users`, `orgs`
-- Ingest writes: `devices.last_seen_at`, `alert_events`, `audit_log` (device/system actions), ClickHouse `device_telemetry`
+- API writes: `device_commands`, `alert_rules`, `alert_events`, `ota_releases`, `invoices`, `users`, `orgs`, `email_queue`, `audit_log` (user actions)
+- Ingest writes: `devices.last_seen_at`, ClickHouse `device_telemetry`, `audit_log` (device/system actions: validation_failed, offline)
 - API reads: telemetry from ClickHouse, alert events, device list
-- Ingest reads: `devices`, `device_config`, `alert_rules`, `license_plans` (all via 5-min in-memory cache)
+- Ingest reads: `devices`, `device_config`, `license_plans` (via 5-min in-memory cache). Ingest does NOT read `alert_rules` — alerts are the API's job.
 
 **Team ownership (2-3 people):**
-- API owner: auth, REST handlers, WebSocket hub, OTA check endpoint, Mosquitto auth endpoint, admin/billing
-- Ingest owner: MQTT subscription, pipeline, enricher, batch writer, alert engine, email service
+- API owner: auth, REST, WebSocket hub, alert engine, email service, OTA, billing, Mosquitto auth endpoint (all business logic)
+- Ingest owner: MQTT subscription, pipeline, enricher, batch writer, retention cleanup (pure plumbing — small, reliable, rarely changes after Phase 1)
 - Infra/UI owner: Docker, CI/CD, backups, Caddy, web UI migration
 
 ## Architecture
@@ -71,6 +76,10 @@ Web UI ──HTTP/WS──▶ Caddy ──▶ api server
                     │  │ REST handlers  │  │
                     │  ├────────────────┤  │
                     │  │ WebSocket Hub  │  │  ← subscribes live/# from Mosquitto
+                    │  ├────────────────┤  │
+                    │  │ Alert Engine   │  │  ← evaluates rules on live/# stream
+                    │  ├────────────────┤  │
+                    │  │ Email Service  │  │  ← async queue, SMTP
                     │  ├────────────────┤  │
                     │  │ OTA check      │  │
                     │  ├────────────────┤  │
@@ -101,13 +110,9 @@ Web UI ──HTTP/WS──▶ Caddy ──▶ api server
      │  ├─────────┤ │                 │ live/#
      │  │ Pipeline│ │                 ▼
      │  │ ├parse  │ │          ┌─────────────┐
-     │  │ ├valid. │ │          │  API Server  │ (subscribes live/# → WebSocket)
-     │  │ ├enrich │ │          └─────────────┘
-     │  │ └store  │ │
-     │  ├─────────┤ │
-     │  │ Alerts  │ │
-     │  ├─────────┤ │
-     │  │ Email   │ │
+     │  │ ├valid. │ │          │  API Server  │ (subscribes live/# →
+     │  │ ├enrich │ │          │              │  WebSocket + alert eval)
+     │  │ └store  │ │          └─────────────┘
      │  ├─────────┤ │
      │  │ Batch   │ │
      │  │ writer  │ │
@@ -281,17 +286,22 @@ Admin toggles off: POST /api/admin/maintenance { enabled: false }
 ### Email Sending
 
 ```
-Triggered by:
+Triggered by (all in the API):
   ├─ Auth: welcome email, password reset, email verification
-  ├─ Alerts: alert fired, alert resolved
-  └─ (Future: billing invoices, payment failures)
+  ├─ Alerts: alert fired, alert resolved (via alert engine on live/# stream)
+  └─ Billing: payment confirmed (via invoice mark-paid handler)
 
-Flow:
-  1. Go API loads template from email_templates table
-  2. Renders with html/template (data from the triggering event)
-  3. Sends via SMTP (SendGrid/Mailgun)
-  4. Logs to audit_log (email.sent)
-  5. On failure: retry 3x with backoff, then log to audit_log (email.failed)
+Flow (async, queue-based):
+  1. Triggering code calls EmailService.Enqueue / EnqueueAlert
+     ├─ Checks notification preferences + quiet hours (for alerts)
+     └─ INSERTs a row into email_queue (status=queued)
+  2. Background DrainLoop (goroutine in API) polls every 5s:
+     ├─ Claims due rows with FOR UPDATE SKIP LOCKED (multi-instance safe)
+     ├─ Loads template from email_templates, renders with html/template
+     ├─ Sends via SMTP (SendGrid/Mailgun)
+     ├─ On success: status=sent, sent_at=now()
+     └─ On failure: retry with exponential backoff (1m, 5m, 25m), then status=failed
+  3. Audit log records email.sent / email.failed
 ```
 
 ## Data Model
@@ -580,6 +590,27 @@ CREATE TABLE email_templates (
     created_at      TIMESTAMPTZ DEFAULT now(),
     updated_at      TIMESTAMPTZ DEFAULT now()
 );
+
+-- ============================================================
+-- Email Queue (async send — drained by API background worker)
+-- Decouples SMTP latency from request handlers and alert eval.
+-- ============================================================
+CREATE TABLE email_queue (
+    id              BIGSERIAL PRIMARY KEY,
+    template_key    TEXT NOT NULL,          -- references email_templates.template_key
+    recipient       TEXT NOT NULL,          -- email address
+    user_id         UUID REFERENCES users(id) ON DELETE SET NULL,  -- for pref/quiet-hours checks
+    data            JSONB NOT NULL DEFAULT '{}',  -- template variables
+    status          TEXT NOT NULL DEFAULT 'queued',  -- queued, sending, sent, failed
+    attempts        INT NOT NULL DEFAULT 0,
+    last_error      TEXT,
+    next_attempt_at TIMESTAMPTZ DEFAULT now(),
+    queued_at       TIMESTAMPTZ DEFAULT now(),
+    sent_at         TIMESTAMPTZ
+);
+
+CREATE INDEX idx_email_queue_due ON email_queue (status, next_attempt_at)
+    WHERE status IN ('queued', 'sending');
 
 -- Seed default templates
 INSERT INTO email_templates (template_key, subject, body_text, body_html, variables) VALUES
@@ -1082,6 +1113,27 @@ Server → Client:
   {"type": "error", "message": "..."}
 ```
 
+**Live stream handler (API side):** the API subscribes to `live/#` on Mosquitto once. Each message is dispatched to two consumers:
+1. **WebSocket hub** — forwards to browser sessions subscribed to that `device_key`
+2. **Alert engine** — evaluates the org's alert rules against the enriched payload
+
+```go
+// internal/websocket.go — runs in cmd/api
+func (h *Hub) onLiveMessage(msg MQTTMessage) {
+    deviceKey := strings.TrimPrefix(msg.Topic(), "live/")
+    var enriched Enriched
+    json.Unmarshal(msg.Payload(), &enriched)
+
+    // 1. Push to subscribed browsers
+    h.Broadcast(deviceKey, enriched)
+
+    // 2. Evaluate alerts (async so a slow rule doesn't delay WS push)
+    go h.alerts.Evaluate(context.Background(), h.deviceByKey(deviceKey), &enriched)
+}
+```
+
+The WebSocket push happens synchronously (sub-ms, in-memory); alert eval runs in a goroutine so a bad rule can't delay the live push to browsers.
+
 ### MQTT Topics
 
 ```
@@ -1182,14 +1234,14 @@ backend/
 │   ├── middleware.go         # Auth, logging, CORS, rate limit, maintenance (api)
 │   ├── handlers.go           # REST endpoints (api)
 │   ├── websocket.go          # WebSocket hub + live/# subscriber (api)
+│   ├── alerts.go             # Alert rule evaluation on live/# stream (api)
+│   ├── email.go              # Email queue + template rendering + SMTP (api)
 │   ├── ota.go                # OTA release management + check endpoint (api)
 │   ├── billing.go            # Invoice + license logic (api)
 │   ├── search.go             # Full-text search handlers (api)
 │   ├── ingest.go             # MQTT consumer pipeline (ingest)
 │   ├── enricher.go           # Channel classification (ingest)
 │   ├── store.go              # ClickHouse batch writer + retention (ingest)
-│   ├── alerts.go             # Alert rule evaluation (ingest)
-│   ├── email.go              # Email template rendering + SMTP (ingest)
 │   ├── audit.go              # Audit log writer (shared)
 │   └── mqttauth.go           # Mosquitto HTTP auth backend endpoint (api)
 ├── migrations/
@@ -1219,12 +1271,13 @@ type Pipeline struct {
     enricher  *Enricher          // channel classification, system status
     licensor  *LicenseChecker    // plan enforcement
     store     *BatchWriter       // ClickHouse batch writer
-    alerts    *AlertEngine       // rule evaluation on ingest
-    email     *EmailService      // email notifications
     mqtt      MQTTPublisher      // republish enriched data to live/{key}
     auditor   *Auditor           // audit log writer
 }
 
+// Process runs in the ingest worker. It is the hot path — keep it fast and
+// never block on business logic. Alerts and email live in the API, which
+// consumes the live/{device_key} stream this republishes.
 func (p *Pipeline) Process(ctx context.Context, msg MQTTMessage) error {
     raw, err := parseJSON(msg.Payload)
     if err != nil {
@@ -1262,13 +1315,9 @@ func (p *Pipeline) Process(ctx context.Context, msg MQTTMessage) error {
         Computed:    enriched.Computed,
     })
 
-    // Evaluate alert rules (non-blocking, errors are logged not returned)
-    if err := p.alerts.Evaluate(ctx, device, enriched); err != nil {
-        log.Error("alert evaluation failed", "device", device.Key, "error", err)
-    }
-
     // Republish enriched reading to live/{device_key} (retained=false, QoS 0).
-    // The API server subscribes to live/# and pushes to WebSocket clients.
+    // The API server subscribes to live/# and uses each message for BOTH
+    // WebSocket fan-out AND alert rule evaluation.
     // QoS 0: live data is lossy by design — a dropped frame is fine, the next
     // one arrives in 5s. Do not block ingestion on the republish.
     p.mqtt.Publish("live/"+device.Key, 0, false, enriched.ToWSJSON())
@@ -1339,11 +1388,12 @@ func (bw *BatchWriter) FlushLoop(ctx context.Context) {
 ## Alert Engine
 
 ```go
-// internal/alerts.go — Rule evaluation on every telemetry ingest
+// internal/alerts.go — runs in the API server, fed by the live/# MQTT stream.
+// Not in the ingest worker: a bad rule must never endanger telemetry storage.
 
 type AlertEngine struct {
     pg       *pgxpool.Pool
-    email    *EmailService
+    email    *EmailQueue       // enqueues, does not send synchronously
     auditor  *Auditor
     mu       sync.RWMutex
     // In-memory state: tracks consecutive matches per (rule_id, device_key)
@@ -1424,9 +1474,9 @@ func (e *AlertEngine) fire(ctx context.Context, rule AlertRule, device *Device, 
          VALUES ($1, $2, 'firing', $3) RETURNING id`,
         rule.ID, device.Key, value).Scan(&eventID)
 
-    // Send email notification
+    // Enqueue emails (async — never block alert eval on SMTP)
     if rule.NotifyEmail {
-        e.email.SendAlertFired(ctx, device, rule, value)
+        e.email.EnqueueAlert(ctx, "alert_fired", device, rule, value)
     }
 
     e.auditor.Log(ctx, AuditEntry{
@@ -1452,7 +1502,7 @@ func (e *AlertEngine) resolve(ctx context.Context, rule AlertRule, device *Devic
     }
 
     if rule.NotifyEmail {
-        e.email.SendAlertResolved(ctx, device, rule, value)
+        e.email.EnqueueAlert(ctx, "alert_resolved", device, rule, value)
     }
 
     e.auditor.Log(ctx, AuditEntry{
@@ -1469,8 +1519,10 @@ func (e *AlertEngine) resolve(ctx context.Context, rule AlertRule, device *Devic
 
 ## Email Service
 
+Email is fully async. Triggering code (auth handlers, alert engine, billing) enqueues a row into `email_queue`; a background worker in the API drains the queue, renders the template, applies notification preferences + quiet hours, and sends via SMTP with retry. SMTP latency never blocks a request or the alert eval loop.
+
 ```go
-// internal/email.go — Template rendering + SMTP sending
+// internal/email.go — runs in the API server
 
 type EmailService struct {
     pg       *pgxpool.Pool
@@ -1479,76 +1531,132 @@ type EmailService struct {
     smtpPort int
     smtpUser string
     smtpPass string
-    platform string  // platform name for templates
-    baseURL  string  // dashboard URL for template links
+    platform string
+    baseURL  string
 }
 
-// SendAlertFired loads the 'alert_fired' template, renders it with device
-// and rule data, and sends to org members who have alert_fired_email enabled
-// and are outside their quiet hours.
-func (e *EmailService) SendAlertFired(ctx context.Context, device *Device, rule AlertRule, value float64) {
-    tmpl, err := e.loadTemplate(ctx, "alert_fired")
-    if err != nil {
-        log.Error("load template", "error", err)
-        return
-    }
-
+// EnqueueAlert is called by the alert engine. It checks each org member's
+// notification preferences + quiet hours, then inserts one email_queue row
+// per qualifying recipient. Returns immediately — sending happens async.
+func (e *EmailService) EnqueueAlert(ctx context.Context, templateKey string, device *Device, rule AlertRule, value float64) {
     data := map[string]any{
         "RuleName":     rule.Name,
-        "DeviceName":  device.Name,
-        "DeviceKey":   device.Key,
-        "Value":       value,
-        "Threshold":   rule.Value,
-        "Unit":        "",  // device-type specific, loaded from device_types
+        "DeviceName":   device.Name,
+        "DeviceKey":    device.Key,
+        "Value":        value,
+        "Threshold":    rule.Value,
+        "Unit":         "",
         "DashboardURL": e.baseURL + "/devices/" + device.Key,
     }
-
-    subject, err := e.renderTemplate(tmpl.Subject, data)
+    candidates, err := e.getOrgNotifyEmails(ctx, device.OrgID, templateKey+"_email")
     if err != nil {
-        log.Error("render subject", "error", err)
         return
     }
-    bodyHTML, err := e.renderTemplate(tmpl.BodyHTML, data)
-    if err != nil {
-        log.Error("render html", "error", err)
-        return
+    for _, r := range candidates {
+        if !e.shouldSend(ctx, r.UserID, templateKey) {
+            continue // user disabled this type, or in quiet hours
+        }
+        e.pg.Exec(ctx,
+            `INSERT INTO email_queue (template_key, recipient, user_id, data)
+             VALUES ($1, $2, $3, $4)`,
+            templateKey, r.Email, r.UserID, data)
     }
-    bodyText, err := e.renderTemplate(tmpl.BodyText, data)
-    if err != nil {
-        log.Error("render text", "error", err)
-        return
-    }
-
-    // Fetch recipients with alert_fired_email enabled, then filter by quiet hours.
-    candidates, err := e.getOrgNotifyEmails(ctx, device.OrgID, "alert_fired_email")
-    if err != nil || len(candidates) == 0 {
-        return
-    }
-    recipients := e.filterByQuietHours(ctx, candidates, "alert_fired")
-    if len(recipients) == 0 {
-        return
-    }
-    e.send(ctx, recipients, subject, bodyHTML, bodyText)
 }
 
-// filterByQuietHours drops recipients currently in their quiet hours window.
-func (e *EmailService) filterByQuietHours(ctx context.Context, recipients []Recipient, alertType string) []Recipient {
-    out := make([]Recipient, 0, len(recipients))
-    for _, r := range recipients {
-        if e.shouldSend(ctx, r.UserID, alertType) {
-            out = append(out, r)
+// Enqueue is the generic enqueue path for non-alert emails (welcome,
+// password_reset, payment_confirmed). Called by auth/billing handlers.
+func (e *EmailService) Enqueue(ctx context.Context, templateKey, recipient string, userID string, data map[string]any) {
+    e.pg.Exec(ctx,
+        `INSERT INTO email_queue (template_key, recipient, user_id, data)
+         VALUES ($1, $2, $3, $4)`,
+        templateKey, recipient, userID, data)
+}
+
+// DrainLoop runs as a background goroutine in the API. Polls email_queue,
+// claims a batch, renders, sends, updates status. One row at a time is fine
+// for v1 volume; batch sending is a later optimization.
+func (e *EmailService) DrainLoop(ctx context.Context) {
+    ticker := time.NewTicker(5 * time.Second)
+    defer ticker.Stop()
+    for {
+        select {
+        case <-ticker.C:
+            e.drainBatch(ctx)
+        case <-ctx.Done():
+            return
         }
     }
-    return out
 }
 
-// shouldSend checks a single user's notification preferences and quiet hours.
+func (e *EmailService) drainBatch(ctx context.Context) {
+    // Claim up to 20 due rows (FOR UPDATE SKIP LOCKED so multiple API
+    // instances don't double-send).
+    rows, err := e.pg.Query(ctx, `
+        SELECT id, template_key, recipient, data FROM email_queue
+        WHERE status = 'queued' AND next_attempt_at <= now()
+        ORDER BY next_attempt_at LIMIT 20
+        FOR UPDATE SKIP LOCKED`)
+    if err != nil {
+        return
+    }
+    defer rows.Close()
+    for rows.Next() {
+        var id int64
+        var key, recipient string
+        var data []byte
+        rows.Scan(&id, &key, &recipient, &data)
+        e.sendOne(ctx, id, key, recipient, data)
+    }
+}
+
+func (e *EmailService) sendOne(ctx context.Context, id int64, key, recipient string, data []byte) {
+    // Mark sending
+    e.pg.Exec(ctx, `UPDATE email_queue SET status='sending', attempts=attempts+1 WHERE id=$1`, id)
+
+    tmpl, err := e.loadTemplate(ctx, key)
+    if err != nil {
+        e.failOne(ctx, id, err)
+        return
+    }
+    var vars map[string]any
+    json.Unmarshal(data, &vars)
+    subject, _ := e.renderTemplate(tmpl.Subject, vars)
+    bodyHTML, _ := e.renderTemplate(tmpl.BodyHTML, vars)
+    bodyText, _ := e.renderTemplate(tmpl.BodyText, vars)
+
+    msg := gomail.NewMessage()
+    msg.SetHeader("From", e.fromAddr)
+    msg.SetHeader("To", recipient)
+    msg.SetHeader("Subject", subject)
+    msg.SetBody("text/plain", bodyText)
+    msg.AddAlternative("text/html", bodyHTML)
+
+    dialer := gomail.NewDialer(e.smtpHost, e.smtpPort, e.smtpUser, e.smtpPass)
+    if err := dialer.DialAndSend(msg); err != nil {
+        e.failOne(ctx, id, err) // reschedules with backoff, or marks failed after 3
+        return
+    }
+    e.pg.Exec(ctx, `UPDATE email_queue SET status='sent', sent_at=now() WHERE id=$1`, id)
+}
+
+func (e *EmailService) failOne(ctx context.Context, id int64, err error) {
+    // Exponential backoff: 1m, 5m, 25m, then give up.
+    e.pg.Exec(ctx, `
+        UPDATE email_queue
+        SET status = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'queued' END,
+            last_error = $2,
+            next_attempt_at = now() + (interval '1 minute' * (5 ^ attempts))
+        WHERE id = $1`, id, err.Error())
+    log.Error("email send failed", "id", id, "error", err)
+}
+
+// shouldSend checks a user's notification preferences + quiet hours.
 func (e *EmailService) shouldSend(ctx context.Context, userID string, alertType string) bool {
     var prefs struct {
-        AlertFired   bool
+        AlertFired    bool
         AlertResolved bool
-        QuietStart   *int
-        QuietEnd     *int
+        QuietStart    *int
+        QuietEnd      *int
     }
     err := e.pg.QueryRow(ctx,
         `SELECT alert_fired_email, alert_resolved_email, quiet_hours_start, quiet_hours_end
@@ -1557,8 +1665,6 @@ func (e *EmailService) shouldSend(ctx context.Context, userID string, alertType 
     if err != nil {
         return true // default to send on error
     }
-
-    // Check if this alert type is enabled for the user
     switch alertType {
     case "alert_fired":
         if !prefs.AlertFired {
@@ -1569,8 +1675,6 @@ func (e *EmailService) shouldSend(ctx context.Context, userID string, alertType 
             return false
         }
     }
-
-    // Check quiet hours (handles wrap-around midnight)
     if prefs.QuietStart != nil && prefs.QuietEnd != nil {
         hour := time.Now().UTC().Hour()
         if *prefs.QuietStart < *prefs.QuietEnd {
@@ -1578,39 +1682,16 @@ func (e *EmailService) shouldSend(ctx context.Context, userID string, alertType 
                 return false
             }
         } else {
-            // wraps midnight, e.g., 22:00 - 06:00
             if hour >= *prefs.QuietStart || hour < *prefs.QuietEnd {
                 return false
             }
         }
     }
-
     return true
 }
-
-func (e *EmailService) send(ctx context.Context, to []string, subject, html, text string) {
-    msg := gomail.NewMessage()
-    msg.SetHeader("From", e.fromAddr)
-    msg.SetHeader("To", to...)
-    msg.SetHeader("Subject", subject)
-    msg.SetBody("text/plain", text)
-    msg.AddAlternative("text/html", html)
-
-    dialer := gomail.NewDialer(e.smtpHost, e.smtpPort, e.smtpUser, e.smtpPass)
-
-    // Retry: 3 attempts with exponential backoff (1s, 2s, 4s)
-    var lastErr error
-    for attempt := 0; attempt < 3; attempt++ {
-        if err := dialer.DialAndSend(msg); err == nil {
-            return
-        } else {
-            lastErr = err
-            time.Sleep(time.Duration(1<<attempt) * time.Second)
-        }
-    }
-    log.Error("email send failed after retries", "error", lastErr, "recipients", len(to))
-}
 ```
+
+The `FOR UPDATE SKIP LOCKED` claim lets multiple API instances drain the queue concurrently without double-sending — a natural fit if the API is later scaled horizontally behind Caddy.
 
 ## Maintenance Mode
 
