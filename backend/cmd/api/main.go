@@ -94,6 +94,10 @@ func main() {
 	otaHandler := internal.NewOTAHandler(pg)
 	groupHandler := internal.NewGroupHandler(pg)
 	searchHandler := internal.NewSearchHandler(pg)
+	oauthHandler := internal.NewOAuthHandler(pg, jwt, "", "", "", "", "")
+	billingHandler := internal.NewBillingHandler(pg)
+	exportHandler := internal.NewExportHandler(pg, nil, "http://localhost:8080")
+	maintenanceMode := internal.NewMaintenanceMode(pg)
 
 	// Router
 	r := chi.NewRouter()
@@ -101,6 +105,7 @@ func main() {
 	r.Use(chimw.RealIP)
 	r.Use(internal.LoggerMiddleware)
 	r.Use(internal.CORSMiddleware(cfg.CORSAllowedOrigins))
+	r.Use(maintenanceMode.Middleware())
 	r.Use(chimw.Recoverer)
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -109,6 +114,10 @@ func main() {
 		r.With(internal.RateLimitMiddleware(10, time.Minute)).Post("/auth/login", h.Login)
 		r.Post("/auth/refresh", h.RefreshToken)
 		r.Get("/health", h.Health)
+
+		// OAuth
+		r.Get("/auth/oauth/{provider}", oauthHandler.Redirect)
+		r.Get("/auth/oauth/{provider}/callback", oauthHandler.Callback)
 
 		// Mosquitto auth (called by Mosquitto HTTP plugin)
 		r.Post("/mqtt/auth", internal.NewMQTTAuthHandler(pg).ServeHTTP)
@@ -145,6 +154,18 @@ func main() {
 			// Notification preferences
 			r.Get("/users/me/notifications", h.GetNotificationPrefs)
 			r.Patch("/users/me/notifications", h.UpdateNotificationPrefs)
+
+			// Billing
+			r.Get("/billing/invoices", billingHandler.ListInvoices)
+			r.Post("/billing/invoices", billingHandler.CreateInvoice)
+			r.Post("/billing/invoices/{id}/mark-paid", billingHandler.MarkInvoicePaid)
+
+			// Data export
+			r.Post("/export/request", exportHandler.RequestExport)
+			r.Get("/export/status/{id}", exportHandler.GetExportStatus)
+
+			// Maintenance toggle (admin)
+			r.Post("/admin/maintenance", maintenanceMode.ToggleHandler)
 		})
 	})
 

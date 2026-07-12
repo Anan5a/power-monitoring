@@ -78,6 +78,10 @@ func main() {
 	// Start batch flush loop
 	go store.FlushLoop(ctx)
 
+	// Start retention cleanup (hourly)
+	retention := internal.NewRetentionCleanup(pg, ch)
+	go retention.RunLoop(ctx)
+
 	// Wait for shutdown
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
