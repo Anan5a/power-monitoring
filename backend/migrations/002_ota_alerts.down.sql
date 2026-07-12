@@ -1,0 +1,13 @@
+DROP INDEX IF EXISTS idx_audit_search;
+DROP INDEX IF EXISTS idx_devices_search;
+ALTER TABLE devices DROP COLUMN IF EXISTS search_vector;
+ALTER TABLE audit_log DROP COLUMN IF EXISTS search_vector;
+DROP TABLE IF EXISTS notification_preferences;
+DROP TABLE IF EXISTS device_tags;
+DROP TABLE IF EXISTS device_group_members;
+DROP TABLE IF EXISTS device_groups;
+DROP TABLE IF EXISTS email_queue;
+DROP TABLE IF EXISTS email_templates;
+DROP TABLE IF EXISTS alert_events;
+DROP TABLE IF EXISTS alert_rules;
+DROP TABLE IF EXISTS ota_releases;
