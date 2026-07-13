@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,10 +18,10 @@ import (
 type Handlers struct {
 	pg  *pgxpool.Pool
 	jwt *JWTManager
-	ch  any // clickhouse.Conn — typed in real code
+	ch  clickhouse.Conn
 }
 
-func NewHandlers(pg *pgxpool.Pool, jwt *JWTManager, ch any) *Handlers {
+func NewHandlers(pg *pgxpool.Pool, jwt *JWTManager, ch clickhouse.Conn) *Handlers {
 	return &Handlers{pg: pg, jwt: jwt, ch: ch}
 }
 
@@ -210,19 +211,43 @@ func (h *Handlers) ClaimDevice(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) GetLatestTelemetry(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
 	// Query ClickHouse for the latest row
-	var ts time.Time
-	var payload json.RawMessage
-	err := h.pg.QueryRow(r.Context(),
-		`SELECT recorded_at, payload FROM telemetry_live
-		 WHERE device_id = $1 ORDER BY recorded_at DESC LIMIT 1`, deviceKey).Scan(&ts, &payload)
-	if err == pgx.ErrNoRows {
+	if h.ch == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"device_key": deviceKey, "data": nil})
 		return
 	}
+	rows, err := h.ch.Query(r.Context(),
+		`SELECT ts, pv_power, battery_power, inverter_power, dc_load_power,
+		        system_status, min_soc_pct, max_soc_pct, total_energy_wh, fields
+		 FROM device_telemetry
+		 WHERE device_id = $1 ORDER BY ts DESC LIMIT 1`, deviceKey)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"device_key": deviceKey, "data": nil})
+		return
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		writeJSON(w, http.StatusOK, map[string]any{"device_key": deviceKey, "data": nil})
+		return
+	}
+	var ts time.Time
+	var pv, bat, inv, dc float32
+	var status uint8
+	var minSoc, maxSoc, energy float32
+	var fields map[string]float64
+	rows.Scan(&ts, &pv, &bat, &inv, &dc, &status, &minSoc, &maxSoc, &energy, &fields)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"device_key":  deviceKey,
-		"recorded_at": ts,
-		"data":        json.RawMessage(payload),
+		"device_key":      deviceKey,
+		"recorded_at":     ts,
+		"pv_power":        pv,
+		"battery_power":   bat,
+		"inverter_power":  inv,
+		"dc_load_power":   dc,
+		"system_status":   status,
+		"min_soc_pct":     minSoc,
+		"max_soc_pct":     maxSoc,
+		"total_energy_wh": energy,
+		"fields":          fields,
 	})
 }
 

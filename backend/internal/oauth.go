@@ -73,7 +73,11 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch user info from provider
 	client := config.Client(r.Context(), token)
-	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
+	userInfoURL := "https://www.googleapis.com/oauth2/v2/userinfo"
+	if provider == "github" {
+		userInfoURL = "https://api.github.com/user"
+	}
+	resp, err := client.Get(userInfoURL)
 	if err != nil {
 		writeError(w, "internal_error", "failed to fetch user info", http.StatusInternalServerError)
 		return
@@ -84,9 +88,18 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		ID      string `json:"id"`
 		Email   string `json:"email"`
 		Name    string `json:"name"`
+		Login   string `json:"login"`    // GitHub uses "login" instead of "name"
 		Picture string `json:"picture"`
+		Avatar  string `json:"avatar_url"` // GitHub uses "avatar_url"
 	}
 	json.NewDecoder(resp.Body).Decode(&info)
+	// GitHub uses "login" for display name and "avatar_url" for picture
+	if info.Name == "" {
+		info.Name = info.Login
+	}
+	if info.Picture == "" {
+		info.Picture = info.Avatar
+	}
 
 	// Find or create user
 	var userID string

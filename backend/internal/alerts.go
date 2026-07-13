@@ -150,6 +150,19 @@ func requiredSamples(durationSec int) int {
 	return (durationSec + 4) / 5 // ceil(duration / 5s interval)
 }
 
+func (e *AlertEngine) resolveOwnerEmail(ctx context.Context, deviceKey string) (string, string) {
+	var email, userID string
+	err := e.pg.QueryRow(ctx,
+		`SELECT u.email, u.id::text FROM users u
+		 JOIN devices d ON d.owner_id = u.id
+		 WHERE d.device_key = $1 AND d.owner_id IS NOT NULL`,
+		deviceKey).Scan(&email, &userID)
+	if err != nil {
+		return "", ""
+	}
+	return email, userID
+}
+
 func (e *AlertEngine) fire(ctx context.Context, rule alertRule, deviceKey string, value float64) {
 	// Check not already firing
 	var existing string
@@ -165,12 +178,15 @@ func (e *AlertEngine) fire(ctx context.Context, rule alertRule, deviceKey string
 		rule.ID, deviceKey, value)
 
 	if rule.NotifyEmail {
-		e.email.Enqueue(ctx, "alert_fired", deviceKey, "", map[string]any{
-			"RuleName":  rule.Name,
-			"DeviceKey": deviceKey,
-			"Value":     value,
-			"Threshold": rule.Value,
-		})
+		email, userID := e.resolveOwnerEmail(ctx, deviceKey)
+		if email != "" {
+			e.email.Enqueue(ctx, "alert_fired", email, userID, map[string]any{
+				"RuleName":  rule.Name,
+				"DeviceKey": deviceKey,
+				"Value":     value,
+				"Threshold": rule.Value,
+			})
+		}
 	}
 	slog.Warn("alert fired", "rule", rule.Name, "device", deviceKey, "value", value)
 }
@@ -184,11 +200,14 @@ func (e *AlertEngine) resolve(ctx context.Context, rule alertRule, deviceKey str
 		return
 	}
 	if rule.NotifyEmail {
-		e.email.Enqueue(ctx, "alert_resolved", deviceKey, "", map[string]any{
-			"RuleName":  rule.Name,
-			"DeviceKey": deviceKey,
-			"Value":     value,
-		})
+		email, userID := e.resolveOwnerEmail(ctx, deviceKey)
+		if email != "" {
+			e.email.Enqueue(ctx, "alert_resolved", email, userID, map[string]any{
+				"RuleName":  rule.Name,
+				"DeviceKey": deviceKey,
+				"Value":     value,
+			})
+		}
 	}
 	slog.Info("alert resolved", "rule", rule.Name, "device", deviceKey)
 }

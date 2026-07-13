@@ -14,7 +14,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"go.uber.org/automaxprocs"
 
-	"github.com/yourorg/iot-platform/internal"
+	"github.com/Anan5a/iot-platform/internal"
 )
 
 func main() {
@@ -48,10 +48,7 @@ func main() {
 	enricher := internal.NewEnricher()
 	chStore := internal.NewCHStore(ch)
 	store := internal.NewBatchWriter(chStore, ch, pg)
-	mqttPub := &mqttPublisher{client: nil}        // Phase 2: real MQTT publisher
 	clock := internal.RealClock{}
-
-	pipe := internal.NewPipeline(resolver, enricher, store, mqttPub, clock)
 
 	// MQTT client
 	mqttOpts := mqtt.NewClientOptions()
@@ -59,21 +56,24 @@ func main() {
 	mqttOpts.SetClientID(cfg.MQTTClientID)
 	mqttOpts.SetCleanSession(false)
 	mqttOpts.SetAutoReconnect(true)
-	mqttOpts.OnConnect = func(c mqtt.Client) {
-		slog.Info("MQTT connected (ingest)")
-		c.Subscribe("telemetry/#", 1, func(_ mqtt.Client, msg mqtt.Message) {
-			if err := pipe.Process(ctx, msg); err != nil {
-				slog.Error("pipeline", "error", err, "topic", msg.Topic())
-			}
-			msg.Ack()
-		})
-	}
+
 	mqttClient := mqtt.NewClient(mqttOpts)
 	if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
 		slog.Error("mqtt connect", "error", token.Error())
 		os.Exit(1)
 	}
 	defer mqttClient.Disconnect(1000)
+
+	// Wire MQTT publisher with the connected client
+	mqttPub := &mqttPublisher{client: mqttClient}
+	pipe := internal.NewPipeline(resolver, enricher, store, mqttPub, clock)
+
+	// Subscribe to telemetry topics
+	mqttClient.Subscribe("telemetry/#", 1, func(_ mqtt.Client, msg mqtt.Message) {
+		if err := pipe.Process(ctx, msg); err != nil {
+			slog.Error("pipeline", "error", err, "topic", msg.Topic())
+		}
+	})
 
 	// Start batch flush loop
 	go store.FlushLoop(ctx)
@@ -97,7 +97,7 @@ type mqttPublisher struct {
 
 func (p *mqttPublisher) Publish(topic string, qos byte, retained bool, payload []byte) error {
 	if p.client == nil {
-		return nil // Phase 2: wire real client
+		return nil
 	}
 	token := p.client.Publish(topic, qos, retained, payload)
 	token.Wait()

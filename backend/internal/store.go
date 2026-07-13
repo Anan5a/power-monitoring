@@ -39,11 +39,13 @@ func NewBatchWriter(store TelemetryStore, chConn, pgPool any) *BatchWriter {
 	}
 }
 
-func (bw *BatchWriter) Write(ctx context.Context, row TelemetryRow) {
+func (bw *BatchWriter) Write(ctx context.Context, row TelemetryRow) error {
 	select {
 	case bw.buf <- row:
+		return nil
 	default:
 		slog.Warn("ingest buffer full, dropping row", "device", row.DeviceID)
+		return nil
 	}
 }
 

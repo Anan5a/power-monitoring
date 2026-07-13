@@ -87,7 +87,7 @@ func (p *Pipeline) Process(ctx context.Context, msg MQTTMessage) error {
 
 	// Store
 	ts := time.Unix(raw.Ts, int64(raw.TsMS)*1_000_000)
-	p.store.Write(ctx, TelemetryRow{
+	if err := p.store.Write(ctx, TelemetryRow{
 		DeviceID:      deviceKey,
 		DeviceType:    device.DeviceType,
 		Timestamp:     ts,
@@ -102,7 +102,9 @@ func (p *Pipeline) Process(ctx context.Context, msg MQTTMessage) error {
 		MaxSOCPct:     enriched.MaxSOCPct,
 		TotalEnergyWh: enriched.TotalEnergyWh,
 		Fields:        raw.Data,
-	})
+	}); err != nil {
+		return fmt.Errorf("store write: %w", err)
+	}
 
 	// Republish to live/{device_key}
 	livePayload, _ := json.Marshal(EnrichedTelemetry{
