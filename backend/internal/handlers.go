@@ -16,13 +16,14 @@ import (
 )
 
 type Handlers struct {
-	pg  *pgxpool.Pool
-	jwt *JWTManager
-	ch  clickhouse.Conn
+	pg      *pgxpool.Pool
+	jwt     *JWTManager
+	ch      clickhouse.Conn
+	auditor *Auditor
 }
 
 func NewHandlers(pg *pgxpool.Pool, jwt *JWTManager, ch clickhouse.Conn) *Handlers {
-	return &Handlers{pg: pg, jwt: jwt, ch: ch}
+	return &Handlers{pg: pg, jwt: jwt, ch: ch, auditor: NewAuditor(pg)}
 }
 
 // ── Auth ────────────────────────────────────────────────────────────
@@ -64,6 +65,16 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.auditor.Log(r.Context(), AuditEntry{
+		ActorID:      user.ID,
+		ActorType:    "user",
+		Action:       "user.register",
+		ResourceType: "user",
+		ResourceID:   user.ID,
+		IPAddress:    r.RemoteAddr,
+		UserAgent:    r.UserAgent(),
+	})
+
 	access, _ := h.jwt.IssueAccessToken(user.ID, user.Role)
 	refresh, _ := h.jwt.IssueRefreshToken(user.ID)
 	writeJSON(w, http.StatusCreated, AuthResponse{
@@ -99,6 +110,16 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "unauthorized", "invalid email or password", http.StatusUnauthorized)
 		return
 	}
+
+	h.auditor.Log(r.Context(), AuditEntry{
+		ActorID:      user.ID,
+		ActorType:    "user",
+		Action:       "user.login",
+		ResourceType: "user",
+		ResourceID:   user.ID,
+		IPAddress:    r.RemoteAddr,
+		UserAgent:    r.UserAgent(),
+	})
 
 	access, _ := h.jwt.IssueAccessToken(user.ID, user.Role)
 	refresh, _ := h.jwt.IssueRefreshToken(user.ID)
@@ -203,6 +224,17 @@ func (h *Handlers) ClaimDevice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "not_found", "device not found or already claimed", http.StatusNotFound)
 		return
 	}
+
+	h.auditor.Log(r.Context(), AuditEntry{
+		ActorID:      userID,
+		ActorType:    "user",
+		Action:       "device.claim",
+		ResourceType: "device",
+		ResourceID:   deviceKey,
+		IPAddress:    r.RemoteAddr,
+		UserAgent:    r.UserAgent(),
+	})
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "claimed"})
 }
 
@@ -210,7 +242,6 @@ func (h *Handlers) ClaimDevice(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) GetLatestTelemetry(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
-	// Query ClickHouse for the latest row
 	if h.ch == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"device_key": deviceKey, "data": nil})
 		return
@@ -283,7 +314,7 @@ func (h *Handlers) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) 
 		 FROM notification_preferences WHERE user_id = $1`, userID).
 		Scan(&prefs.AlertFired, &prefs.AlertResolved, &prefs.QuietStart, &prefs.QuietEnd)
 	if err != nil {
-		writeJSON(w, http.StatusOK, prefs) // defaults
+		writeJSON(w, http.StatusOK, prefs)
 		return
 	}
 	writeJSON(w, http.StatusOK, prefs)

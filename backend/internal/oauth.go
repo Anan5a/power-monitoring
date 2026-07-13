@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,6 +22,7 @@ type OAuthHandler struct {
 	pg      *pgxpool.Pool
 	jwt     *JWTManager
 	configs map[string]*oauth2.Config
+	states  sync.Map // map[string]time.Time — state → expiry
 }
 
 func NewOAuthHandler(pg *pgxpool.Pool, jwt *JWTManager, googleID, googleSecret, githubID, githubSecret, baseURL string) *OAuthHandler {
@@ -53,6 +56,7 @@ func (h *OAuthHandler) Redirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := generateState()
+	h.states.Store(state, time.Now().Add(10*time.Minute))
 	url := config.AuthCodeURL(state, oauth2.AccessTypeOffline)
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 }
@@ -62,6 +66,19 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	config, ok := h.configs[provider]
 	if !ok {
 		writeError(w, "not_found", "unsupported provider", http.StatusNotFound)
+		return
+	}
+
+	// Validate state (CSRF protection)
+	state := r.URL.Query().Get("state")
+	expiry, ok := h.states.Load(state)
+	if !ok {
+		writeError(w, "unauthorized", "invalid state parameter", http.StatusUnauthorized)
+		return
+	}
+	h.states.Delete(state)
+	if expiry.(time.Time).Before(time.Now()) {
+		writeError(w, "unauthorized", "state expired", http.StatusUnauthorized)
 		return
 	}
 

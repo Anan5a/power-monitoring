@@ -42,19 +42,32 @@ func (h *ExportHandler) RequestExport(w http.ResponseWriter, r *http.Request) {
 func (h *ExportHandler) runExport(ctx context.Context, jobID, userID string) {
 	h.pg.Exec(ctx, `UPDATE export_jobs SET status = 'running' WHERE id = $1`, jobID)
 
+	// Use a helper to catch errors and mark the job as failed
+	markFailed := func(err error) {
+		slog.Error("export failed", "job", jobID, "error", err)
+		h.pg.Exec(ctx, `UPDATE export_jobs SET status = 'failed', error = $2 WHERE id = $1`, jobID, err.Error())
+	}
+
 	// Collect user data
 	var user struct {
 		Email       string    `json:"email"`
 		DisplayName string    `json:"display_name"`
 		CreatedAt   time.Time `json:"created_at"`
 	}
-	h.pg.QueryRow(ctx,
+	if err := h.pg.QueryRow(ctx,
 		`SELECT email, display_name, created_at FROM users WHERE id = $1`, userID).
-		Scan(&user.Email, &user.DisplayName, &user.CreatedAt)
+		Scan(&user.Email, &user.DisplayName, &user.CreatedAt); err != nil {
+		markFailed(err)
+		return
+	}
 
 	// Collect devices
-	rows, _ := h.pg.Query(ctx,
+	rows, err := h.pg.Query(ctx,
 		`SELECT device_key, device_name, device_type, created_at FROM devices WHERE owner_id = $1`, userID)
+	if err != nil {
+		markFailed(err)
+		return
+	}
 	type DeviceExport struct {
 		Key  string `json:"key"`
 		Name string `json:"name"`
@@ -75,7 +88,11 @@ func (h *ExportHandler) runExport(ctx context.Context, jobID, userID string) {
 		"exported_at": time.Now().UTC(),
 	}
 
-	data, _ := json.MarshalIndent(export, "", "  ")
+	data, err := json.MarshalIndent(export, "", "  ")
+	if err != nil {
+		markFailed(err)
+		return
+	}
 
 	// In production: write to MinIO at exports/{jobID}.json
 	// For v1: mark as ready with a note

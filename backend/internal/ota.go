@@ -6,6 +6,8 @@ package internal
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -51,10 +53,15 @@ func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 		SELECT version, binary_path, sha256, binary_size
 		FROM ota_releases
 		WHERE device_type = $1 AND channel = 'stable'
-		  AND version > $2
 		ORDER BY created_at DESC LIMIT 1`,
-		deviceType, currentVer).Scan(&release.Version, &release.BinaryPath, &release.SHA256, &release.BinarySize)
+		deviceType).Scan(&release.Version, &release.BinaryPath, &release.SHA256, &release.BinarySize)
 	if err != nil {
+		writeJSON(w, http.StatusOK, OTACheckResponse{UpdateAvailable: false})
+		return
+	}
+
+	// Compare versions using semver comparison
+	if currentVer != "" && !semverGreater(release.Version, currentVer) {
 		writeJSON(w, http.StatusOK, OTACheckResponse{UpdateAvailable: false})
 		return
 	}
@@ -66,6 +73,30 @@ func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 		SHA256:          release.SHA256,
 		BinarySize:      release.BinarySize,
 	})
+}
+
+// semverGreater returns true if v1 > v2 using semver comparison.
+func semverGreater(v1, v2 string) bool {
+	p1 := parseSemver(v1)
+	p2 := parseSemver(v2)
+	for i := 0; i < 3; i++ {
+		if p1[i] != p2[i] {
+			return p1[i] > p2[i]
+		}
+	}
+	return false
+}
+
+func parseSemver(v string) [3]int {
+	var parts [3]int
+	v = strings.TrimLeft(v, "v")
+	for i, s := range strings.SplitN(v, ".", 3) {
+		if i < 3 {
+			n, _ := strconv.Atoi(s)
+			parts[i] = n
+		}
+	}
+	return parts
 }
 
 // CreateRelease is an admin endpoint: POST /api/v1/ota/releases

@@ -68,8 +68,15 @@ func main() {
 	mqttPub := &mqttPublisher{client: mqttClient}
 	pipe := internal.NewPipeline(resolver, enricher, store, mqttPub, clock)
 
+	// Maintenance mode check (pauses ingest when enabled)
+	maintenanceMode := internal.NewMaintenanceMode(pg)
+
 	// Subscribe to telemetry topics
 	mqttClient.Subscribe("telemetry/#", 1, func(_ mqtt.Client, msg mqtt.Message) {
+		if maintenanceMode.IsEnabled() {
+			slog.Warn("ingest paused — maintenance mode enabled")
+			return
+		}
 		if err := pipe.Process(ctx, msg); err != nil {
 			slog.Error("pipeline", "error", err, "topic", msg.Topic())
 		}

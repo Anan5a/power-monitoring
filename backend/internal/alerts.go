@@ -9,15 +9,18 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type AlertEngine struct {
-	pg       *pgxpool.Pool
-	email    *EmailService
-	mu       sync.RWMutex
-	counters map[string]int // "rule_id:device_key" → consecutive match count
+	pg          *pgxpool.Pool
+	email       *EmailService
+	mu          sync.RWMutex
+	counters    map[string]int // "rule_id:device_key" → consecutive match count
+	rules       []alertRule    // cached rules, refreshed every 30s
+	lastRefresh time.Time
 }
 
 func NewAlertEngine(pg *pgxpool.Pool, email *EmailService) *AlertEngine {
@@ -31,11 +34,7 @@ func NewAlertEngine(pg *pgxpool.Pool, email *EmailService) *AlertEngine {
 // Evaluate checks all active rules against the enriched telemetry.
 // Called by the live/# handler for each incoming message.
 func (e *AlertEngine) Evaluate(ctx context.Context, deviceKey string, enriched *EnrichedTelemetry) {
-	rules, err := e.loadRules(ctx)
-	if err != nil {
-		slog.Error("load rules", "error", err)
-		return
-	}
+	rules := e.getRules(ctx)
 
 	for _, rule := range rules {
 		if !e.matchesDevice(rule, deviceKey) {
@@ -60,6 +59,33 @@ func (e *AlertEngine) Evaluate(ctx context.Context, deviceKey string, enriched *
 			e.resolve(ctx, rule, deviceKey, rawValue)
 		}
 	}
+}
+
+// getRules returns cached rules, refreshing from DB every 30 seconds.
+func (e *AlertEngine) getRules(ctx context.Context) []alertRule {
+	e.mu.RLock()
+	rules := e.rules
+	lastRefresh := e.lastRefresh
+	e.mu.RUnlock()
+
+	if rules != nil && time.Since(lastRefresh) < 30*time.Second {
+		return rules
+	}
+
+	loaded, err := e.loadRules(ctx)
+	if err != nil {
+		slog.Error("load rules", "error", err)
+		if rules != nil {
+			return rules
+		}
+		return nil
+	}
+
+	e.mu.Lock()
+	e.rules = loaded
+	e.lastRefresh = time.Now()
+	e.mu.Unlock()
+	return loaded
 }
 
 type alertRule struct {
@@ -147,7 +173,7 @@ func requiredSamples(durationSec int) int {
 	if durationSec <= 0 {
 		return 1
 	}
-	return (durationSec + 4) / 5 // ceil(duration / 5s interval)
+	return (durationSec + 4) / 5
 }
 
 func (e *AlertEngine) resolveOwnerEmail(ctx context.Context, deviceKey string) (string, string) {
@@ -163,14 +189,26 @@ func (e *AlertEngine) resolveOwnerEmail(ctx context.Context, deviceKey string) (
 	return email, userID
 }
 
+func (e *AlertEngine) shouldNotify(ctx context.Context, userID, prefField string) bool {
+	if userID == "" {
+		return true
+	}
+	var enabled bool
+	err := e.pg.QueryRow(ctx,
+		`SELECT `+prefField+` FROM notification_preferences WHERE user_id = $1`, userID).Scan(&enabled)
+	if err != nil {
+		return true
+	}
+	return enabled
+}
+
 func (e *AlertEngine) fire(ctx context.Context, rule alertRule, deviceKey string, value float64) {
-	// Check not already firing
 	var existing string
 	err := e.pg.QueryRow(ctx,
 		`SELECT id FROM alert_events WHERE rule_id = $1 AND device_key = $2 AND status = 'firing' LIMIT 1`,
 		rule.ID, deviceKey).Scan(&existing)
 	if err == nil {
-		return // already firing
+		return
 	}
 
 	e.pg.Exec(ctx,
@@ -179,7 +217,7 @@ func (e *AlertEngine) fire(ctx context.Context, rule alertRule, deviceKey string
 
 	if rule.NotifyEmail {
 		email, userID := e.resolveOwnerEmail(ctx, deviceKey)
-		if email != "" {
+		if email != "" && e.shouldNotify(ctx, userID, "alert_fired_email") {
 			e.email.Enqueue(ctx, "alert_fired", email, userID, map[string]any{
 				"RuleName":  rule.Name,
 				"DeviceKey": deviceKey,
@@ -201,7 +239,7 @@ func (e *AlertEngine) resolve(ctx context.Context, rule alertRule, deviceKey str
 	}
 	if rule.NotifyEmail {
 		email, userID := e.resolveOwnerEmail(ctx, deviceKey)
-		if email != "" {
+		if email != "" && e.shouldNotify(ctx, userID, "alert_resolved_email") {
 			e.email.Enqueue(ctx, "alert_resolved", email, userID, map[string]any{
 				"RuleName":  rule.Name,
 				"DeviceKey": deviceKey,

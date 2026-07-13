@@ -76,12 +76,17 @@ func (hub *WebSocketHub) unsubscribe(deviceKey string, conn *websocket.Conn) {
 func (hub *WebSocketHub) Broadcast(deviceKey string, data []byte) {
 	hub.mu.RLock()
 	conns := hub.clients[deviceKey]
+	// Copy the map under lock to avoid concurrent iteration/mutation race
+	snapshot := make([]*websocket.Conn, 0, len(conns))
+	for conn := range conns {
+		snapshot = append(snapshot, conn)
+	}
 	hub.mu.RUnlock()
 
-	for conn := range conns {
+	for _, conn := range snapshot {
 		if err := websocket.Message.Send(conn, string(data)); err != nil {
 			slog.Warn("websocket send failed", "device", deviceKey, "error", err)
-			go hub.unsubscribe(deviceKey, conn)
+			hub.unsubscribe(deviceKey, conn)
 		}
 	}
 }
