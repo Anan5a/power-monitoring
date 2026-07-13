@@ -80,22 +80,34 @@ func (h *BillingHandler) MarkInvoicePaid(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tx.Exec(r.Context(),
+	if _, err := tx.Exec(r.Context(),
 		`UPDATE invoices SET status = 'paid', paid_at = now(), paid_via = 'manual' WHERE id = $1`,
-		invoiceID)
+		invoiceID); err != nil {
+		writeError(w, "internal_error", "failed to update invoice", http.StatusInternalServerError)
+		return
+	}
 
-	tx.Exec(r.Context(),
+	if _, err := tx.Exec(r.Context(),
 		`INSERT INTO user_licenses (user_id, plan_id, device_count, starts_at)
 		 VALUES ($1, $2, 0, now())
 		 ON CONFLICT (user_id) DO UPDATE SET plan_id = $2, updated_at = now()`,
-		inv.UserID, inv.PlanID)
+		inv.UserID, inv.PlanID); err != nil {
+		writeError(w, "internal_error", "failed to update license", http.StatusInternalServerError)
+		return
+	}
 
-	tx.Exec(r.Context(),
+	if _, err := tx.Exec(r.Context(),
 		`INSERT INTO license_change_log (user_id, audience, to_plan_id, reason, invoice_id, changed_by)
 		 VALUES ($1, $2, $3, 'payment_received', $4, $5)`,
-		inv.UserID, inv.Audience, inv.PlanID, invoiceID, adminID)
+		inv.UserID, inv.Audience, inv.PlanID, invoiceID, adminID); err != nil {
+		writeError(w, "internal_error", "failed to log license change", http.StatusInternalServerError)
+		return
+	}
 
-	tx.Commit(r.Context())
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, "internal_error", "commit failed", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "paid"})
 }
 

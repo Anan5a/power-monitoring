@@ -50,20 +50,26 @@ func (bw *BatchWriter) Write(ctx context.Context, row TelemetryRow) error {
 }
 
 // Flush sends all buffered rows to the underlying store.
+// Loops until the buffer is empty, flushing in batches of batchSize.
 func (bw *BatchWriter) Flush(ctx context.Context) error {
-	batch := make([]TelemetryRow, 0, bw.batchSize)
 	for {
-		select {
-		case row := <-bw.buf:
-			batch = append(batch, row)
-			if len(batch) >= bw.batchSize {
-				return bw.flushBatch(ctx, batch)
+		batch := make([]TelemetryRow, 0, bw.batchSize)
+		// Drain up to batchSize rows
+		for i := 0; i < bw.batchSize; i++ {
+			select {
+			case row := <-bw.buf:
+				batch = append(batch, row)
+			default:
+				// Buffer empty
+				if len(batch) > 0 {
+					return bw.flushBatch(ctx, batch)
+				}
+				return nil
 			}
-		default:
-			if len(batch) > 0 {
-				return bw.flushBatch(ctx, batch)
-			}
-			return nil
+		}
+		// Batch full, flush and continue
+		if err := bw.flushBatch(ctx, batch); err != nil {
+			return err
 		}
 	}
 }
