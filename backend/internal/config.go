@@ -39,6 +39,16 @@ type Config struct {
 	// SMTP (optional, Phase 2)
 	SMTPHost string `env:"SMTP_HOST"`
 	SMTPPort int    `env:"SMTP_PORT" default:"587"`
+	SMTPUser string `env:"SMTP_USER"`
+	SMTPPass string `env:"SMTP_PASS"`
+	SMTPFrom string `env:"SMTP_FROM" default:"noreply@iotplatform.local"`
+
+	// OAuth
+	GoogleClientID     string `env:"GOOGLE_CLIENT_ID"`
+	GoogleClientSecret string `env:"GOOGLE_CLIENT_SECRET"`
+	GitHubClientID     string `env:"GITHUB_CLIENT_ID"`
+	GitHubClientSecret string `env:"GITHUB_CLIENT_SECRET"`
+	BaseURL            string `env:"BASE_URL" default:"http://localhost:8080"`
 
 	// CORS
 	CORSAllowedOrigins []string `env:"CORS_ALLOWED_ORIGINS" default:"http://localhost:3000"`
@@ -95,6 +105,14 @@ func LoadConfig() (*Config, error) {
 	setStr(&cfg.MinIOBucket, "MINIO_BUCKET", "firmware")
 	setStr(&cfg.SMTPHost, "SMTP_HOST", "")
 	setInt(&cfg.SMTPPort, "SMTP_PORT", 587)
+	setStr(&cfg.SMTPUser, "SMTP_USER", "")
+	setStr(&cfg.SMTPPass, "SMTP_PASS", "")
+	setStr(&cfg.SMTPFrom, "SMTP_FROM", "noreply@iotplatform.local")
+	setStr(&cfg.GoogleClientID, "GOOGLE_CLIENT_ID", "")
+	setStr(&cfg.GoogleClientSecret, "GOOGLE_CLIENT_SECRET", "")
+	setStr(&cfg.GitHubClientID, "GITHUB_CLIENT_ID", "")
+	setStr(&cfg.GitHubClientSecret, "GITHUB_CLIENT_SECRET", "")
+	setStr(&cfg.BaseURL, "BASE_URL", "http://localhost:8080")
 
 	if v := os.Getenv("AUTO_MIGRATE"); v != "" {
 		cfg.AutoMigrate = v == "true"

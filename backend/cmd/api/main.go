@@ -20,7 +20,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"go.uber.org/automaxprocs"
 
-	"github.com/yourorg/iot-platform/internal"
+	"github.com/Anan5a/iot-platform/internal"
 )
 
 func main() {
@@ -94,7 +94,7 @@ func main() {
 	otaHandler := internal.NewOTAHandler(pg)
 	groupHandler := internal.NewGroupHandler(pg)
 	searchHandler := internal.NewSearchHandler(pg)
-	oauthHandler := internal.NewOAuthHandler(pg, jwt, "", "", "", "", "")
+	oauthHandler := internal.NewOAuthHandler(pg, jwt, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GitHubClientID, cfg.GitHubClientSecret, cfg.BaseURL)
 	billingHandler := internal.NewBillingHandler(pg)
 	exportHandler := internal.NewExportHandler(pg, nil, "http://localhost:8080")
 	maintenanceMode := internal.NewMaintenanceMode(pg)
