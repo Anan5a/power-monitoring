@@ -15,21 +15,6 @@ type MQTTAuthHandler struct {
 	pg *pgxpool.Pool
 }
 
-type mqttAuthRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type mqttAuthResponse struct {
-	OK   bool      `json:"ok"`
-	ACLs []mqttACL `json:"acls,omitempty"`
-}
-
-type mqttACL struct {
-	Topic  string `json:"topic"`
-	Access string `json:"access"`
-}
-
 func NewMQTTAuthHandler(pg *pgxpool.Pool) *MQTTAuthHandler {
 	return &MQTTAuthHandler{pg: pg}
 }
@@ -44,7 +29,7 @@ func NewMQTTAuthHandler(pg *pgxpool.Pool) *MQTTAuthHandler {
 // @Failure      403  {object}  MQTTAuthResponse
 // @Router       /mqtt/auth [post]
 func (h *MQTTAuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var req mqttAuthRequest
+	var req MQTTAuthRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
@@ -55,13 +40,13 @@ func (h *MQTTAuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		`SELECT api_key::text FROM devices WHERE device_key = $1 AND is_active = true`,
 		req.Username).Scan(&apiKey)
 	if err != nil || apiKey != req.Password {
-		writeJSON(w, http.StatusForbidden, mqttAuthResponse{OK: false})
+		writeJSON(w, http.StatusForbidden, MQTTAuthResponse{OK: false})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, mqttAuthResponse{
+	writeJSON(w, http.StatusOK, MQTTAuthResponse{
 		OK: true,
-		ACLs: []mqttACL{
+		ACLs: []MQTTACL{
 			{Topic: "telemetry/" + req.Username + "/#", Access: "write"},
 			{Topic: "status/" + req.Username + "/#", Access: "write"},
 			{Topic: "commands/" + req.Username, Access: "read"},

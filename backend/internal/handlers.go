@@ -178,9 +178,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 // @Failure      401   {object}  APIError
 // @Router       /auth/refresh [post]
 func (h *Handlers) RefreshToken(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		RefreshToken string `json:"refresh_token"`
-	}
+	var req RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "bad_request", "invalid request body", http.StatusBadRequest)
 		return
@@ -398,12 +396,7 @@ func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 // @Router       /users/me/notifications [get]
 func (h *Handlers) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(ContextUserID).(string)
-	var prefs struct {
-		AlertFired    bool `json:"alert_fired_email"`
-		AlertResolved bool `json:"alert_resolved_email"`
-		QuietStart    *int `json:"quiet_hours_start,omitempty"`
-		QuietEnd      *int `json:"quiet_hours_end,omitempty"`
-	}
+	var prefs NotificationPrefs
 	err := h.pg.QueryRow(r.Context(),
 		`SELECT alert_fired_email, alert_resolved_email, quiet_hours_start, quiet_hours_end
 		 FROM notification_preferences WHERE user_id = $1`, userID).
@@ -426,12 +419,7 @@ func (h *Handlers) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) 
 // @Router       /users/me/notifications [patch]
 func (h *Handlers) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(ContextUserID).(string)
-	var req struct {
-		AlertFired    *bool `json:"alert_fired_email"`
-		AlertResolved *bool `json:"alert_resolved_email"`
-		QuietStart    *int  `json:"quiet_hours_start"`
-		QuietEnd      *int  `json:"quiet_hours_end"`
-	}
+	var req UpdateNotificationPrefsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "bad_request", "invalid body", http.StatusBadRequest)
 		return

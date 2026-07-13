@@ -32,15 +32,7 @@ func NewBillingHandler(pg *pgxpool.Pool) *BillingHandler {
 // @Security     BearerAuth
 // @Router       /billing/invoices [post]
 func (h *BillingHandler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		UserID      string `json:"user_id"`
-		PlanID      int    `json:"plan_id"`
-		Audience    string `json:"audience"`
-		PeriodStart string `json:"period_start"`
-		PeriodEnd   string `json:"period_end"`
-		AmountCents int    `json:"amount_cents"`
-		Description string `json:"description"`
-	}
+	var req CreateInvoiceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "bad_request", "invalid body", http.StatusBadRequest)
 		return
@@ -149,14 +141,6 @@ func (h *BillingHandler) ListInvoices(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type Invoice struct {
-		ID            string    `json:"id"`
-		InvoiceNumber string    `json:"invoice_number"`
-		Description   string    `json:"description"`
-		TotalCents    int       `json:"total_cents"`
-		Status        string    `json:"status"`
-		CreatedAt     time.Time `json:"created_at"`
-	}
 	invoices := []Invoice{}
 	for rows.Next() {
 		var inv Invoice

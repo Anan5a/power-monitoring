@@ -35,12 +35,6 @@ func (h *GroupHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type Group struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description,omitempty"`
-		Color       string `json:"color,omitempty"`
-	}
 	groups := []Group{}
 	for rows.Next() {
 		var g Group
@@ -61,11 +55,7 @@ func (h *GroupHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /groups [post]
 func (h *GroupHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Color       string `json:"color"`
-	}
+	var req CreateGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		writeError(w, "validation_error", "name is required", http.StatusBadRequest)
 		return

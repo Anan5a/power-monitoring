@@ -158,3 +158,126 @@ type EnrichmentResult struct {
 	MaxSOCPct     float32
 	TotalEnergyWh float32
 }
+
+// ── Swagger types (used by swaggo annotations) ─────────────────────
+
+type RefreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+type LatestTelemetry struct {
+	DeviceKey      string             `json:"device_key"`
+	RecordedAt     time.Time          `json:"recorded_at"`
+	PVPower        float32            `json:"pv_power"`
+	BatteryPower   float32            `json:"battery_power"`
+	InverterPower  float32            `json:"inverter_power"`
+	DCLoadPower    float32            `json:"dc_load_power"`
+	SystemStatus   uint8              `json:"system_status"`
+	MinSOCPct      float32            `json:"min_soc_pct"`
+	MaxSOCPct      float32            `json:"max_soc_pct"`
+	TotalEnergyWh  float32            `json:"total_energy_wh"`
+	Fields         map[string]float64 `json:"fields"`
+}
+
+type HealthResponse struct {
+	Status   string         `json:"status"`
+	Services map[string]any `json:"services"`
+}
+
+type NotificationPrefs struct {
+	AlertFired    bool `json:"alert_fired_email"`
+	AlertResolved bool `json:"alert_resolved_email"`
+	QuietStart    *int `json:"quiet_hours_start,omitempty"`
+	QuietEnd      *int `json:"quiet_hours_end,omitempty"`
+}
+
+type UpdateNotificationPrefsRequest struct {
+	AlertFired    *bool `json:"alert_fired_email"`
+	AlertResolved *bool `json:"alert_resolved_email"`
+	QuietStart    *int  `json:"quiet_hours_start"`
+	QuietEnd      *int  `json:"quiet_hours_end"`
+}
+
+type Group struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Color       string `json:"color,omitempty"`
+}
+
+type Tags map[string]string
+
+type SetTagRequest struct {
+	Value string `json:"value"`
+}
+
+type SearchResponse struct {
+	Results []SearchResult `json:"results"`
+	Total   int            `json:"total"`
+	Query   string         `json:"query"`
+}
+
+type Invoice struct {
+	ID            string    `json:"id"`
+	InvoiceNumber string    `json:"invoice_number"`
+	Description   string    `json:"description"`
+	TotalCents    int       `json:"total_cents"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type CreateInvoiceRequest struct {
+	UserID      string `json:"user_id"`
+	PlanID      int    `json:"plan_id"`
+	Audience    string `json:"audience"`
+	PeriodStart string `json:"period_start"`
+	PeriodEnd   string `json:"period_end"`
+	AmountCents int    `json:"amount_cents"`
+	Description string `json:"description"`
+}
+
+type CreateGroupRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Color       string `json:"color"`
+}
+
+type CreateReleaseRequest struct {
+	DeviceType string `json:"device_type"`
+	Version    string `json:"version"`
+	Channel    string `json:"channel"`
+	BinaryPath string `json:"binary_path"`
+	BinarySize int    `json:"binary_size"`
+	SHA256     string `json:"sha256"`
+	Changelog  string `json:"changelog"`
+}
+
+type ExportRequestResponse struct {
+	JobID string `json:"job_id"`
+}
+
+type ExportStatusResponse struct {
+	Status      string     `json:"status"`
+	FilePath    string     `json:"file_path"`
+	CompletedAt *time.Time `json:"completed_at"`
+}
+
+type MaintenanceToggleRequest struct {
+	Enabled bool   `json:"enabled"`
+	Message string `json:"message"`
+}
+
+type MQTTAuthRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type MQTTAuthResponse struct {
+	OK   bool      `json:"ok"`
+	ACLs []MQTTACL `json:"acls,omitempty"`
+}
+
+type MQTTACL struct {
+	Topic  string `json:"topic"`
+	Access string `json:"access"`
+}

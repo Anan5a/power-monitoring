@@ -115,15 +115,7 @@ func parseSemver(v string) [3]int {
 // @Security     BearerAuth
 // @Router       /ota/releases [post]
 func (h *OTAHandler) CreateRelease(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		DeviceType string `json:"device_type"`
-		Version    string `json:"version"`
-		Channel    string `json:"channel"`
-		BinaryPath string `json:"binary_path"`
-		BinarySize int    `json:"binary_size"`
-		SHA256     string `json:"sha256"`
-		Changelog  string `json:"changelog"`
-	}
+	var req CreateReleaseRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "bad_request", "invalid request body", http.StatusBadRequest)
 		return

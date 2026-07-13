@@ -89,10 +89,7 @@ func (m *MaintenanceMode) Middleware() func(http.Handler) http.Handler {
 // @Security     BearerAuth
 // @Router       /admin/maintenance [post]
 func (m *MaintenanceMode) ToggleHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Enabled bool   `json:"enabled"`
-		Message string `json:"message"`
-	}
+	var req MaintenanceToggleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "bad_request", "invalid body", http.StatusBadRequest)
 		return
