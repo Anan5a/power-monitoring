@@ -1,0 +1,1033 @@
+openapi: "3.0.3"
+info:
+  title: IoT Platform API
+  description: |
+    Self-hosted IoT platform backend. Two binaries: **api** (HTTP/WS) and **ingest** (MQTT).
+    All REST endpoints are under `/api/v1/`. Auth uses JWT Bearer tokens.
+  version: "1.0.0"
+  contact:
+    name: IoT Platform Team
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development
+  - url: https://api.iotplatform.local/api/v1
+    description: Production
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token from /auth/login or /auth/register
+
+  schemas:
+    # ── Error Envelope ──────────────────────────────────────────────
+    APIError:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: validation_error
+            message:
+              type: string
+              example: email and password are required
+            field:
+              type: string
+              example: email
+            request_id:
+              type: string
+              example: abc-123
+          required: [code, message]
+
+    # ── Auth ─────────────────────────────────────────────────────────
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        password:
+          type: string
+          minLength: 8
+          example: secure-password-123
+        display_name:
+          type: string
+          example: John Doe
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        display_name:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Devices ──────────────────────────────────────────────────────
+    Device:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        device_key:
+          type: string
+          example: AABBCCDDEEFF
+        device_name:
+          type: string
+          example: My power_monitor_v2
+        device_type:
+          type: string
+          example: power_monitor_v2
+        owner_id:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+        firmware_ver:
+          type: string
+        last_seen_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ClaimDeviceRequest:
+      type: object
+      required: [api_key]
+      properties:
+        api_key:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+    # ── Telemetry ───────────────────────────────────────────────────
+    LatestTelemetry:
+      type: object
+      properties:
+        device_key:
+          type: string
+        recorded_at:
+          type: string
+          format: date-time
+        pv_power:
+          type: number
+        battery_power:
+          type: number
+        inverter_power:
+          type: number
+        dc_load_power:
+          type: number
+        system_status:
+          type: integer
+          enum: [0, 1, 2, 3]
+          description: "0=unknown, 1=charging, 2=discharging, 3=balanced"
+        min_soc_pct:
+          type: number
+        max_soc_pct:
+          type: number
+        total_energy_wh:
+          type: number
+        fields:
+          type: object
+          additionalProperties:
+            type: number
+
+    # ── OTA ──────────────────────────────────────────────────────────
+    OTACheckResponse:
+      type: object
+      properties:
+        update_available:
+          type: boolean
+        version:
+          type: string
+        binary_url:
+          type: string
+        sha256:
+          type: string
+        binary_size:
+          type: integer
+
+    CreateReleaseRequest:
+      type: object
+      required: [device_type, version, binary_path, binary_size, sha256]
+      properties:
+        device_type:
+          type: string
+        version:
+          type: string
+          example: 2.1.0
+        channel:
+          type: string
+          enum: [stable, beta, canary]
+          default: stable
+        binary_path:
+          type: string
+        binary_size:
+          type: integer
+        sha256:
+          type: string
+        changelog:
+          type: string
+
+    # ── Groups ──────────────────────────────────────────────────────
+    Group:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        color:
+          type: string
+
+    CreateGroupRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        color:
+          type: string
+
+    # ── Tags ─────────────────────────────────────────────────────────
+    Tags:
+      type: object
+      additionalProperties:
+        type: string
+      example: {"location": "roof", "floor": "1"}
+
+    SetTagRequest:
+      type: object
+      properties:
+        value:
+          type: string
+
+    # ── Search ───────────────────────────────────────────────────────
+    SearchResult:
+      type: object
+      properties:
+        id:
+          type: string
+        entity_type:
+          type: string
+          enum: [device, audit]
+        label:
+          type: string
+        subtitle:
+          type: string
+
+    SearchResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        total:
+          type: integer
+        query:
+          type: string
+
+    # ── Notification Preferences ─────────────────────────────────────
+    NotificationPrefs:
+      type: object
+      properties:
+        alert_fired_email:
+          type: boolean
+        alert_resolved_email:
+          type: boolean
+        quiet_hours_start:
+          type: integer
+          nullable: true
+        quiet_hours_end:
+          type: integer
+          nullable: true
+
+    UpdateNotificationPrefsRequest:
+      type: object
+      properties:
+        alert_fired_email:
+          type: boolean
+        alert_resolved_email:
+          type: boolean
+        quiet_hours_start:
+          type: integer
+        quiet_hours_end:
+          type: integer
+
+    # ── Billing ─────────────────────────────────────────────────────
+    Invoice:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        invoice_number:
+          type: string
+        description:
+          type: string
+        total_cents:
+          type: integer
+        status:
+          type: string
+          enum: [pending, paid, cancelled, refunded]
+        created_at:
+          type: string
+          format: date-time
+
+    CreateInvoiceRequest:
+      type: object
+      required: [user_id, plan_id, audience, period_start, period_end, amount_cents, description]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        plan_id:
+          type: integer
+        audience:
+          type: string
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        amount_cents:
+          type: integer
+        description:
+          type: string
+
+    # ── Export ───────────────────────────────────────────────────────
+    ExportRequestResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+          format: uuid
+
+    ExportStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [pending, running, ready, failed]
+        file_path:
+          type: string
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    # ── Health ──────────────────────────────────────────────────────
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        services:
+          type: object
+          properties:
+            postgres:
+              type: object
+              properties:
+                status:
+                  type: string
+                  example: ok
+
+    # ── MQTT Auth ────────────────────────────────────────────────────
+    MQTTAuthRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          description: device_key
+        password:
+          type: string
+          description: api_key
+
+    MQTTAuthResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        acls:
+          type: array
+          items:
+            type: object
+            properties:
+              topic:
+                type: string
+              access:
+                type: string
+                enum: [read, write, readwrite]
+
+    # ── Maintenance ─────────────────────────────────────────────────
+    MaintenanceToggleRequest:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        message:
+          type: string
+
+paths:
+  # ── Auth ──────────────────────────────────────────────────────────
+  /auth/register:
+    post:
+      summary: Register a new user
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+        "409":
+          description: Email already registered
+
+  /auth/login:
+    post:
+      summary: Login with email and password
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        "401":
+          description: Invalid credentials
+
+  /auth/refresh:
+    post:
+      summary: Refresh access token
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        "200":
+          description: Tokens refreshed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  refresh_token:
+                    type: string
+        "401":
+          description: Invalid or expired refresh token
+
+  /auth/oauth/{provider}:
+    get:
+      summary: Initiate OAuth login
+      tags: [Auth]
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [google, github]
+      responses:
+        "307":
+          description: Redirect to OAuth provider
+
+  /auth/oauth/{provider}/callback:
+    get:
+      summary: OAuth callback
+      tags: [Auth]
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OAuth login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+
+  # ── Health ────────────────────────────────────────────────────────
+  /health:
+    get:
+      summary: Health check
+      tags: [Monitoring]
+      responses:
+        "200":
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  # ── MQTT Auth ─────────────────────────────────────────────────────
+  /mqtt/auth:
+    post:
+      summary: Mosquitto HTTP auth backend
+      tags: [MQTT]
+      description: Called by Mosquitto to validate device credentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MQTTAuthRequest'
+      responses:
+        "200":
+          description: Device authenticated with ACLs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MQTTAuthResponse'
+        "403":
+          description: Authentication failed
+
+  # ── OTA ───────────────────────────────────────────────────────────
+  /ota/check/{key}:
+    get:
+      summary: Check for OTA update
+      tags: [OTA]
+      description: Polled by ESP32 devices
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: current_ver
+          in: query
+          schema:
+            type: string
+            example: 2.0.0
+      responses:
+        "200":
+          description: OTA check result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OTACheckResponse'
+
+  /ota/releases:
+    post:
+      summary: Create OTA release (admin)
+      tags: [OTA]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReleaseRequest'
+      responses:
+        "201":
+          description: Release created
+        "409":
+          description: Version already exists
+
+  # ── Devices ───────────────────────────────────────────────────────
+  /devices:
+    get:
+      summary: List user's devices
+      tags: [Devices]
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Device list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Device'
+
+  /devices/{key}:
+    get:
+      summary: Get device details
+      tags: [Devices]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Device details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+        "404":
+          description: Device not found
+
+  /devices/{key}/claim:
+    post:
+      summary: Claim an unclaimed device
+      tags: [Devices]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimDeviceRequest'
+      responses:
+        "200":
+          description: Device claimed
+        "404":
+          description: Device not found or already claimed
+
+  # ── Telemetry ─────────────────────────────────────────────────────
+  /telemetry/{key}/latest:
+    get:
+      summary: Get latest telemetry for a device
+      tags: [Telemetry]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Latest telemetry reading
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LatestTelemetry'
+
+  # ── WebSocket ─────────────────────────────────────────────────────
+  /ws:
+    get:
+      summary: WebSocket endpoint for live telemetry
+      tags: [WebSocket]
+      security:
+        - BearerAuth: []
+      description: |
+        Connect via WebSocket, then send JSON messages:
+        ```json
+        {"type": "subscribe", "device_keys": ["AABBCCDDEEFF"]}
+        {"type": "unsubscribe", "device_keys": ["AABBCCDDEEFF"]}
+        {"type": "ping"}
+        ```
+        Server pushes enriched telemetry as JSON strings on subscribed topics.
+      responses:
+        "101":
+          description: Switching protocols
+
+  # ── Groups ────────────────────────────────────────────────────────
+  /groups:
+    get:
+      summary: List device groups
+      tags: [Groups]
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Group list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Group'
+    post:
+      summary: Create a device group
+      tags: [Groups]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGroupRequest'
+      responses:
+        "201":
+          description: Group created
+
+  /groups/{id}/devices/{key}:
+    post:
+      summary: Add device to group
+      tags: [Groups]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Device added to group
+    delete:
+      summary: Remove device from group
+      tags: [Groups]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Device removed from group
+
+  # ── Tags ──────────────────────────────────────────────────────────
+  /devices/{key}/tags:
+    get:
+      summary: List device tags
+      tags: [Tags]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Device tags
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tags'
+
+  /devices/{key}/tags/{tag_key}:
+    post:
+      summary: Set a device tag
+      tags: [Tags]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tag_key
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetTagRequest'
+      responses:
+        "200":
+          description: Tag set
+    delete:
+      summary: Delete a device tag
+      tags: [Tags]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tag_key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tag deleted
+
+  # ── Search ─────────────────────────────────────────────────────────
+  /search:
+    get:
+      summary: Full-text search
+      tags: [Search]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Search query
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [devices, audit]
+          description: Comma-separated entity types to search
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        "400":
+          description: Missing query
+
+  # ── Notification Preferences ──────────────────────────────────────
+  /users/me/notifications:
+    get:
+      summary: Get notification preferences
+      tags: [Notifications]
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Notification preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPrefs'
+    patch:
+      summary: Update notification preferences
+      tags: [Notifications]
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateNotificationPrefsRequest'
+      responses:
+        "200":
+          description: Preferences updated
+
+  # ── Billing ───────────────────────────────────────────────────────
+  /billing/invoices:
+    get:
+      summary: List invoices
+      tags: [Billing]
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Invoice list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Invoice'
+    post:
+      summary: Create invoice (admin)
+      tags: [Billing]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInvoiceRequest'
+      responses:
+        "201":
+          description: Invoice created
+
+  /billing/invoices/{id}/mark-paid:
+    post:
+      summary: Mark invoice as paid (admin)
+      tags: [Billing]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Invoice marked paid, license upgraded
+        "404":
+          description: Invoice not found
+        "409":
+          description: Invoice already processed
+
+  # ── Data Export ───────────────────────────────────────────────────
+  /export/request:
+    post:
+      summary: Request data export (GDPR)
+      tags: [Export]
+      security:
+        - BearerAuth: []
+      responses:
+        "202":
+          description: Export job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportRequestResponse'
+
+  /export/status/{id}:
+    get:
+      summary: Get export job status
+      tags: [Export]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Export job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportStatusResponse'
+        "404":
+          description: Export job not found
+
+  # ── Maintenance ───────────────────────────────────────────────────
+  /admin/maintenance:
+    post:
+      summary: Toggle maintenance mode (admin)
+      tags: [Admin]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MaintenanceToggleRequest'
+      responses:
+        "200":
+          description: Maintenance mode toggled
