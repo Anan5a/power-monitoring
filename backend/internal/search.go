@@ -26,9 +26,21 @@ func NewSearchHandler(pg *pgxpool.Pool) *SearchHandler {
 	return &SearchHandler{pg: pg}
 }
 
+// Search performs full-text search across devices and audit log
+// @Summary      Full-text search
+// @Tags         Search
+// @Produce      json
+// @Param        q       query  string  true   "Search query"
+// @Param        type    query  string  false  "Entity types: devices,audit (comma-separated)"
+// @Param        limit   query  int     false  "Max results"  default(20)
+// @Param        offset  query  int     false  "Result offset"  default(0)
+// @Success      200  {object}  SearchResponse
+// @Failure      400  {object}  APIError
+// @Security     BearerAuth
+// @Router       /search [get]
 func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
-	types := r.URL.Query().Get("type") // comma-separated: devices,audit
+	types := r.URL.Query().Get("type")
 	limit := parseInt(r.URL.Query().Get("limit"), 20)
 	offset := parseInt(r.URL.Query().Get("offset"), 0)
 

@@ -18,26 +18,23 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	httpSwagger "github.com/swaggo/http-swagger"
 	"go.uber.org/automaxprocs"
 
 	"github.com/Anan5a/iot-platform/internal"
 )
 
 func main() {
-	// Auto-detect CPU limits in Docker
 	automaxprocs.Log()
 
-	// Load config
 	cfg, err := internal.LoadConfig()
 	if err != nil {
 		slog.Error("config", "error", err)
 		os.Exit(1)
 	}
 
-	// Set log level
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 
-	// Connect databases
 	ctx := context.Background()
 	pg, err := internal.ConnectPG(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -53,20 +50,15 @@ func main() {
 	}
 	defer ch.Close()
 
-	// JWT manager
 	jwt := internal.NewJWTManager(cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
 
-	// Email service
 	emailSvc := internal.NewEmailService(pg, cfg.SMTPFrom, cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass)
 	go emailSvc.DrainLoop(ctx)
 
-	// Alert engine
 	alertEngine := internal.NewAlertEngine(pg, emailSvc)
 
-	// WebSocket hub
 	hub := internal.NewWebSocketHub()
 
-	// MQTT client for live/# subscription
 	mqttOpts := mqtt.NewClientOptions()
 	mqttOpts.AddBroker(cfg.MQTTBroker)
 	mqttOpts.SetClientID("iot-platform-api")
@@ -75,7 +67,6 @@ func main() {
 		slog.Info("MQTT connected (api)")
 		c.Subscribe("live/#", 0, func(_ mqtt.Client, msg mqtt.Message) {
 			hub.OnLiveMessage(msg.Topic(), msg.Payload())
-			// Parse and evaluate alerts
 			var enriched internal.EnrichedTelemetry
 			if err := json.Unmarshal(msg.Payload(), &enriched); err == nil {
 				alertEngine.Evaluate(context.Background(), enriched.DeviceKey, &enriched)
@@ -89,7 +80,6 @@ func main() {
 	}
 	defer mqttClient.Disconnect(1000)
 
-	// Handlers
 	h := internal.NewHandlers(pg, jwt, ch)
 	otaHandler := internal.NewOTAHandler(pg)
 	groupHandler := internal.NewGroupHandler(pg)
@@ -99,7 +89,6 @@ func main() {
 	exportHandler := internal.NewExportHandler(pg, nil, "http://localhost:8080")
 	maintenanceMode := internal.NewMaintenanceMode(pg)
 
-	// Router
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	r.Use(chimw.RealIP)
@@ -109,23 +98,23 @@ func main() {
 	r.Use(chimw.Recoverer)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// Public (with rate limiting)
 		r.With(internal.RateLimitMiddleware(5, time.Minute)).Post("/auth/register", h.Register)
 		r.With(internal.RateLimitMiddleware(10, time.Minute)).Post("/auth/login", h.Login)
 		r.Post("/auth/refresh", h.RefreshToken)
 		r.Get("/health", h.Health)
 
-		// OAuth
 		r.Get("/auth/oauth/{provider}", oauthHandler.Redirect)
 		r.Get("/auth/oauth/{provider}/callback", oauthHandler.Callback)
 
-		// Mosquitto auth (called by Mosquitto HTTP plugin)
 		r.Post("/mqtt/auth", internal.NewMQTTAuthHandler(pg).ServeHTTP)
 
-		// OTA check (polled by devices, no auth — device_key is the identifier)
+		// Swagger UI
+		r.Get("/swagger/*", httpSwagger.Handler(
+			httpSwagger.URL("/api/v1/swagger/doc.json"),
+		))
+
 		r.Get("/ota/check/{key}", otaHandler.CheckOTA)
 
-		// Protected
 		r.Group(func(r chi.Router) {
 			r.Use(internal.AuthMiddleware(jwt))
 			r.Get("/devices", h.ListDevices)
@@ -134,42 +123,33 @@ func main() {
 			r.Get("/telemetry/{key}/latest", h.GetLatestTelemetry)
 			r.Get("/ws", hub.HandleWS)
 
-			// OTA admin
 			r.Post("/ota/releases", otaHandler.CreateRelease)
 
-			// Device groups
 			r.Get("/groups", groupHandler.ListGroups)
 			r.Post("/groups", groupHandler.CreateGroup)
 			r.Post("/groups/{id}/devices/{key}", groupHandler.AddDeviceToGroup)
 			r.Delete("/groups/{id}/devices/{key}", groupHandler.RemoveDeviceFromGroup)
 
-			// Device tags
 			r.Get("/devices/{key}/tags", groupHandler.ListTags)
 			r.Post("/devices/{key}/tags/{tag_key}", groupHandler.SetTag)
 			r.Delete("/devices/{key}/tags/{tag_key}", groupHandler.DeleteTag)
 
-			// Search
 			r.Get("/search", searchHandler.Search)
 
-			// Notification preferences
 			r.Get("/users/me/notifications", h.GetNotificationPrefs)
 			r.Patch("/users/me/notifications", h.UpdateNotificationPrefs)
 
-			// Billing
 			r.Get("/billing/invoices", billingHandler.ListInvoices)
 			r.Post("/billing/invoices", billingHandler.CreateInvoice)
 			r.Post("/billing/invoices/{id}/mark-paid", billingHandler.MarkInvoicePaid)
 
-			// Data export
 			r.Post("/export/request", exportHandler.RequestExport)
 			r.Get("/export/status/{id}", exportHandler.GetExportStatus)
 
-			// Maintenance toggle (admin)
 			r.Post("/admin/maintenance", maintenanceMode.ToggleHandler)
 		})
 	})
 
-	// Server
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.APIPort),
 		Handler:      r,
@@ -178,7 +158,6 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Graceful shutdown
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

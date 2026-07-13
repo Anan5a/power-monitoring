@@ -29,7 +29,14 @@ func NewOTAHandler(pg *pgxpool.Pool) *OTAHandler {
 	return &OTAHandler{pg: pg}
 }
 
-// CheckOTA is polled by ESP32: GET /api/v1/ota/check/{key}?current_ver=2.0.0
+// CheckOTA is polled by ESP32 devices to check for firmware updates
+// @Summary      Check for OTA update
+// @Tags         OTA
+// @Produce      json
+// @Param        key          path  string  true   "Device key"
+// @Param        current_ver  query string  false  "Current firmware version"
+// @Success      200  {object}  OTACheckResponse
+// @Router       /ota/check/{key} [get]
 func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
 	currentVer := r.URL.Query().Get("current_ver")
@@ -60,7 +67,6 @@ func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Compare versions using semver comparison
 	if currentVer != "" && !semverGreater(release.Version, currentVer) {
 		writeJSON(w, http.StatusOK, OTACheckResponse{UpdateAvailable: false})
 		return
@@ -75,7 +81,6 @@ func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// semverGreater returns true if v1 > v2 using semver comparison.
 func semverGreater(v1, v2 string) bool {
 	p1 := parseSemver(v1)
 	p2 := parseSemver(v2)
@@ -99,7 +104,16 @@ func parseSemver(v string) [3]int {
 	return parts
 }
 
-// CreateRelease is an admin endpoint: POST /api/v1/ota/releases
+// CreateRelease creates a new OTA release (admin only)
+// @Summary      Create OTA release
+// @Tags         OTA
+// @Accept       json
+// @Produce      json
+// @Param        body  body  CreateReleaseRequest  true  "Release details"
+// @Success      201  {object}  map[string]string
+// @Failure      409  {object}  APIError
+// @Security     BearerAuth
+// @Router       /ota/releases [post]
 func (h *OTAHandler) CreateRelease(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		DeviceType string `json:"device_type"`

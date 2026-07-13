@@ -14,10 +14,10 @@ import (
 )
 
 type MaintenanceMode struct {
-	pg       *pgxpool.Pool
-	mu       sync.RWMutex
-	enabled  bool
-	message  string
+	pg        *pgxpool.Pool
+	mu        sync.RWMutex
+	enabled   bool
+	message   string
 	lastCheck time.Time
 }
 
@@ -79,7 +79,15 @@ func (m *MaintenanceMode) Middleware() func(http.Handler) http.Handler {
 	}
 }
 
-// ToggleHandler enables/disables maintenance mode. Admin only.
+// ToggleHandler enables/disables maintenance mode (admin only)
+// @Summary      Toggle maintenance mode
+// @Tags         Admin
+// @Accept       json
+// @Produce      json
+// @Param        body  body  MaintenanceToggleRequest  true  "Maintenance settings"
+// @Success      200  {object}  map[string]any
+// @Security     BearerAuth
+// @Router       /admin/maintenance [post]
 func (m *MaintenanceMode) ToggleHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled bool   `json:"enabled"`

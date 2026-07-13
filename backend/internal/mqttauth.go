@@ -16,8 +16,8 @@ type MQTTAuthHandler struct {
 }
 
 type mqttAuthRequest struct {
-	Username string `json:"username"` // device_key
-	Password string `json:"password"` // api_key
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 type mqttAuthResponse struct {
@@ -27,13 +27,22 @@ type mqttAuthResponse struct {
 
 type mqttACL struct {
 	Topic  string `json:"topic"`
-	Access string `json:"access"` // 'read', 'write', 'readwrite'
+	Access string `json:"access"`
 }
 
 func NewMQTTAuthHandler(pg *pgxpool.Pool) *MQTTAuthHandler {
 	return &MQTTAuthHandler{pg: pg}
 }
 
+// ServeHTTP validates device credentials for Mosquitto
+// @Summary      MQTT auth (Mosquitto backend)
+// @Tags         MQTT
+// @Accept       json
+// @Produce      json
+// @Param        body  body  MQTTAuthRequest  true  "Device credentials"
+// @Success      200  {object}  MQTTAuthResponse
+// @Failure      403  {object}  MQTTAuthResponse
+// @Router       /mqtt/auth [post]
 func (h *MQTTAuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req mqttAuthRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -50,7 +59,6 @@ func (h *MQTTAuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Device authenticated — grant ACLs for its topics
 	writeJSON(w, http.StatusOK, mqttAuthResponse{
 		OK: true,
 		ACLs: []mqttACL{

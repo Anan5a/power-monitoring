@@ -19,6 +19,13 @@ func NewGroupHandler(pg *pgxpool.Pool) *GroupHandler {
 	return &GroupHandler{pg: pg}
 }
 
+// ListGroups returns all device groups
+// @Summary      List device groups
+// @Tags         Groups
+// @Produce      json
+// @Success      200  {array}  Group
+// @Security     BearerAuth
+// @Router       /groups [get]
 func (h *GroupHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.pg.Query(r.Context(),
 		`SELECT id, name, coalesce(description,''), coalesce(color,'') FROM device_groups ORDER BY name`)
@@ -43,6 +50,16 @@ func (h *GroupHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, groups)
 }
 
+// CreateGroup creates a new device group
+// @Summary      Create a device group
+// @Tags         Groups
+// @Accept       json
+// @Produce      json
+// @Param        body  body  CreateGroupRequest  true  "Group details"
+// @Success      201  {object}  map[string]string
+// @Failure      400  {object}  APIError
+// @Security     BearerAuth
+// @Router       /groups [post]
 func (h *GroupHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name        string `json:"name"`
@@ -64,6 +81,15 @@ func (h *GroupHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 }
 
+// AddDeviceToGroup adds a device to a group
+// @Summary      Add device to group
+// @Tags         Groups
+// @Produce      json
+// @Param        id   path  string  true  "Group ID"
+// @Param        key  path  string  true  "Device key"
+// @Success      200  {object}  map[string]string
+// @Security     BearerAuth
+// @Router       /groups/{id}/devices/{key} [post]
 func (h *GroupHandler) AddDeviceToGroup(w http.ResponseWriter, r *http.Request) {
 	groupID := chi.URLParam(r, "id")
 	deviceKey := chi.URLParam(r, "key")
@@ -77,6 +103,15 @@ func (h *GroupHandler) AddDeviceToGroup(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "added"})
 }
 
+// RemoveDeviceFromGroup removes a device from a group
+// @Summary      Remove device from group
+// @Tags         Groups
+// @Produce      json
+// @Param        id   path  string  true  "Group ID"
+// @Param        key  path  string  true  "Device key"
+// @Success      200  {object}  map[string]string
+// @Security     BearerAuth
+// @Router       /groups/{id}/devices/{key} [delete]
 func (h *GroupHandler) RemoveDeviceFromGroup(w http.ResponseWriter, r *http.Request) {
 	groupID := chi.URLParam(r, "id")
 	deviceKey := chi.URLParam(r, "key")
@@ -88,6 +123,14 @@ func (h *GroupHandler) RemoveDeviceFromGroup(w http.ResponseWriter, r *http.Requ
 
 // ── Tags ────────────────────────────────────────────────────────────
 
+// ListTags returns all tags for a device
+// @Summary      List device tags
+// @Tags         Tags
+// @Produce      json
+// @Param        key  path  string  true  "Device key"
+// @Success      200  {object}  Tags
+// @Security     BearerAuth
+// @Router       /devices/{key}/tags [get]
 func (h *GroupHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
 	rows, err := h.pg.Query(r.Context(),
@@ -106,6 +149,17 @@ func (h *GroupHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tags)
 }
 
+// SetTag sets a tag on a device
+// @Summary      Set a device tag
+// @Tags         Tags
+// @Accept       json
+// @Produce      json
+// @Param        key     path  string         true  "Device key"
+// @Param        tag_key path  string         true  "Tag key"
+// @Param        body    body  SetTagRequest  true  "Tag value"
+// @Success      200  {object}  map[string]string
+// @Security     BearerAuth
+// @Router       /devices/{key}/tags/{tag_key} [post]
 func (h *GroupHandler) SetTag(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
 	tagKey := chi.URLParam(r, "tag_key")
@@ -120,6 +174,15 @@ func (h *GroupHandler) SetTag(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
 }
 
+// DeleteTag deletes a tag from a device
+// @Summary      Delete a device tag
+// @Tags         Tags
+// @Produce      json
+// @Param        key     path  string  true  "Device key"
+// @Param        tag_key path  string  true  "Tag key"
+// @Success      200  {object}  map[string]string
+// @Security     BearerAuth
+// @Router       /devices/{key}/tags/{tag_key} [delete]
 func (h *GroupHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
 	tagKey := chi.URLParam(r, "tag_key")

@@ -1,4 +1,4 @@
-.PHONY: build test lint clean up down migrate-up migrate-down
+.PHONY: build test lint clean up down migrate-up migrate-down swag-init swag-fmt
 
 build:
 	go build -o bin/api ./cmd/api
@@ -30,6 +30,12 @@ migrate-up:
 migrate-down:
 	@read -p "DATABASE_URL: " dburl; \
 	migrate -path migrations -database "$$dburl" down 1
+
+swag-init:
+	swag init -g internal/handlers.go -o docs/api --parseDependency
+
+swag-fmt:
+	swag fmt -g internal/handlers.go
 
 clean:
 	rm -rf bin/ cover.out

@@ -21,6 +21,16 @@ func NewBillingHandler(pg *pgxpool.Pool) *BillingHandler {
 	return &BillingHandler{pg: pg}
 }
 
+// CreateInvoice creates a new invoice (admin only)
+// @Summary      Create invoice
+// @Tags         Billing
+// @Accept       json
+// @Produce      json
+// @Param        body  body  CreateInvoiceRequest  true  "Invoice details"
+// @Success      201  {object}  map[string]string
+// @Failure      400  {object}  APIError
+// @Security     BearerAuth
+// @Router       /billing/invoices [post]
 func (h *BillingHandler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		UserID      string `json:"user_id"`
@@ -51,6 +61,16 @@ func (h *BillingHandler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "invoice_number": invoiceNumber})
 }
 
+// MarkInvoicePaid marks an invoice as paid and upgrades the user's license (admin only)
+// @Summary      Mark invoice as paid
+// @Tags         Billing
+// @Produce      json
+// @Param        id  path  string  true  "Invoice ID"
+// @Success      200  {object}  map[string]string
+// @Failure      404  {object}  APIError
+// @Failure      409  {object}  APIError
+// @Security     BearerAuth
+// @Router       /billing/invoices/{id}/mark-paid [post]
 func (h *BillingHandler) MarkInvoicePaid(w http.ResponseWriter, r *http.Request) {
 	invoiceID := chi.URLParam(r, "id")
 	adminID := r.Context().Value(ContextUserID).(string)
@@ -111,6 +131,13 @@ func (h *BillingHandler) MarkInvoicePaid(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "paid"})
 }
 
+// ListInvoices returns invoices for the authenticated user
+// @Summary      List invoices
+// @Tags         Billing
+// @Produce      json
+// @Success      200  {array}  Invoice
+// @Security     BearerAuth
+// @Router       /billing/invoices [get]
 func (h *BillingHandler) ListInvoices(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(ContextUserID).(string)
 	rows, err := h.pg.Query(r.Context(), `

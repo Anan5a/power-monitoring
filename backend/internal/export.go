@@ -17,7 +17,7 @@ import (
 
 type ExportHandler struct {
 	pg      *pgxpool.Pool
-	minio   any // *minio.Client — typed in real code
+	minio   any
 	baseURL string
 }
 
@@ -25,6 +25,13 @@ func NewExportHandler(pg *pgxpool.Pool, minio any, baseURL string) *ExportHandle
 	return &ExportHandler{pg: pg, minio: minio, baseURL: baseURL}
 }
 
+// RequestExport starts an async data export job
+// @Summary      Request data export
+// @Tags         Export
+// @Produce      json
+// @Success      202  {object}  ExportRequestResponse
+// @Security     BearerAuth
+// @Router       /export/request [post]
 func (h *ExportHandler) RequestExport(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(ContextUserID).(string)
 
@@ -42,13 +49,11 @@ func (h *ExportHandler) RequestExport(w http.ResponseWriter, r *http.Request) {
 func (h *ExportHandler) runExport(ctx context.Context, jobID, userID string) {
 	h.pg.Exec(ctx, `UPDATE export_jobs SET status = 'running' WHERE id = $1`, jobID)
 
-	// Use a helper to catch errors and mark the job as failed
 	markFailed := func(err error) {
 		slog.Error("export failed", "job", jobID, "error", err)
 		h.pg.Exec(ctx, `UPDATE export_jobs SET status = 'failed', error = $2 WHERE id = $1`, jobID, err.Error())
 	}
 
-	// Collect user data
 	var user struct {
 		Email       string    `json:"email"`
 		DisplayName string    `json:"display_name"`
@@ -61,7 +66,6 @@ func (h *ExportHandler) runExport(ctx context.Context, jobID, userID string) {
 		return
 	}
 
-	// Collect devices
 	rows, err := h.pg.Query(ctx,
 		`SELECT device_key, device_name, device_type, created_at FROM devices WHERE owner_id = $1`, userID)
 	if err != nil {
@@ -81,7 +85,6 @@ func (h *ExportHandler) runExport(ctx context.Context, jobID, userID string) {
 	}
 	rows.Close()
 
-	// Build export data
 	export := map[string]any{
 		"user":    user,
 		"devices": devices,
@@ -94,14 +97,21 @@ func (h *ExportHandler) runExport(ctx context.Context, jobID, userID string) {
 		return
 	}
 
-	// In production: write to MinIO at exports/{jobID}.json
-	// For v1: mark as ready with a note
 	h.pg.Exec(ctx,
 		`UPDATE export_jobs SET status = 'ready', file_path = $2, row_count = $3, completed_at = now()
 		 WHERE id = $1`,
 		jobID, fmt.Sprintf("exports/%s.json", jobID), len(devices))
 }
 
+// GetExportStatus returns the status of an export job
+// @Summary      Get export job status
+// @Tags         Export
+// @Produce      json
+// @Param        id  path  string  true  "Export job ID"
+// @Success      200  {object}  ExportStatusResponse
+// @Failure      404  {object}  APIError
+// @Security     BearerAuth
+// @Router       /export/status/{id} [get]
 func (h *ExportHandler) GetExportStatus(w http.ResponseWriter, r *http.Request) {
 	jobID := chi.URLParam(r, "id")
 	userID := r.Context().Value(ContextUserID).(string)

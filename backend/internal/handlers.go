@@ -1,6 +1,25 @@
 // internal/handlers.go — REST API handlers for the API server.
 // All handlers are methods on Handlers, which holds shared dependencies.
 
+// @title           IoT Platform API
+// @version         1.0.0
+// @description     Self-hosted IoT platform backend. Two binaries: api (HTTP/WS) and ingest (MQTT).
+// @termsOfService  http://swagger.io/terms/
+
+// @contact.name   IoT Platform Team
+// @contact.email  dev@iotplatform.local
+
+// @license.name  MIT
+// @license.url   https://opensource.org/licenses/MIT
+
+// @host      localhost:8080
+// @BasePath  /api/v1
+
+// @securityDefinitions.apikey  BearerAuth
+// @in                          header
+// @name                        Authorization
+// @description                 JWT access token from /auth/login or /auth/register
+
 package internal
 
 import (
@@ -28,6 +47,16 @@ func NewHandlers(pg *pgxpool.Pool, jwt *JWTManager, ch clickhouse.Conn) *Handler
 
 // ── Auth ────────────────────────────────────────────────────────────
 
+// Register creates a new user account
+// @Summary      Register a new user
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  RegisterRequest  true  "Registration details"
+// @Success      201   {object}  AuthResponse
+// @Failure      400   {object}  APIError
+// @Failure      409   {object}  APIError
+// @Router       /auth/register [post]
 func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 	var req RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -84,6 +113,15 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Login authenticates a user and returns JWT tokens
+// @Summary      Login
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  LoginRequest  true  "Login credentials"
+// @Success      200   {object}  AuthResponse
+// @Failure      401   {object}  APIError
+// @Router       /auth/login [post]
 func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -130,6 +168,15 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// RefreshToken returns new access and refresh tokens
+// @Summary      Refresh JWT tokens
+// @Tags         Auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  RefreshRequest  true  "Refresh token"
+// @Success      200   {object}  map[string]string
+// @Failure      401   {object}  APIError
+// @Router       /auth/refresh [post]
 func (h *Handlers) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token"`
@@ -155,6 +202,13 @@ func (h *Handlers) RefreshToken(w http.ResponseWriter, r *http.Request) {
 
 // ── Devices ─────────────────────────────────────────────────────────
 
+// ListDevices returns all devices owned by the authenticated user
+// @Summary      List user's devices
+// @Tags         Devices
+// @Produce      json
+// @Success      200  {array}  Device
+// @Security     BearerAuth
+// @Router       /devices [get]
 func (h *Handlers) ListDevices(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(ContextUserID).(string)
 
@@ -179,6 +233,15 @@ func (h *Handlers) ListDevices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, devices)
 }
 
+// GetDevice returns a single device by device_key
+// @Summary      Get device details
+// @Tags         Devices
+// @Produce      json
+// @Param        key  path  string  true  "Device key"
+// @Success      200  {object}  Device
+// @Failure      404  {object}  APIError
+// @Security     BearerAuth
+// @Router       /devices/{key} [get]
 func (h *Handlers) GetDevice(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
 	userID := r.Context().Value(ContextUserID).(string)
@@ -202,6 +265,17 @@ func (h *Handlers) GetDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
+// ClaimDevice claims an unclaimed device using its API key
+// @Summary      Claim an unclaimed device
+// @Tags         Devices
+// @Accept       json
+// @Produce      json
+// @Param        key   path  string              true  "Device key"
+// @Param        body  body  ClaimDeviceRequest  true  "Device API key"
+// @Success      200   {object}  map[string]string
+// @Failure      404   {object}  APIError
+// @Security     BearerAuth
+// @Router       /devices/{key}/claim [post]
 func (h *Handlers) ClaimDevice(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
 	userID := r.Context().Value(ContextUserID).(string)
@@ -240,6 +314,14 @@ func (h *Handlers) ClaimDevice(w http.ResponseWriter, r *http.Request) {
 
 // ── Telemetry ───────────────────────────────────────────────────────
 
+// GetLatestTelemetry returns the most recent telemetry reading from ClickHouse
+// @Summary      Get latest telemetry
+// @Tags         Telemetry
+// @Produce      json
+// @Param        key  path  string  true  "Device key"
+// @Success      200  {object}  LatestTelemetry
+// @Security     BearerAuth
+// @Router       /telemetry/{key}/latest [get]
 func (h *Handlers) GetLatestTelemetry(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
 	if h.ch == nil {
@@ -284,6 +366,12 @@ func (h *Handlers) GetLatestTelemetry(w http.ResponseWriter, r *http.Request) {
 
 // ── Health ──────────────────────────────────────────────────────────
 
+// Health returns service health status
+// @Summary      Health check
+// @Tags         Monitoring
+// @Produce      json
+// @Success      200  {object}  HealthResponse
+// @Router       /health [get]
 func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	services := map[string]any{}
 
@@ -301,6 +389,13 @@ func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 
 // ── Notification Preferences ────────────────────────────────────────
 
+// GetNotificationPrefs returns the authenticated user's notification preferences
+// @Summary      Get notification preferences
+// @Tags         Notifications
+// @Produce      json
+// @Success      200  {object}  NotificationPrefs
+// @Security     BearerAuth
+// @Router       /users/me/notifications [get]
 func (h *Handlers) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(ContextUserID).(string)
 	var prefs struct {
@@ -320,6 +415,15 @@ func (h *Handlers) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, prefs)
 }
 
+// UpdateNotificationPrefs updates the authenticated user's notification preferences
+// @Summary      Update notification preferences
+// @Tags         Notifications
+// @Accept       json
+// @Produce      json
+// @Param        body  body  UpdateNotificationPrefsRequest  true  "Preferences"
+// @Success      200   {object}  map[string]string
+// @Security     BearerAuth
+// @Router       /users/me/notifications [patch]
 func (h *Handlers) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(ContextUserID).(string)
 	var req struct {

@@ -15,7 +15,7 @@ import (
 
 type WebSocketHub struct {
 	mu      sync.RWMutex
-	clients map[string]map[*websocket.Conn]bool // device_key → set of conns
+	clients map[string]map[*websocket.Conn]bool
 }
 
 func NewWebSocketHub() *WebSocketHub {
@@ -24,8 +24,17 @@ func NewWebSocketHub() *WebSocketHub {
 	}
 }
 
-// HandleWS is the HTTP handler for WebSocket connections.
-// Client sends: {"type":"subscribe","device_keys":["AABB..."]}
+// HandleWS handles WebSocket connections for live telemetry
+// @Summary      WebSocket endpoint
+// @Tags         WebSocket
+// @Description  Connect via WebSocket, then send JSON messages:\n
+// @Description  {"type":"subscribe","device_keys":["AABB..."]}\n
+// @Description  {"type":"unsubscribe","device_keys":["AABB..."]}\n
+// @Description  {"type":"ping"}\n
+// @Description  Server pushes enriched telemetry as JSON strings.
+// @Success      101  "Switching Protocols"
+// @Security     BearerAuth
+// @Router       /ws [get]
 func (hub *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	websocket.Handler(func(conn *websocket.Conn) {
 		defer conn.Close()
@@ -35,7 +44,7 @@ func (hub *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 				DeviceKeys []string `json:"device_keys,omitempty"`
 			}
 			if err := websocket.JSON.Receive(conn, &msg); err != nil {
-				return // connection closed
+				return
 			}
 			switch msg.Type {
 			case "subscribe":
@@ -72,11 +81,10 @@ func (hub *WebSocketHub) unsubscribe(deviceKey string, conn *websocket.Conn) {
 }
 
 // Broadcast sends an enriched telemetry message to all clients subscribed
-// to the given device_key. Called by the live/# MQTT subscriber.
+// to the given device_key.
 func (hub *WebSocketHub) Broadcast(deviceKey string, data []byte) {
 	hub.mu.RLock()
 	conns := hub.clients[deviceKey]
-	// Copy the map under lock to avoid concurrent iteration/mutation race
 	snapshot := make([]*websocket.Conn, 0, len(conns))
 	for conn := range conns {
 		snapshot = append(snapshot, conn)
