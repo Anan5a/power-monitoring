@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
@@ -45,7 +46,7 @@ func NewOAuthHandler(pg *pgxpool.Pool, jwt *JWTManager, googleID, googleSecret, 
 }
 
 func (h *OAuthHandler) Redirect(w http.ResponseWriter, r *http.Request) {
-	provider := r.PathValue("provider")
+	provider := chi.URLParam(r, "provider")
 	config, ok := h.configs[provider]
 	if !ok {
 		writeError(w, "not_found", "unsupported provider", http.StatusNotFound)
@@ -57,7 +58,7 @@ func (h *OAuthHandler) Redirect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
-	provider := r.PathValue("provider")
+	provider := chi.URLParam(r, "provider")
 	config, ok := h.configs[provider]
 	if !ok {
 		writeError(w, "not_found", "unsupported provider", http.StatusNotFound)
