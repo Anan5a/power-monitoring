@@ -4,9 +4,12 @@
 package internal
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -117,6 +120,10 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		writeError(w, "internal_error", "provider returned non-200 status", http.StatusInternalServerError)
+		return
+	}
 
 	var info struct {
 		ID      string `json:"id"`
@@ -126,27 +133,29 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		Picture string `json:"picture"`
 		Avatar  string `json:"avatar_url"`
 	}
-	json.NewDecoder(resp.Body).Decode(&info)
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		writeError(w, "internal_error", "failed to parse user info", http.StatusInternalServerError)
+		return
+	}
+	if info.ID == "" {
+		writeError(w, "unauthorized", "provider did not return user id", http.StatusUnauthorized)
+		return
+	}
 	if info.Name == "" {
 		info.Name = info.Login
+	}
+	if info.Name == "" {
+		info.Name = "OAuth User"
 	}
 	if info.Picture == "" {
 		info.Picture = info.Avatar
 	}
 
-	var userID string
-	err = h.pg.QueryRow(r.Context(),
-		`SELECT user_id FROM user_oauth_accounts WHERE provider = $1 AND provider_id = $2`,
-		provider, info.ID).Scan(&userID)
+	userID, err := h.findOrCreateOAuthUser(r.Context(), provider, info.ID, info.Email, info.Name, info.Picture)
 	if err != nil {
-		h.pg.QueryRow(r.Context(),
-			`INSERT INTO users (email, password_hash, display_name)
-			 VALUES ($1, '', $2) RETURNING id`,
-			info.Email, info.Name).Scan(&userID)
-		h.pg.Exec(r.Context(),
-			`INSERT INTO user_oauth_accounts (user_id, provider, provider_id, email, display_name, avatar_url)
-			 VALUES ($1, $2, $3, $4, $5, $6)`,
-			userID, provider, info.ID, info.Email, info.Name, info.Picture)
+		slog.Error("oauth user lookup/creation", "error", err)
+		writeError(w, "internal_error", "failed to create or link account", http.StatusInternalServerError)
+		return
 	}
 
 	access, _ := h.jwt.IssueAccessToken(userID, "user")
@@ -156,6 +165,53 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		"refresh_token": refresh,
 		"redirect":      "/dashboard",
 	})
+}
+
+// findOrCreateOAuthUser returns the local user ID for the OAuth account,
+// creating a new user and linking the account if necessary.
+func (h *OAuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, providerID, email, displayName, avatarURL string) (string, error) {
+	var userID string
+	err := h.pg.QueryRow(ctx,
+		`SELECT user_id FROM user_oauth_accounts WHERE provider = $1 AND provider_id = $2`,
+		provider, providerID).Scan(&userID)
+	if err == nil {
+		return userID, nil
+	}
+
+	// No linked OAuth account. Try to find an existing user by email.
+	if email != "" {
+		err = h.pg.QueryRow(ctx,
+			`SELECT id FROM users WHERE email = $1`,
+			email).Scan(&userID)
+		if err == nil {
+			_, err = h.pg.Exec(ctx,
+				`INSERT INTO user_oauth_accounts (user_id, provider, provider_id, email, display_name, avatar_url)
+				 VALUES ($1, $2, $3, $4, $5, $6)
+				 ON CONFLICT (provider, provider_id) DO NOTHING`,
+				userID, provider, providerID, email, displayName, avatarURL)
+			if err != nil {
+				return "", fmt.Errorf("link oauth account: %w", err)
+			}
+			return userID, nil
+		}
+	}
+
+	// Create a new user.
+	err = h.pg.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, display_name)
+		 VALUES ($1, '', $2) RETURNING id`,
+		email, displayName).Scan(&userID)
+	if err != nil {
+		return "", fmt.Errorf("create user: %w", err)
+	}
+	_, err = h.pg.Exec(ctx,
+		`INSERT INTO user_oauth_accounts (user_id, provider, provider_id, email, display_name, avatar_url)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		userID, provider, providerID, email, displayName, avatarURL)
+	if err != nil {
+		return "", fmt.Errorf("insert oauth account: %w", err)
+	}
+	return userID, nil
 }
 
 func generateState() string {

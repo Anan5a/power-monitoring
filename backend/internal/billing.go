@@ -38,18 +38,45 @@ func (h *BillingHandler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	start, _ := time.Parse("2006-01-02", req.PeriodStart)
-	end, _ := time.Parse("2006-01-02", req.PeriodEnd)
+	if req.UserID == "" || req.AmountCents <= 0 || req.Description == "" || req.PeriodStart == "" || req.PeriodEnd == "" {
+		writeError(w, "validation_error", "user_id, amount_cents, description, period_start and period_end are required", http.StatusBadRequest)
+		return
+	}
+
+	start, err := time.Parse("2006-01-02", req.PeriodStart)
+	if err != nil {
+		writeError(w, "validation_error", "invalid period_start format (YYYY-MM-DD)", http.StatusBadRequest)
+		return
+	}
+	end, err := time.Parse("2006-01-02", req.PeriodEnd)
+	if err != nil {
+		writeError(w, "validation_error", "invalid period_end format (YYYY-MM-DD)", http.StatusBadRequest)
+		return
+	}
+	if end.Before(start) {
+		writeError(w, "validation_error", "period_end must be on or after period_start", http.StatusBadRequest)
+		return
+	}
+
+	if h.pg == nil {
+		writeError(w, "internal_error", "database unavailable", http.StatusInternalServerError)
+		return
+	}
+
 	invoiceNumber := fmt.Sprintf("INV-%d-%04d", time.Now().Year(), time.Now().UnixMilli()%10000)
 
 	var id string
-	h.pg.QueryRow(r.Context(), `
+	err = h.pg.QueryRow(r.Context(), `
 		INSERT INTO invoices (user_id, invoice_number, description, plan_id, audience,
 			period_start, period_end, amount_cents, tax_cents, total_cents)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $8)
 		RETURNING id`,
 		req.UserID, invoiceNumber, req.Description, req.PlanID, req.Audience,
 		start, end, req.AmountCents).Scan(&id)
+	if err != nil {
+		writeError(w, "internal_error", "failed to create invoice", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "invoice_number": invoiceNumber})
 }
 
@@ -65,7 +92,11 @@ func (h *BillingHandler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
 // @Router       /billing/invoices/{id}/mark-paid [post]
 func (h *BillingHandler) MarkInvoicePaid(w http.ResponseWriter, r *http.Request) {
 	invoiceID := chi.URLParam(r, "id")
-	adminID := r.Context().Value(ContextUserID).(string)
+	adminID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || adminID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
 
 	tx, err := h.pg.Begin(r.Context())
 	if err != nil {
@@ -131,7 +162,11 @@ func (h *BillingHandler) MarkInvoicePaid(w http.ResponseWriter, r *http.Request)
 // @Security     BearerAuth
 // @Router       /billing/invoices [get]
 func (h *BillingHandler) ListInvoices(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(ContextUserID).(string)
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
 	rows, err := h.pg.Query(r.Context(), `
 		SELECT id, invoice_number, description, total_cents, status, created_at
 		FROM invoices WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`, userID)

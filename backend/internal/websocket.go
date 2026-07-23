@@ -1,6 +1,6 @@
 // internal/websocket.go — WebSocket hub for live telemetry push.
-// The API server subscribes to live/# on Mosquitto and pushes each
-// message to browser sessions subscribed to that device_key.
+// Uses gorilla/websocket. The API server subscribes to live/# on Mosquitto
+// and pushes each message to browser sessions subscribed to that device_key.
 
 package internal
 
@@ -9,9 +9,16 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
-	"golang.org/x/net/websocket"
+	"github.com/gorilla/websocket"
 )
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin:     func(r *http.Request) bool { return true },
+}
 
 type WebSocketHub struct {
 	mu      sync.RWMutex
@@ -24,7 +31,8 @@ func NewWebSocketHub() *WebSocketHub {
 	}
 }
 
-// HandleWS handles WebSocket connections for live telemetry
+// HandleWS handles WebSocket connections for live telemetry.
+// It runs under AuthMiddleware, so a valid JWT context is required.
 // @Summary      WebSocket endpoint
 // @Tags         WebSocket
 // @Description  Connect via WebSocket, then send JSON messages:\n
@@ -36,31 +44,62 @@ func NewWebSocketHub() *WebSocketHub {
 // @Security     BearerAuth
 // @Router       /ws [get]
 func (hub *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
-	websocket.Handler(func(conn *websocket.Conn) {
-		defer conn.Close()
+	if _, ok := r.Context().Value(ContextUserID).(string); !ok {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		slog.Warn("websocket upgrade failed", "error", err)
+		return
+	}
+	defer conn.Close()
+
+	// Start a goroutine that closes the connection if the client goes silent.
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
 		for {
-			var msg struct {
-				Type       string   `json:"type"`
-				DeviceKeys []string `json:"device_keys,omitempty"`
-			}
-			if err := websocket.JSON.Receive(conn, &msg); err != nil {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(5*time.Second)); err != nil {
+					close(done)
+					return
+				}
+			case <-done:
 				return
 			}
-			switch msg.Type {
-			case "subscribe":
-				for _, key := range msg.DeviceKeys {
-					hub.subscribe(key, conn)
-				}
-				websocket.JSON.Send(conn, map[string]string{"type": "subscribed"})
-			case "unsubscribe":
-				for _, key := range msg.DeviceKeys {
-					hub.unsubscribe(key, conn)
-				}
-			case "ping":
-				websocket.JSON.Send(conn, map[string]string{"type": "pong"})
-			}
 		}
-	}).ServeHTTP(w, r)
+	}()
+
+	for {
+		var msg struct {
+			Type       string   `json:"type"`
+			DeviceKeys []string `json:"device_keys,omitempty"`
+		}
+		if err := conn.ReadJSON(&msg); err != nil {
+			break
+		}
+		switch msg.Type {
+		case "subscribe":
+			for _, key := range msg.DeviceKeys {
+				hub.subscribe(key, conn)
+			}
+			_ = conn.WriteJSON(map[string]string{"type": "subscribed"})
+		case "unsubscribe":
+			for _, key := range msg.DeviceKeys {
+				hub.unsubscribe(key, conn)
+			}
+		case "ping":
+			_ = conn.WriteJSON(map[string]string{"type": "pong"})
+		}
+	}
+
+	// Clean up subscriptions when the connection closes.
+	hub.removeConn(conn)
+	close(done)
 }
 
 func (hub *WebSocketHub) subscribe(deviceKey string, conn *websocket.Conn) {
@@ -80,6 +119,14 @@ func (hub *WebSocketHub) unsubscribe(deviceKey string, conn *websocket.Conn) {
 	}
 }
 
+func (hub *WebSocketHub) removeConn(conn *websocket.Conn) {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	for _, conns := range hub.clients {
+		delete(conns, conn)
+	}
+}
+
 // Broadcast sends an enriched telemetry message to all clients subscribed
 // to the given device_key.
 func (hub *WebSocketHub) Broadcast(deviceKey string, data []byte) {
@@ -92,7 +139,7 @@ func (hub *WebSocketHub) Broadcast(deviceKey string, data []byte) {
 	hub.mu.RUnlock()
 
 	for _, conn := range snapshot {
-		if err := websocket.Message.Send(conn, string(data)); err != nil {
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 			slog.Warn("websocket send failed", "device", deviceKey, "error", err)
 			hub.unsubscribe(deviceKey, conn)
 		}

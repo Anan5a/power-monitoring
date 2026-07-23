@@ -1,28 +1,32 @@
 // internal/export.go — GDPR data export. Users request an export of all
-// their data. The job runs async, writes a CSV/JSON zip to MinIO, and
-// emails a download link.
+// their data. The job runs async, writes a JSON blob to MinIO, and stores
+// the object path in the export_jobs row.
 
 package internal
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minio/minio-go/v7"
 )
 
 type ExportHandler struct {
-	pg      *pgxpool.Pool
-	minio   any
-	baseURL string
+	pg       *pgxpool.Pool
+	minio    *minio.Client
+	bucket   string
+	baseURL  string
 }
 
-func NewExportHandler(pg *pgxpool.Pool, minio any, baseURL string) *ExportHandler {
-	return &ExportHandler{pg: pg, minio: minio, baseURL: baseURL}
+func NewExportHandler(pg *pgxpool.Pool, minio *minio.Client, bucket, baseURL string) *ExportHandler {
+	return &ExportHandler{pg: pg, minio: minio, bucket: bucket, baseURL: baseURL}
 }
 
 // RequestExport starts an async data export job
@@ -33,13 +37,28 @@ func NewExportHandler(pg *pgxpool.Pool, minio any, baseURL string) *ExportHandle
 // @Security     BearerAuth
 // @Router       /export/request [post]
 func (h *ExportHandler) RequestExport(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(ContextUserID).(string)
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
+	if h.pg == nil {
+		writeError(w, "internal_error", "database unavailable", http.StatusInternalServerError)
+		return
+	}
+	if h.minio == nil {
+		writeError(w, "internal_error", "object storage unavailable", http.StatusInternalServerError)
+		return
+	}
 
 	var jobID string
-	h.pg.QueryRow(r.Context(),
+	if err := h.pg.QueryRow(r.Context(),
 		`INSERT INTO export_jobs (user_id, status, expires_at)
 		 VALUES ($1, 'pending', now() + interval '7 days') RETURNING id`,
-		userID).Scan(&jobID)
+		userID).Scan(&jobID); err != nil {
+		writeError(w, "internal_error", "failed to create export job", http.StatusInternalServerError)
+		return
+	}
 
 	go h.runExport(context.Background(), jobID, userID)
 
@@ -47,11 +66,21 @@ func (h *ExportHandler) RequestExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ExportHandler) runExport(ctx context.Context, jobID, userID string) {
-	h.pg.Exec(ctx, `UPDATE export_jobs SET status = 'running' WHERE id = $1`, jobID)
-
 	markFailed := func(err error) {
 		slog.Error("export failed", "job", jobID, "error", err)
-		h.pg.Exec(ctx, `UPDATE export_jobs SET status = 'failed', error = $2 WHERE id = $1`, jobID, err.Error())
+		if h.pg != nil {
+			h.pg.Exec(ctx, `UPDATE export_jobs SET status = 'failed', error = $2 WHERE id = $1`, jobID, err.Error())
+		}
+	}
+
+	if h.pg == nil || h.minio == nil {
+		markFailed(fmt.Errorf("export dependencies unavailable"))
+		return
+	}
+
+	if _, err := h.pg.Exec(ctx, `UPDATE export_jobs SET status = 'running' WHERE id = $1`, jobID); err != nil {
+		markFailed(err)
+		return
 	}
 
 	var user struct {
@@ -73,21 +102,22 @@ func (h *ExportHandler) runExport(ctx context.Context, jobID, userID string) {
 		return
 	}
 	type DeviceExport struct {
-		Key  string `json:"key"`
-		Name string `json:"name"`
-		Type string `json:"type"`
+		Key       string    `json:"key"`
+		Name      string    `json:"name"`
+		Type      string    `json:"type"`
+		CreatedAt time.Time `json:"created_at"`
 	}
 	devices := []DeviceExport{}
 	for rows.Next() {
 		var d DeviceExport
-		rows.Scan(&d.Key, &d.Name, &d.Type)
+		rows.Scan(&d.Key, &d.Name, &d.Type, &d.CreatedAt)
 		devices = append(devices, d)
 	}
 	rows.Close()
 
 	export := map[string]any{
-		"user":    user,
-		"devices": devices,
+		"user":        user,
+		"devices":     devices,
 		"exported_at": time.Now().UTC(),
 	}
 
@@ -97,10 +127,20 @@ func (h *ExportHandler) runExport(ctx context.Context, jobID, userID string) {
 		return
 	}
 
-	h.pg.Exec(ctx,
+	objectName := fmt.Sprintf("exports/%s.json", jobID)
+	if _, err := h.minio.PutObject(ctx, h.bucket, objectName, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{ContentType: "application/json"}); err != nil {
+		markFailed(err)
+		return
+	}
+
+	if _, err := h.pg.Exec(ctx,
 		`UPDATE export_jobs SET status = 'ready', file_path = $2, row_count = $3, completed_at = now()
 		 WHERE id = $1`,
-		jobID, fmt.Sprintf("exports/%s.json", jobID), len(devices))
+		jobID, objectName, len(devices)); err != nil {
+		markFailed(err)
+		return
+	}
+	slog.Info("export ready", "job", jobID, "path", objectName)
 }
 
 // GetExportStatus returns the status of an export job
@@ -114,7 +154,16 @@ func (h *ExportHandler) runExport(ctx context.Context, jobID, userID string) {
 // @Router       /export/status/{id} [get]
 func (h *ExportHandler) GetExportStatus(w http.ResponseWriter, r *http.Request) {
 	jobID := chi.URLParam(r, "id")
-	userID := r.Context().Value(ContextUserID).(string)
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
+
+	if h.pg == nil {
+		writeError(w, "internal_error", "database unavailable", http.StatusInternalServerError)
+		return
+	}
 
 	var status, filePath string
 	var completedAt *time.Time

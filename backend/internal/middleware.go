@@ -37,6 +37,10 @@ func AuthMiddleware(jwt *JWTManager) func(http.Handler) http.Handler {
 				writeError(w, "unauthorized", "invalid or expired token", http.StatusUnauthorized)
 				return
 			}
+			if claims.UserID == "" {
+				writeError(w, "unauthorized", "invalid token claims", http.StatusUnauthorized)
+				return
+			}
 			ctx := context.WithValue(r.Context(), ContextUserID, claims.UserID)
 			ctx = context.WithValue(ctx, ContextUserRole, claims.Role)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -96,5 +100,5 @@ func writeError(w http.ResponseWriter, code, message string, status int) {
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(APIResponse{Data: data})
+	json.NewEncoder(w).Encode(data)
 }

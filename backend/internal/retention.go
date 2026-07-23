@@ -25,6 +25,9 @@ func NewRetentionCleanup(pg *pgxpool.Pool, ch clickhouse.Conn) *RetentionCleanup
 // Run deletes telemetry older than each device's plan retention.
 // Called hourly by a goroutine in the ingest worker.
 func (rc *RetentionCleanup) Run(ctx context.Context) error {
+	if rc.pg == nil {
+		return nil
+	}
 	rows, err := rc.pg.Query(ctx, `
 		SELECT d.device_key, lp.retention_days
 		FROM devices d
@@ -49,7 +52,7 @@ func (rc *RetentionCleanup) Run(ctx context.Context) error {
 		// ClickHouse lightweight delete
 		for _, key := range keys {
 			rc.ch.Exec(ctx,
-				`ALTER TABLE device_telemetry DELETE WHERE device_id = $1 AND ts < $2`,
+				`ALTER TABLE device_telemetry DELETE WHERE device_id = ? AND ts < ?`,
 				key, cutoff)
 		}
 		slog.Info("retention cleanup", "devices", len(keys), "days", days, "cutoff", cutoff)

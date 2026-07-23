@@ -4,6 +4,7 @@
 package internal
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -81,8 +82,19 @@ func (h *GroupHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /groups/{id}/devices/{key} [post]
 func (h *GroupHandler) AddDeviceToGroup(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
 	groupID := chi.URLParam(r, "id")
 	deviceKey := chi.URLParam(r, "key")
+
+	if !h.isDeviceOwner(r.Context(), deviceKey, userID) {
+		writeError(w, "not_found", "device not found", http.StatusNotFound)
+		return
+	}
+
 	_, err := h.pg.Exec(r.Context(),
 		`INSERT INTO device_group_members (group_id, device_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		groupID, deviceKey)
@@ -103,8 +115,19 @@ func (h *GroupHandler) AddDeviceToGroup(w http.ResponseWriter, r *http.Request) 
 // @Security     BearerAuth
 // @Router       /groups/{id}/devices/{key} [delete]
 func (h *GroupHandler) RemoveDeviceFromGroup(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
 	groupID := chi.URLParam(r, "id")
 	deviceKey := chi.URLParam(r, "key")
+
+	if !h.isDeviceOwner(r.Context(), deviceKey, userID) {
+		writeError(w, "not_found", "device not found", http.StatusNotFound)
+		return
+	}
+
 	h.pg.Exec(r.Context(),
 		`DELETE FROM device_group_members WHERE group_id = $1 AND device_key = $2`,
 		groupID, deviceKey)
@@ -151,16 +174,31 @@ func (h *GroupHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /devices/{key}/tags/{tag_key} [post]
 func (h *GroupHandler) SetTag(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
 	deviceKey := chi.URLParam(r, "key")
 	tagKey := chi.URLParam(r, "tag_key")
+	if !h.isDeviceOwner(r.Context(), deviceKey, userID) {
+		writeError(w, "not_found", "device not found", http.StatusNotFound)
+		return
+	}
 	var req struct {
 		Value string `json:"value"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
-	h.pg.Exec(r.Context(),
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "bad_request", "invalid body", http.StatusBadRequest)
+		return
+	}
+	if _, err := h.pg.Exec(r.Context(),
 		`INSERT INTO device_tags (device_key, key, value) VALUES ($1, $2, $3)
 		 ON CONFLICT (device_key, key) DO UPDATE SET value = $3`,
-		deviceKey, tagKey, req.Value)
+		deviceKey, tagKey, req.Value); err != nil {
+		writeError(w, "internal_error", "failed to set tag", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
 }
 
@@ -174,10 +212,36 @@ func (h *GroupHandler) SetTag(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /devices/{key}/tags/{tag_key} [delete]
 func (h *GroupHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
 	deviceKey := chi.URLParam(r, "key")
 	tagKey := chi.URLParam(r, "tag_key")
-	h.pg.Exec(r.Context(),
+	if !h.isDeviceOwner(r.Context(), deviceKey, userID) {
+		writeError(w, "not_found", "device not found", http.StatusNotFound)
+		return
+	}
+	if _, err := h.pg.Exec(r.Context(),
 		`DELETE FROM device_tags WHERE device_key = $1 AND key = $2`,
-		deviceKey, tagKey)
+		deviceKey, tagKey); err != nil {
+		writeError(w, "internal_error", "failed to delete tag", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// isDeviceOwner returns true if the device is owned by the given user.
+func (h *GroupHandler) isDeviceOwner(ctx context.Context, deviceKey, userID string) bool {
+	if h.pg == nil {
+		return false
+	}
+	var ownerID *string
+	err := h.pg.QueryRow(ctx,
+		`SELECT owner_id::text FROM devices WHERE device_key = $1`, deviceKey).Scan(&ownerID)
+	if err != nil {
+		return false
+	}
+	return ownerID != nil && *ownerID == userID
 }

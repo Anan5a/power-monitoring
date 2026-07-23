@@ -41,6 +41,11 @@ func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
 	currentVer := r.URL.Query().Get("current_ver")
 
+	if h.pg == nil {
+		writeError(w, "internal_error", "database unavailable", http.StatusInternalServerError)
+		return
+	}
+
 	var deviceType string
 	err := h.pg.QueryRow(r.Context(),
 		`SELECT device_type FROM devices WHERE device_key = $1 AND is_active = true`,

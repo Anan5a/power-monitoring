@@ -1,0 +1,1045 @@
+basePath: /api/v1
+definitions:
+  internal.APIError:
+    properties:
+      error:
+        $ref: '#/definitions/internal.APIErrorDetail'
+    type: object
+  internal.APIErrorDetail:
+    properties:
+      code:
+        type: string
+      field:
+        type: string
+      message:
+        type: string
+      request_id:
+        type: string
+    type: object
+  internal.AuthResponse:
+    properties:
+      access_token:
+        type: string
+      refresh_token:
+        type: string
+      user:
+        $ref: '#/definitions/internal.User'
+    type: object
+  internal.ClaimDeviceRequest:
+    properties:
+      api_key:
+        type: string
+    type: object
+  internal.CreateGroupRequest:
+    properties:
+      color:
+        type: string
+      description:
+        type: string
+      name:
+        type: string
+    type: object
+  internal.CreateInvoiceRequest:
+    properties:
+      amount_cents:
+        type: integer
+      audience:
+        type: string
+      description:
+        type: string
+      period_end:
+        type: string
+      period_start:
+        type: string
+      plan_id:
+        type: integer
+      user_id:
+        type: string
+    type: object
+  internal.CreateReleaseRequest:
+    properties:
+      binary_path:
+        type: string
+      binary_size:
+        type: integer
+      changelog:
+        type: string
+      channel:
+        type: string
+      device_type:
+        type: string
+      sha256:
+        type: string
+      version:
+        type: string
+    type: object
+  internal.Device:
+    properties:
+      created_at:
+        type: string
+      device_key:
+        type: string
+      device_name:
+        type: string
+      device_type:
+        type: string
+      firmware_ver:
+        type: string
+      id:
+        type: string
+      is_active:
+        type: boolean
+      last_seen_at:
+        type: string
+      owner_id:
+        description: nil = unclaimed
+        type: string
+    type: object
+  internal.ExportRequestResponse:
+    properties:
+      job_id:
+        type: string
+    type: object
+  internal.ExportStatusResponse:
+    properties:
+      completed_at:
+        type: string
+      file_path:
+        type: string
+      status:
+        type: string
+    type: object
+  internal.Group:
+    properties:
+      color:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  internal.HealthResponse:
+    properties:
+      services:
+        additionalProperties: {}
+        type: object
+      status:
+        type: string
+    type: object
+  internal.Invoice:
+    properties:
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      invoice_number:
+        type: string
+      status:
+        type: string
+      total_cents:
+        type: integer
+    type: object
+  internal.LatestTelemetry:
+    properties:
+      battery_power:
+        type: number
+      dc_load_power:
+        type: number
+      device_key:
+        type: string
+      fields:
+        additionalProperties:
+          format: float64
+          type: number
+        type: object
+      inverter_power:
+        type: number
+      max_soc_pct:
+        type: number
+      min_soc_pct:
+        type: number
+      pv_power:
+        type: number
+      recorded_at:
+        type: string
+      system_status:
+        type: integer
+      total_energy_wh:
+        type: number
+    type: object
+  internal.LoginRequest:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  internal.MQTTACL:
+    properties:
+      access:
+        type: string
+      topic:
+        type: string
+    type: object
+  internal.MQTTAuthRequest:
+    properties:
+      password:
+        type: string
+      username:
+        type: string
+    type: object
+  internal.MQTTAuthResponse:
+    properties:
+      acls:
+        items:
+          $ref: '#/definitions/internal.MQTTACL'
+        type: array
+      ok:
+        type: boolean
+    type: object
+  internal.MaintenanceToggleRequest:
+    properties:
+      enabled:
+        type: boolean
+      message:
+        type: string
+    type: object
+  internal.NotificationPrefs:
+    properties:
+      alert_fired_email:
+        type: boolean
+      alert_resolved_email:
+        type: boolean
+      quiet_hours_end:
+        type: integer
+      quiet_hours_start:
+        type: integer
+    type: object
+  internal.OTACheckResponse:
+    properties:
+      binary_size:
+        type: integer
+      binary_url:
+        type: string
+      sha256:
+        type: string
+      update_available:
+        type: boolean
+      version:
+        type: string
+    type: object
+  internal.RefreshRequest:
+    properties:
+      refresh_token:
+        type: string
+    type: object
+  internal.RegisterRequest:
+    properties:
+      display_name:
+        type: string
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  internal.SearchResponse:
+    properties:
+      query:
+        type: string
+      results:
+        items:
+          $ref: '#/definitions/internal.SearchResult'
+        type: array
+      total:
+        type: integer
+    type: object
+  internal.SearchResult:
+    properties:
+      entity_type:
+        type: string
+      id:
+        type: string
+      label:
+        type: string
+      subtitle:
+        type: string
+    type: object
+  internal.SetTagRequest:
+    properties:
+      value:
+        type: string
+    type: object
+  internal.Tags:
+    additionalProperties:
+      type: string
+    type: object
+  internal.UpdateNotificationPrefsRequest:
+    properties:
+      alert_fired_email:
+        type: boolean
+      alert_resolved_email:
+        type: boolean
+      quiet_hours_end:
+        type: integer
+      quiet_hours_start:
+        type: integer
+    type: object
+  internal.User:
+    properties:
+      created_at:
+        type: string
+      display_name:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      role:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: dev@iotplatform.local
+    name: IoT Platform Team
+  description: 'Self-hosted IoT platform backend. Two binaries: api (HTTP/WS) and
+    ingest (MQTT).'
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: http://swagger.io/terms/
+  title: IoT Platform API
+  version: 1.0.0
+paths:
+  /admin/maintenance:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Maintenance settings
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.MaintenanceToggleRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Toggle maintenance mode
+      tags:
+      - Admin
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Login credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.AuthResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      summary: Login
+      tags:
+      - Auth
+  /auth/oauth/{provider}:
+    get:
+      parameters:
+      - description: Provider (google, github)
+        in: path
+        name: provider
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "307":
+          description: Redirect to OAuth provider
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      summary: Initiate OAuth login
+      tags:
+      - Auth
+  /auth/oauth/{provider}/callback:
+    get:
+      parameters:
+      - description: Provider (google, github)
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Authorization code
+        in: query
+        name: code
+        required: true
+        type: string
+      - description: CSRF state token
+        in: query
+        name: state
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.AuthResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      summary: OAuth callback
+      tags:
+      - Auth
+  /auth/refresh:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Refresh token
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.RefreshRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      summary: Refresh JWT tokens
+      tags:
+      - Auth
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Registration details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal.AuthResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal.APIError'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      summary: Register a new user
+      tags:
+      - Auth
+  /billing/invoices:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal.Invoice'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: List invoices
+      tags:
+      - Billing
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Invoice details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.CreateInvoiceRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      security:
+      - BearerAuth: []
+      summary: Create invoice
+      tags:
+      - Billing
+  /billing/invoices/{id}/mark-paid:
+    post:
+      parameters:
+      - description: Invoice ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal.APIError'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      security:
+      - BearerAuth: []
+      summary: Mark invoice as paid
+      tags:
+      - Billing
+  /devices:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal.Device'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: List user's devices
+      tags:
+      - Devices
+  /devices/{key}:
+    get:
+      parameters:
+      - description: Device key
+        in: path
+        name: key
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.Device'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      security:
+      - BearerAuth: []
+      summary: Get device details
+      tags:
+      - Devices
+  /devices/{key}/claim:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Device key
+        in: path
+        name: key
+        required: true
+        type: string
+      - description: Device API key
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.ClaimDeviceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      security:
+      - BearerAuth: []
+      summary: Claim an unclaimed device
+      tags:
+      - Devices
+  /devices/{key}/tags:
+    get:
+      parameters:
+      - description: Device key
+        in: path
+        name: key
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.Tags'
+      security:
+      - BearerAuth: []
+      summary: List device tags
+      tags:
+      - Tags
+  /devices/{key}/tags/{tag_key}:
+    delete:
+      parameters:
+      - description: Device key
+        in: path
+        name: key
+        required: true
+        type: string
+      - description: Tag key
+        in: path
+        name: tag_key
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Delete a device tag
+      tags:
+      - Tags
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Device key
+        in: path
+        name: key
+        required: true
+        type: string
+      - description: Tag key
+        in: path
+        name: tag_key
+        required: true
+        type: string
+      - description: Tag value
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.SetTagRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Set a device tag
+      tags:
+      - Tags
+  /export/request:
+    post:
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/internal.ExportRequestResponse'
+      security:
+      - BearerAuth: []
+      summary: Request data export
+      tags:
+      - Export
+  /export/status/{id}:
+    get:
+      parameters:
+      - description: Export job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.ExportStatusResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      security:
+      - BearerAuth: []
+      summary: Get export job status
+      tags:
+      - Export
+  /groups:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal.Group'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: List device groups
+      tags:
+      - Groups
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Group details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.CreateGroupRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      security:
+      - BearerAuth: []
+      summary: Create a device group
+      tags:
+      - Groups
+  /groups/{id}/devices/{key}:
+    delete:
+      parameters:
+      - description: Group ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Device key
+        in: path
+        name: key
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Remove device from group
+      tags:
+      - Groups
+    post:
+      parameters:
+      - description: Group ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Device key
+        in: path
+        name: key
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Add device to group
+      tags:
+      - Groups
+  /health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.HealthResponse'
+      summary: Health check
+      tags:
+      - Monitoring
+  /mqtt/auth:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Device credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.MQTTAuthRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.MQTTAuthResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal.MQTTAuthResponse'
+      summary: MQTT auth (Mosquitto backend)
+      tags:
+      - MQTT
+  /ota/check/{key}:
+    get:
+      parameters:
+      - description: Device key
+        in: path
+        name: key
+        required: true
+        type: string
+      - description: Current firmware version
+        in: query
+        name: current_ver
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.OTACheckResponse'
+      summary: Check for OTA update
+      tags:
+      - OTA
+  /ota/releases:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Release details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.CreateReleaseRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      security:
+      - BearerAuth: []
+      summary: Create OTA release
+      tags:
+      - OTA
+  /search:
+    get:
+      parameters:
+      - description: Search query
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: 'Entity types: devices,audit (comma-separated)'
+        in: query
+        name: type
+        type: string
+      - default: 20
+        description: Max results
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Result offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.SearchResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      security:
+      - BearerAuth: []
+      summary: Full-text search
+      tags:
+      - Search
+  /telemetry/{key}/latest:
+    get:
+      parameters:
+      - description: Device key
+        in: path
+        name: key
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.LatestTelemetry'
+      security:
+      - BearerAuth: []
+      summary: Get latest telemetry
+      tags:
+      - Telemetry
+  /users/me/notifications:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.NotificationPrefs'
+      security:
+      - BearerAuth: []
+      summary: Get notification preferences
+      tags:
+      - Notifications
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Preferences
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.UpdateNotificationPrefsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update notification preferences
+      tags:
+      - Notifications
+  /ws:
+    get:
+      description: |-
+        Connect via WebSocket, then send JSON messages:\n
+        {"type":"subscribe","device_keys":["AABB..."]}\n
+        {"type":"unsubscribe","device_keys":["AABB..."]}\n
+        {"type":"ping"}\n
+        Server pushes enriched telemetry as JSON strings.
+      responses:
+        "101":
+          description: Switching Protocols
+      security:
+      - BearerAuth: []
+      summary: WebSocket endpoint
+      tags:
+      - WebSocket
+securityDefinitions:
+  BearerAuth:
+    description: JWT access token from /auth/login or /auth/register
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

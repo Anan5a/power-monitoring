@@ -37,7 +37,7 @@ func (e *AlertEngine) Evaluate(ctx context.Context, deviceKey string, enriched *
 	rules := e.getRules(ctx)
 
 	for _, rule := range rules {
-		if !e.matchesDevice(rule, deviceKey) {
+		if !e.matchesDevice(rule, deviceKey, enriched.DeviceType) {
 			continue
 		}
 		rawValue := e.getFieldValue(enriched, rule.Field)
@@ -121,8 +121,11 @@ func (e *AlertEngine) loadRules(ctx context.Context) ([]alertRule, error) {
 	return rules, nil
 }
 
-func (e *AlertEngine) matchesDevice(rule alertRule, deviceKey string) bool {
+func (e *AlertEngine) matchesDevice(rule alertRule, deviceKey, deviceType string) bool {
 	if rule.DeviceKey != "" && rule.DeviceKey != deviceKey {
+		return false
+	}
+	if rule.DeviceType != "" && rule.DeviceType != deviceType {
 		return false
 	}
 	return true

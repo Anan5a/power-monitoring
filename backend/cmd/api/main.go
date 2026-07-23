@@ -19,14 +19,14 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	httpSwagger "github.com/swaggo/http-swagger"
-	"go.uber.org/automaxprocs"
+	_ "go.uber.org/automaxprocs"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/Anan5a/iot-platform/internal"
 )
 
 func main() {
-	automaxprocs.Log()
-
 	cfg, err := internal.LoadConfig()
 	if err != nil {
 		slog.Error("config", "error", err)
@@ -86,7 +86,17 @@ func main() {
 	searchHandler := internal.NewSearchHandler(pg)
 	oauthHandler := internal.NewOAuthHandler(pg, jwt, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GitHubClientID, cfg.GitHubClientSecret, cfg.BaseURL)
 	billingHandler := internal.NewBillingHandler(pg)
-	exportHandler := internal.NewExportHandler(pg, nil, "http://localhost:8080")
+
+	minioClient, err := minio.New(cfg.MinIOEndpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(cfg.MinIOUser, cfg.MINIOPassword, ""),
+		Secure: false,
+	})
+	if err != nil {
+		slog.Error("minio", "error", err)
+		os.Exit(1)
+	}
+
+	exportHandler := internal.NewExportHandler(pg, minioClient, cfg.MinIOBucket, cfg.BaseURL)
 	maintenanceMode := internal.NewMaintenanceMode(pg)
 
 	r := chi.NewRouter()

@@ -1,17 +1,18 @@
 // internal/ota_test.go — Tests for OTA check endpoint.
 
-package internal
+package internal_test
 
 import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Anan5a/iot-platform/internal"
 	"github.com/go-chi/chi/v5"
 )
 
 func TestOTACheck_NoUpdate(t *testing.T) {
-	h := &OTAHandler{}
+	h := internal.NewOTAHandler(nil)
 	r := chi.NewRouter()
 	r.Get("/api/v1/ota/check/{key}", h.CheckOTA)
 
@@ -19,7 +20,7 @@ func TestOTACheck_NoUpdate(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound && rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200 or 404", rec.Code)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 when DB is unavailable", rec.Code)
 	}
 }

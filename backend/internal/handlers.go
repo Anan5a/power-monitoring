@@ -23,7 +23,6 @@
 package internal
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -208,7 +207,11 @@ func (h *Handlers) RefreshToken(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /devices [get]
 func (h *Handlers) ListDevices(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(ContextUserID).(string)
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
 
 	rows, err := h.pg.Query(r.Context(),
 		`SELECT id, device_key, device_name, device_type, owner_id::text, is_active,
@@ -242,7 +245,11 @@ func (h *Handlers) ListDevices(w http.ResponseWriter, r *http.Request) {
 // @Router       /devices/{key} [get]
 func (h *Handlers) GetDevice(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
-	userID := r.Context().Value(ContextUserID).(string)
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
 
 	var d Device
 	err := h.pg.QueryRow(r.Context(),
@@ -276,7 +283,11 @@ func (h *Handlers) GetDevice(w http.ResponseWriter, r *http.Request) {
 // @Router       /devices/{key}/claim [post]
 func (h *Handlers) ClaimDevice(w http.ResponseWriter, r *http.Request) {
 	deviceKey := chi.URLParam(r, "key")
-	userID := r.Context().Value(ContextUserID).(string)
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
 
 	var req ClaimDeviceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -373,7 +384,9 @@ func (h *Handlers) GetLatestTelemetry(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	services := map[string]any{}
 
-	if err := h.pg.Ping(r.Context()); err != nil {
+	if h.pg == nil {
+		services["postgres"] = map[string]any{"status": "unknown"}
+	} else if err := h.pg.Ping(r.Context()); err != nil {
 		services["postgres"] = map[string]any{"status": "down", "error": err.Error()}
 	} else {
 		services["postgres"] = map[string]any{"status": "ok"}
@@ -395,7 +408,11 @@ func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /users/me/notifications [get]
 func (h *Handlers) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(ContextUserID).(string)
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
 	var prefs NotificationPrefs
 	err := h.pg.QueryRow(r.Context(),
 		`SELECT alert_fired_email, alert_resolved_email, quiet_hours_start, quiet_hours_end
@@ -418,7 +435,11 @@ func (h *Handlers) GetNotificationPrefs(w http.ResponseWriter, r *http.Request) 
 // @Security     BearerAuth
 // @Router       /users/me/notifications [patch]
 func (h *Handlers) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(ContextUserID).(string)
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
 	var req UpdateNotificationPrefsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "bad_request", "invalid body", http.StatusBadRequest)

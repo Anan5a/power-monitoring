@@ -79,6 +79,7 @@ type TelemetryRow struct {
 // The API receives this and pushes it to WebSocket clients.
 type EnrichedTelemetry struct {
 	DeviceKey     string             `json:"device_key"`
+	DeviceType    string             `json:"device_type"`
 	Timestamp     int64              `json:"ts"`
 	TimestampMS   int                `json:"ts_ms"`
 	Schema        string             `json:"schema"`

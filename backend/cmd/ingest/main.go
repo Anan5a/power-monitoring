@@ -12,14 +12,12 @@ import (
 	"syscall"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"go.uber.org/automaxprocs"
+	_ "go.uber.org/automaxprocs"
 
 	"github.com/Anan5a/iot-platform/internal"
 )
 
 func main() {
-	automaxprocs.Log()
-
 	cfg, err := internal.LoadConfig()
 	if err != nil {
 		slog.Error("config", "error", err)

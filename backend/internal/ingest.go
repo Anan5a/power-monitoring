@@ -76,7 +76,7 @@ func (p *Pipeline) Process(ctx context.Context, msg MQTTMessage) error {
 		return fmt.Errorf("parse payload: %w", err)
 	}
 
-	deviceKey := extractDeviceKey(msg.Topic())
+	deviceKey := ExtractDeviceKey(msg.Topic())
 	device, err := p.resolver.Resolve(ctx, deviceKey)
 	if err != nil {
 		return fmt.Errorf("resolve device %s: %w", deviceKey, err)
@@ -109,6 +109,7 @@ func (p *Pipeline) Process(ctx context.Context, msg MQTTMessage) error {
 	// Republish to live/{device_key}
 	livePayload, _ := json.Marshal(EnrichedTelemetry{
 		DeviceKey:     deviceKey,
+		DeviceType:    device.DeviceType,
 		Timestamp:     raw.Ts,
 		TimestampMS:   raw.TsMS,
 		Schema:        raw.Schema,
@@ -158,7 +159,7 @@ func (r *PGDeviceResolver) Resolve(ctx context.Context, deviceKey string) (*Devi
 	return &d, nil
 }
 
-func extractDeviceKey(topic string) string {
+func ExtractDeviceKey(topic string) string {
 	// topic = "telemetry/{device_type}/{device_key}"
 	parts := splitTopic(topic)
 	if len(parts) >= 3 {

@@ -5,6 +5,7 @@
 package internal
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -28,9 +29,12 @@ func NewMaintenanceMode(pg *pgxpool.Pool) *MaintenanceMode {
 }
 
 func (m *MaintenanceMode) refresh() {
+	if m.pg == nil {
+		return
+	}
 	var enabled bool
 	var message string
-	err := m.pg.QueryRow(nil,
+	err := m.pg.QueryRow(context.Background(),
 		`SELECT enabled, message FROM maintenance_mode LIMIT 1`).Scan(&enabled, &message)
 	if err != nil {
 		return
@@ -43,7 +47,7 @@ func (m *MaintenanceMode) refresh() {
 }
 
 func (m *MaintenanceMode) IsEnabled() bool {
-	if time.Since(m.lastCheck) > 30*time.Second {
+	if m.pg != nil && time.Since(m.lastCheck) > 30*time.Second {
 		m.refresh()
 	}
 	m.mu.RLock()
@@ -94,10 +98,17 @@ func (m *MaintenanceMode) ToggleHandler(w http.ResponseWriter, r *http.Request) 
 		writeError(w, "bad_request", "invalid body", http.StatusBadRequest)
 		return
 	}
-	userID := r.Context().Value(ContextUserID).(string)
-	m.pg.Exec(nil,
-		`UPDATE maintenance_mode SET enabled = $1, message = $2, updated_by = $3, updated_at = now()`,
-		req.Enabled, req.Message, userID)
-	m.refresh()
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
+		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
+		return
+	}
+
+	if m.pg != nil {
+		m.pg.Exec(r.Context(),
+			`UPDATE maintenance_mode SET enabled = $1, message = $2, updated_by = $3, updated_at = now()`,
+			req.Enabled, req.Message, userID)
+		m.refresh()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": req.Enabled, "message": req.Message})
 }

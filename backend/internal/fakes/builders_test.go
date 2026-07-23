@@ -3,7 +3,7 @@ package fakes
 import "testing"
 
 func TestDeviceBuilder(t *testing.T) {
-	dev := ADevice("AABBCCDDEEFF").ownedBy("user-1").build()
+	dev := ADevice("AABBCCDDEEFF").ownedBy("user-1").Build()
 	if dev.DeviceKey != "AABBCCDDEEFF" {
 		t.Errorf("DeviceKey = %q, want AABBCCDDEEFF", dev.DeviceKey)
 	}

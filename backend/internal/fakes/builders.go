@@ -6,7 +6,7 @@ package fakes
 import (
 	"time"
 
-	"github.com/yourorg/iot-platform/internal"
+	"github.com/Anan5a/iot-platform/internal"
 )
 
 // ── Device builder ──────────────────────────────────────────────────
@@ -35,7 +35,7 @@ func (b *DeviceBuilder) withType(t string) *DeviceBuilder {
 	return b
 }
 
-func (b *DeviceBuilder) build() *internal.Device {
+func (b *DeviceBuilder) Build() *internal.Device {
 	return &b.d
 }
 

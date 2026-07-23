@@ -52,13 +52,14 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	results := []SearchResult{}
 
 	if types == "" || strings.Contains(types, "devices") {
+		like := "%" + q + "%"
 		rows, _ := h.pg.Query(r.Context(), `
 			SELECT device_key, device_name, device_type
 			FROM devices
 			WHERE search_vector @@ plainto_tsquery('english', $1)
-			   OR device_key ILIKE '%' || $1 || '%'
+			   OR device_key ILIKE $4
 			ORDER BY ts_rank(search_vector, plainto_tsquery('english', $1)) DESC
-			LIMIT $2 OFFSET $3`, q, limit, offset)
+			LIMIT $2 OFFSET $3`, q, limit, offset, like)
 		if rows != nil {
 			for rows.Next() {
 				var key, name, dtype string

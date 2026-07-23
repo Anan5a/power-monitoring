@@ -1,27 +1,28 @@
 // internal/ingest_test.go — Tests for the MQTT ingest pipeline.
 
-package internal
+package internal_test
 
 import (
 	"context"
 	"testing"
 
-	"github.com/yourorg/iot-platform/internal/fakes"
+	"github.com/Anan5a/iot-platform/internal"
+	"github.com/Anan5a/iot-platform/internal/fakes"
 )
 
 func TestPipeline_Process_StoresAndRepublishes(t *testing.T) {
 	clock := fakes.ParseClock("2026-07-12T10:00:00Z")
 	pub := &fakes.FakePublisher{}
 	store := fakes.NewMemStore()
-	enricher := NewEnricher()
+	enricher := internal.NewEnricher()
 
-	pipe := &Pipeline{
-		resolver: &fakes.StubResolver{Device: fakes.ADevice("AABBCCDDEEFF").build()},
-		enricher: enricher,
-		store:    store,
-		mqtt:     pub,
-		clock:    clock,
-	}
+	pipe := internal.NewPipeline(
+		&fakes.StubResolver{Device: fakes.ADevice("AABBCCDDEEFF").Build()},
+		enricher,
+		store,
+		pub,
+		clock,
+	)
 
 	payload := []byte(`{
 		"ts": 1720000000, "ts_ms": 0, "schema": "telemetry_v1", "fw": "2.0.0",
@@ -58,9 +59,9 @@ func TestExtractDeviceKey(t *testing.T) {
 		{"status/AABBCCDDEEFF/online", "online"},
 	}
 	for _, tt := range tests {
-		got := extractDeviceKey(tt.topic)
+		got := internal.ExtractDeviceKey(tt.topic)
 		if got != tt.want {
-			t.Errorf("extractDeviceKey(%q) = %q, want %q", tt.topic, got, tt.want)
+			t.Errorf("ExtractDeviceKey(%q) = %q, want %q", tt.topic, got, tt.want)
 		}
 	}
 }

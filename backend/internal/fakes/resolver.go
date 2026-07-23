@@ -5,7 +5,7 @@ package fakes
 import (
 	"context"
 
-	"github.com/yourorg/iot-platform/internal"
+	"github.com/Anan5a/iot-platform/internal"
 )
 
 type StubResolver struct {

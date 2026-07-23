@@ -8,8 +8,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"html/template"
+	htmltemplate "html/template"
 	"log/slog"
+	"text/template"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -96,8 +97,8 @@ func (e *EmailService) sendOne(ctx context.Context, id int64, key, recipient str
 	vars["PlatformName"] = e.platform
 
 	subject := renderText(tmpl.Subject, vars)
-	bodyHTML := renderText(tmpl.BodyHTML, vars)
 	bodyText := renderText(tmpl.BodyText, vars)
+	bodyHTML := renderHTML(tmpl.BodyHTML, vars)
 
 	msg := gomail.NewMessage()
 	msg.SetHeader("From", e.fromAddr)
@@ -136,13 +137,23 @@ func (e *EmailService) failOne(ctx context.Context, id int64, err error) {
 		UPDATE email_queue
 		SET status = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'queued' END,
 		    last_error = $2,
-		    next_attempt_at = now() + (interval '1 minute' * (5 ^ attempts))
+		    next_attempt_at = now() + (interval '1 minute' * power(2, attempts))
 		WHERE id = $1`, id, err.Error())
 	slog.Error("email send failed", "id", id, "error", err)
 }
 
 func renderText(tmpl string, vars map[string]any) string {
 	t, err := template.New("").Parse(tmpl)
+	if err != nil {
+		return tmpl
+	}
+	var buf bytes.Buffer
+	t.Execute(&buf, vars)
+	return buf.String()
+}
+
+func renderHTML(tmpl string, vars map[string]any) string {
+	t, err := htmltemplate.New("").Parse(tmpl)
 	if err != nil {
 		return tmpl
 	}
