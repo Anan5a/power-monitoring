@@ -38,3 +38,27 @@ func TestRequiredSamples(t *testing.T) {
 		t.Errorf("requiredSamples(6) = %d, want 2", got)
 	}
 }
+
+func TestMatchesDevice_DeviceTypeFilter(t *testing.T) {
+	e := &AlertEngine{}
+
+	// Device type matches
+	if !e.matchesDevice(alertRule{DeviceType: "power_monitor_v2"}, "dev-1", "power_monitor_v2") {
+		t.Error("expected match for same device_type")
+	}
+
+	// Device type does not match
+	if e.matchesDevice(alertRule{DeviceType: "power_monitor_v2"}, "dev-1", "temp_sensor") {
+		t.Error("expected no match for different device_type")
+	}
+
+	// Empty device_type matches all
+	if !e.matchesDevice(alertRule{DeviceType: ""}, "dev-1", "temp_sensor") {
+		t.Error("expected match when device_type is empty")
+	}
+
+	// DeviceKey filter still works
+	if e.matchesDevice(alertRule{DeviceKey: "other", DeviceType: ""}, "dev-1", "power_monitor_v2") {
+		t.Error("expected no match for different device_key")
+	}
+}

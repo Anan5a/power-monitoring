@@ -24,6 +24,8 @@ type Config struct {
 	// MQTT
 	MQTTBroker   string `env:"MQTT_BROKER" required:"true"`
 	MQTTClientID string `env:"MQTT_CLIENT_ID" default:"iot-platform-ingest"`
+	MQTTUser     string `env:"MQTT_USER"`
+	MQTTPassword string `env:"MQTT_PASSWORD"`
 
 	// JWT
 	JWTSecret     string        `env:"JWT_SECRET" required:"true"`
@@ -96,6 +98,8 @@ func LoadConfig() (*Config, error) {
 	setStr(&cfg.ClickHouseURL, "CLICKHOUSE_URL", "")
 	setStr(&cfg.MQTTBroker, "MQTT_BROKER", "")
 	setStr(&cfg.MQTTClientID, "MQTT_CLIENT_ID", "iot-platform-ingest")
+	setStr(&cfg.MQTTUser, "MQTT_USER", "")
+	setStr(&cfg.MQTTPassword, "MQTT_PASSWORD", "")
 	setStr(&cfg.JWTSecret, "JWT_SECRET", "")
 	setDuration(&cfg.JWTAccessTTL, "JWT_ACCESS_TTL", 15*time.Minute)
 	setDuration(&cfg.JWTRefreshTTL, "JWT_REFRESH_TTL", 720*time.Hour)

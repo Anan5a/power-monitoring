@@ -1,4 +1,7 @@
 -- Phase 1: core telemetry table. MVs and TTL added in later phases.
+CREATE DATABASE IF NOT EXISTS powermon;
+USE powermon;
+
 CREATE TABLE IF NOT EXISTS device_telemetry (
     device_id       String,
     device_type     String,

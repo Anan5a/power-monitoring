@@ -1,8 +1,11 @@
-.PHONY: build test lint clean up down migrate-up migrate-down swag-init swag-fmt
+.PHONY: build build-seed test test-integration test-cover lint clean up down migrate-up migrate-down seed-dev swag-init swag-fmt
 
 build:
 	go build -o bin/api ./cmd/api
 	go build -o bin/ingest ./cmd/ingest
+
+build-seed:
+	go build -o bin/seed ./cmd/seed
 
 test:
 	go test ./...
@@ -24,12 +27,20 @@ down:
 	docker compose down
 
 migrate-up:
-	@read -p "DATABASE_URL: " dburl; \
-	migrate -path migrations -database "$$dburl" up
+	migrate -path migrations -database "postgres://powermon:powermon@localhost:5432/powermon?sslmode=disable" up
 
 migrate-down:
-	@read -p "DATABASE_URL: " dburl; \
-	migrate -path migrations -database "$$dburl" down 1
+	migrate -path migrations -database "postgres://powermon:powermon@localhost:5432/powermon?sslmode=disable" down 1
+
+seed-dev: build-seed
+	DATABASE_URL=postgres://powermon:powermon@localhost:5432/powermon?sslmode=disable \
+	JWT_SECRET=dev-secret-32-chars-minimum-for-hs256 \
+	CLICKHOUSE_URL=clickhouse://localhost:9000/powermon?dial_timeout=10s \
+	MQTT_BROKER=tcp://localhost:1883 \
+	./bin/seed
+
+smoke: seed-dev
+	@echo "Smoke-test credentials: test@example.com / TestPass123!"
 
 swag-init:
 	swag init -g internal/handlers.go -o docs/api --parseDependency

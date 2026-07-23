@@ -54,6 +54,10 @@ func main() {
 	mqttOpts.SetClientID(cfg.MQTTClientID)
 	mqttOpts.SetCleanSession(false)
 	mqttOpts.SetAutoReconnect(true)
+	if cfg.MQTTUser != "" {
+		mqttOpts.SetUsername(cfg.MQTTUser)
+		mqttOpts.SetPassword(cfg.MQTTPassword)
+	}
 
 	mqttClient := mqtt.NewClient(mqttOpts)
 	if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {

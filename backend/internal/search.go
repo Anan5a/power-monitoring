@@ -48,6 +48,10 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "validation_error", "query q is required", http.StatusBadRequest)
 		return
 	}
+	if h.pg == nil {
+		writeJSON(w, http.StatusOK, SearchResponse{Results: []SearchResult{}, Total: 0, Query: q})
+		return
+	}
 
 	results := []SearchResult{}
 

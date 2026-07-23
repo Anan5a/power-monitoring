@@ -7,6 +7,47 @@
 
 A self-hosted IoT platform backend replacing Supabase for the power-monitoring ecosystem. Designed for multi-tenant SaaS with support for multiple device types, OTA firmware updates, and dual licensing (manufacturer + end-user).
 
+## Implementation Status
+
+This document describes the full target design. The following table separates what is currently implemented in `backend/` from what is planned/deferred.
+
+| Area | Status | Notes |
+|---|---|---|
+| Two Go binaries (`api`, `ingest`) sharing `internal/` | ✅ Implemented | `cmd/api`, `cmd/ingest` |
+| JWT auth (register/login/refresh) | ✅ Implemented | `internal/auth.go`, `internal/handlers.go` |
+| Password hashing (bcrypt) | ✅ Implemented | `internal/auth.go` |
+| Device listing / claim | ✅ Implemented | `internal/handlers.go` |
+| MQTT telemetry ingestion + enrichment | ✅ Implemented | `internal/ingest.go`, `internal/enricher.go` |
+| ClickHouse batch writer | ✅ Implemented | `internal/store.go` |
+| WebSocket live push | ✅ Implemented | `internal/websocket.go` (gorilla/websocket) |
+| Alert engine (rule eval on `live/#`) | ✅ Implemented | `internal/alerts.go` |
+| Async email queue + SMTP | ✅ Implemented | `internal/email.go` |
+| OTA release + device check | ✅ Implemented | `internal/ota.go` |
+| Mosquitto HTTP auth backend | ✅ Implemented | `internal/mqttauth.go` |
+| Rate limiting | ✅ Implemented | `internal/ratelimit.go` |
+| Full-text search | ✅ Implemented | `internal/search.go` |
+| Device groups + tags | ✅ Implemented | `internal/groups.go` |
+| Notification preferences | ✅ Implemented | `internal/handlers.go` |
+| Billing / invoices (manual) | ✅ Implemented | `internal/billing.go` |
+| Maintenance mode | ✅ Implemented | `internal/maintenance.go` |
+| GDPR data export | ✅ Implemented | `internal/export.go` |
+| OAuth (Google/GitHub) | ✅ Implemented | `internal/oauth.go` |
+| Retention cleanup | ✅ Implemented | `internal/retention.go` |
+| Docker Compose local stack | ✅ Implemented | `backend/docker-compose.yml` |
+| Organizations (`organizations`, `org_members`) | ⏳ Deferred | Schema described but no org-scoped handlers |
+| Org-level device types / schemas | ⏳ Deferred | `device_types` not implemented |
+| Device commands (`device_commands`) | ⏳ Deferred | Table exists, no endpoints |
+| Online/offline detection (`status/#`) | ⏳ Deferred | Design described, no subscriber implemented |
+| OIDC / org SSO | ⏳ Deferred | Only Google/GitHub OAuth implemented |
+| Stripe integration | ⏳ Deferred | Manual invoices only |
+| Payment methods table | ⏳ Deferred | Schema exists, no endpoints |
+| Audit log writer (`audit_log`) | ⏳ Deferred | `AuditEntry` type exists, not wired |
+| License device-cap enforcement | ⏳ Deferred | `LicenseChecker` described, not implemented |
+| Download export endpoint | ⏳ Deferred | Export upload implemented, no `GET /export/download/{id}` |
+| Caddy / HTTPS / backups | ⏳ Deferred | Documented deployment only |
+
+Current code is functional for the implemented rows above. Deferred features can be added incrementally without breaking the existing pipeline.
+
 ## Stack
 
 | Component | Technology | Role |

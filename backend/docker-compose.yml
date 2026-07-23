@@ -22,6 +22,12 @@ services:
     volumes:
       - chdata:/var/lib/clickhouse
       - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ./clickhouse/config/default-user.xml:/etc/clickhouse-server/users.d/default-user.xml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   mosquitto:
@@ -29,19 +35,36 @@ services:
     ports: ["1883:1883", "9001:9001"]
     volumes:
       - mqtt_data:/mosquitto/data
-      - ./mosquitto/config:/mosquitto/config:ro
+      - ./mosquitto/config/mosquitto-test.conf:/mosquitto/config/mosquitto.conf:ro
     restart: unless-stopped
 
   minio:
     image: minio/minio
-    ports: ["9000:9000", "9001:9001"]
+    ports: ["9002:9000", "9003:9001"]
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     volumes:
       - minio_data:/data
     command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
+
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb local/firmware --ignore-existing;
+      mc anonymous set download local/firmware/exports || true;
+      exit 0;
+      "
 
   api:
     build:
@@ -50,8 +73,9 @@ services:
     ports: ["8080:8080"]
     depends_on:
       postgres: { condition: service_healthy }
-      clickhouse: { condition: service_started }
+      clickhouse: { condition: service_healthy }
       mosquitto: { condition: service_started }
+      minio-init: { condition: service_completed_successfully }
     env_file: .env
     restart: unless-stopped
 
@@ -61,8 +85,9 @@ services:
       dockerfile: Dockerfile.ingest
     depends_on:
       postgres: { condition: service_healthy }
-      clickhouse: { condition: service_started }
+      clickhouse: { condition: service_healthy }
       mosquitto: { condition: service_started }
+      minio-init: { condition: service_completed_successfully }
     env_file: .env
     restart: unless-stopped
 

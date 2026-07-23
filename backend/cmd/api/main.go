@@ -63,6 +63,10 @@ func main() {
 	mqttOpts.AddBroker(cfg.MQTTBroker)
 	mqttOpts.SetClientID("iot-platform-api")
 	mqttOpts.SetCleanSession(true)
+	if cfg.MQTTUser != "" {
+		mqttOpts.SetUsername(cfg.MQTTUser)
+		mqttOpts.SetPassword(cfg.MQTTPassword)
+	}
 	mqttOpts.OnConnect = func(c mqtt.Client) {
 		slog.Info("MQTT connected (api)")
 		c.Subscribe("live/#", 0, func(_ mqtt.Client, msg mqtt.Message) {

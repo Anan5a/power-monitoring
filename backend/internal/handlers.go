@@ -392,6 +392,14 @@ func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 		services["postgres"] = map[string]any{"status": "ok"}
 	}
 
+	if h.ch == nil {
+		services["clickhouse"] = map[string]any{"status": "unknown"}
+	} else if err := h.ch.Ping(r.Context()); err != nil {
+		services["clickhouse"] = map[string]any{"status": "down", "error": err.Error()}
+	} else {
+		services["clickhouse"] = map[string]any{"status": "ok"}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "ok",
 		"services": services,

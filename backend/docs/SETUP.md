@@ -1,103 +1,184 @@
-# IoT Dashboard — Supabase Setup Guide
+# IoT Platform Backend — Self-Hosted Setup
 
-## 1. Create Supabase Project
+This guide replaces the old Supabase setup instructions. It covers running the new Go backend locally with Docker Compose.
 
-1. Go to [supabase.com](https://supabase.com) and sign up/login
-2. Click **New Project** → give it a name (e.g. `power-monitor`)
-3. Select a region closest to you
-4. Save the **Database Password** securely
-5. Wait for the project to provision (~2 minutes)
+## Prerequisites
 
-## 2. Get Your Credentials
+- Docker + Docker Compose
+- `go 1.22` or later (for local builds/tests)
+- `golang-migrate/migrate` CLI (used by `make migrate-up`)
 
-After the project is created, go to **Settings → API**:
+## 1. Configure environment
 
-- **Project URL**: `https://<your-project-id>.supabase.co`
-- **service_role (jwt)**: `eyJhbGc...` — used by ESP32 only
-- **anon public**: `eyJhbGc...` — used by React frontend
+```bash
+cp .env.example .env
+```
 
-You will also need the **service_role key** for the ESP32 (not the anon key). Find it in the same API settings page under `service_role` section.
+Edit `.env`. The only value you must change is `JWT_SECRET`:
 
-## 3. Run the Schema
+```env
+JWT_SECRET=replace-with-a-random-64-character-string-minimum
+```
 
-1. In Supabase dashboard, go to **SQL Editor** (left sidebar)
-2. Click **New Query**
-3. Open `backend/supabase/schema.sql` from this project
-4. Copy-paste the entire contents
-5. Click **Run**
+All other defaults point at the Docker Compose service names (`postgres`, `clickhouse`, `mosquitto`, `minio`).
 
-Verify success: you should see the tables created without errors.
+## 2. Start infrastructure
 
-## 4. Verify Tables
+```bash
+make up
+```
 
-Go to **Table Editor** in the left sidebar. You should see these tables:
-- `profiles`
-- `devices`
-- `device_profiles`
-- `telemetry_live`
-- `telemetry_archive`
-- `relay_states`
+This starts:
 
-Also verify under **Database → Extensions** that `pg_cron` is enabled.
+- `postgres` on `5432`
+- `clickhouse` on `8123` (HTTP) and `9000` (native)
+- `mosquitto` on `1883`
+- `minio` S3 API on `9002`, console on `9003`
+- `api` on `8080`
+- `ingest` (no exposed port)
 
-## 5. Configure Authentication
+A one-shot `minio-init` service creates the `firmware` bucket.
 
-1. Go to **Authentication → Providers → Email**
-2. Enable **Email/Password** if not already enabled
-3. Optionally uncheck **Allow new registrations** if you only want invited users
+> Note: the local Mosquitto container uses `allow_anonymous true` for easy local testing.
+> Leave `MQTT_USER`/`MQTT_PASSWORD` empty in `.env` when using this test config.
+> Production deployments should switch to the HTTP auth backend (see `mosquitto.conf`);
+> when using password-file auth, set `MQTT_USER`/`MQTT_PASSWORD` and create matching entries in `mosquitto/config/passwd`.
 
-## 6. Deploy the React Frontend
+## 3. Run migrations
 
-### Option A: Cloudflare Pages (recommended, free)
+```bash
+make migrate-up
+```
 
-1. Push this project to a GitHub repository
-2. Go to [cloudflare.com/pages](https://pages.cloudflare.com)
-3. Select your GitHub repo
-4. Set build command: `npm run build`
-5. Set output directory: `dist`
-6. Add environment variables:
-   - `VITE_SUPABASE_URL` = your Supabase project URL
-   - `VITE_SUPABASE_ANON_KEY` = your anon public key
-7. Deploy
+This applies `migrations/001_initial.up.sql`, `002_ota_alerts.up.sql`, and `003_billing_oauth.up.sql` to Postgres.
 
-### Option B: Vercel (free)
+## 4. Seed development data
 
-1. Push to GitHub
-2. Go to [vercel.com](https://vercel.com)
-3. Import the repo
-4. Add environment variables in project settings:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
-5. Deploy
+```bash
+make seed-dev
+```
 
-## 7. Provision Your First Device
+Output includes a test user and a pre-claimed device:
 
-1. Open the deployed React frontend
-2. Create an account via the login page
-3. Go to **Admin → Add Device**
-4. Copy the generated `device_key`
-5. Connect to your ESP32 via BLE using the **Provisioning** page
-6. Enter WiFi credentials and Supabase URL + service_role_key + device_key
-7. Reboot the ESP32 — it should start posting telemetry
+```
+Seed complete
+  User:    test@example.com
+  Pass:    TestPass123!
+  Device:  AABBCCDDEEFF
+  API key: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
 
-## 8. Verify Data Flow
+Save the API key — devices authenticate to Mosquitto with `device_key` as username and `api_key` as password.
+(With the test Mosquitto config this is not strictly required because anonymous connections are allowed, but it mirrors production.)
 
-1. In Supabase dashboard → **Table Editor → telemetry_live** — you should see rows appearing every 5 minutes
-2. In the React dashboard, select your device — charts should populate within seconds of each POST
-3. The **live indicator** on the device card should turn green
+## 5. Smoke test
 
-## Troubleshooting
+### 5.1 Login
 
-**No data appearing:**
-- Check ESP32 serial output for HTTP response codes
-- Verify the service_role key is correct (not the anon key)
-- Check **Authentication → Logs** for blocked requests
-- Verify RLS isn't blocking — run `select * from telemetry_live limit 10` in SQL Editor (as your user)
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"test@example.com","password":"TestPass123!"}' | jq -r '.access_token')
 
-**pg_cron not running:**
-- Supabase free tier has limitations on pg_cron. The archive function may need to be triggered manually or via a Supabase Pro plan for reliable scheduling.
+echo $TOKEN
+```
 
-**BLE provisioning not working:**
-- Use Chrome or Edge browser (Web Bluetooth required)
-- Ensure Bluetooth is enabled on your laptop/phone
-- Move ESP32 close to the device running the browser
+### 5.2 List devices
+
+```bash
+curl -s http://localhost:8080/api/v1/devices \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 5.3 Publish telemetry
+
+Use `mosquitto_pub` or any MQTT client. The device authenticates with `device_key` / `api_key`.
+
+```bash
+mosquitto_pub -h localhost -u AABBCCDDEEFF -P 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' \
+  -t telemetry/power_monitor_v2/AABBCCDDEEFF \
+  -m '{
+    "ts":1720000000,
+    "ts_ms":0,
+    "schema":"telemetry_v1",
+    "fw":"2.0.0",
+    "uptime_ms":3600000,
+    "rssi":-55,
+    "heap_free":150000,
+    "data":{"ch0_P":19.8,"ch1_P":-6.4,"energy_wh0":120.5,"soc_pct0":85.0}
+  }'
+```
+
+### 5.5 Query latest telemetry
+
+```bash
+curl -s http://localhost:8080/api/v1/telemetry/AABBCCDDEEFF/latest \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Expected response:
+
+```json
+{
+  "device_key": "AABBCCDDEEFF",
+  "recorded_at": "2026-07-23T...",
+  "pv_power": 19.8,
+  ...
+}
+```
+
+### 5.6 WebSocket live stream
+
+Connect to `ws://localhost:8080/api/v1/ws` with the JWT in an `Authorization: Bearer <token>` header (your WebSocket client must support headers), then send:
+
+```json
+{"type":"subscribe","device_keys":["AABBCCDDEEFF"]}
+```
+
+Each new telemetry message will be pushed as a JSON text message.
+
+## 6. Useful commands
+
+```bash
+make down           # stop all containers
+make migrate-down   # rollback one migration
+make test           # unit tests
+make test-integration # integration tests (requires Docker)
+make lint           # lint
+```
+
+## 7. Troubleshooting
+
+### Mosquitto refuses the password file
+
+The `passwd` file shipped in `mosquitto/config/` may show ownership warnings depending on your host UID. If Mosquitto fails to start, run inside the container:
+
+```bash
+docker exec -it <container> chown mosquitto:mosquitto /mosquitto/config/passwd
+```
+
+Or regenerate it:
+
+```bash
+docker run --rm -v ./mosquitto/config:/mosquitto/config eclipse-mosquitto:2 \
+  mosquitto_passwd -b /mosquitto/config/passwd powermon powermon
+```
+
+### MinIO bucket missing
+
+`make up` should create it automatically via `minio-init`. If you need to recreate:
+
+```bash
+docker run --rm --network=host minio/mc \
+  mc alias set local http://localhost:9002 minioadmin minioadmin
+  mc mb local/firmware --ignore-existing
+```
+
+### API exits with "missing required config"
+
+You forgot to set `JWT_SECRET` in `.env` or the `.env` file was not loaded. The Docker Compose services read `.env` from the `backend/` directory.
+
+## 8. Next steps
+
+- See `docs/API.md` for the full endpoint reference.
+- See `docs/superpowers/specs/2026-07-12-iot-platform-backend-design.md` for architecture details.
