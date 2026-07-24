@@ -5,16 +5,21 @@
 package internal
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// MQTTAuthHandler implements the Mosquitto HTTP authentication/introspection
+// backend. Mosquitto POSTs the device's MQTT username/password here on every
+// CONNECT, and the returned ACLs constrain what each device may publish/subscribe.
 type MQTTAuthHandler struct {
 	pg *pgxpool.Pool
 }
 
+// NewMQTTAuthHandler returns an MQTT auth handler backed by the given pool.
 func NewMQTTAuthHandler(pg *pgxpool.Pool) *MQTTAuthHandler {
 	return &MQTTAuthHandler{pg: pg}
 }
@@ -39,11 +44,18 @@ func (h *MQTTAuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	err := h.pg.QueryRow(r.Context(),
 		`SELECT api_key::text FROM devices WHERE device_key = $1 AND is_active = true`,
 		req.Username).Scan(&apiKey)
-	if err != nil || apiKey != req.Password {
+	// Constant-time compare guards against timing-based password guessing over
+	// MQTT; we also deny (rather than 500) on DB miss so Mosquitto sees a
+	// uniform forbidden response for both unknown users and wrong passwords.
+	if err != nil || subtle.ConstantTimeCompare([]byte(apiKey), []byte(req.Password)) != 1 {
 		writeJSON(w, http.StatusForbidden, MQTTAuthResponse{OK: false})
 		return
 	}
 
+	// Per-device ACL: each device may publish only into its own telemetry/status
+	// subtrees and may only read commands/ota targeted at it. Scoping by the
+	// authenticated username (device_key) prevents one compromised device from
+	// publishing as or subscribing to another.
 	writeJSON(w, http.StatusOK, MQTTAuthResponse{
 		OK: true,
 		ACLs: []MQTTACL{

@@ -13,7 +13,7 @@ import (
 
 func TestBatchWriter_BufferAndFlush(t *testing.T) {
 	store := fakes.NewMemStore()
-	bw := internal.NewBatchWriter(store, nil, nil)
+	bw := internal.NewBatchWriter(store)
 
 	bw.Write(context.Background(), internal.TelemetryRow{
 		DeviceID:   "AABBCCDDEEFF",

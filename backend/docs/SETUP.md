@@ -149,20 +149,14 @@ make lint           # lint
 
 ## 7. Troubleshooting
 
-### Mosquitto refuses the password file
+### Mosquitto auth failures
 
-The `passwd` file shipped in `mosquitto/config/` may show ownership warnings depending on your host UID. If Mosquitto fails to start, run inside the container:
-
-```bash
-docker exec -it <container> chown mosquitto:mosquitto /mosquitto/config/passwd
-```
-
-Or regenerate it:
-
-```bash
-docker run --rm -v ./mosquitto/config:/mosquitto/config eclipse-mosquitto:2 \
-  mosquitto_passwd -b /mosquitto/config/passwd powermon powermon
-```
+The dev stack uses `mosquitto/config/mosquitto-test.conf` (`allow_anonymous
+true`), so no credentials are required. If you swap to `mosquitto.conf`
+(production HTTP-auth backend) without the auth plugin compiled into the
+image, Mosquitto will fail to start or reject all clients — see
+`mosquitto/README.md` for building the plugin image. Leave
+`MQTT_USER`/`MQTT_PASSWORD` empty in `.env` for the dev stack.
 
 ### MinIO bucket missing
 
@@ -182,3 +176,47 @@ You forgot to set `JWT_SECRET` in `.env` or the `.env` file was not loaded. The 
 
 - See `docs/API.md` for the full endpoint reference.
 - See `docs/superpowers/specs/2026-07-12-iot-platform-backend-design.md` for architecture details.
+
+## 9. Production deployment
+
+A production overlay ships at `docker-compose.prod.yml`. It layers on top of
+the base compose to put the API behind Traefik with automatic Let's Encrypt
+HTTPS and add scheduled backup sidecars.
+
+```bash
+cp .env.example .env   # fill in real secrets (POSTGRES_PASSWORD, JWT_SECRET, ...)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+Required `.env` additions for prod:
+
+```env
+DOMAIN=iot.example.com
+TRAEFIK_ACME_EMAIL=ops@example.com
+POSTGRES_PASSWORD=<strong>
+CLICKHOUSE_PASSWORD=<strong>
+MINIO_ROOT_USER=<strong>
+MINIO_ROOT_PASSWORD=<strong>
+JWT_SECRET=<strong>
+MQTT_USER=<strong>          # if running the HTTP-auth broker
+MQTT_PASSWORD=<strong>
+```
+
+What the overlay does:
+
+- **Traefik** terminates TLS (TLS-ALPN-01 challenge), redirects HTTP→HTTPS, and
+  routes `${DOMAIN}` → `api:8080` (WebSocket-aware) and `minio.${DOMAIN}` →
+  MinIO console. No service ports are published directly except `1883`.
+- **Mosquitto** uses the HTTP-auth config (`mosquitto/config/mosquitto.conf`)
+  via a custom plugin image — build it first (`mosquitto/README.md`). Never run
+  `allow_anonymous true` in prod. Restrict `1883` to device subnets at the
+  firewall.
+- **Backups** run as sidecars on a daily schedule:
+  - `postgres-backup` → `pgbackups` volume (daily, keeps 7d/4w/6m).
+  - `clickhouse-backup` → `chbackups` volume (`BACKUP DATABASE` to zip, 7d).
+  - `minio-backup` → `minio_backups` volume (`mc mirror` of the firmware
+    bucket, 7d).
+  Copy these volumes off-host (e.g. to S3) for disaster recovery.
+
+For an internet-exposed broker, add a TLS listener on `8883` with client
+certificates in `mosquitto.conf` instead of exposing `1883` directly.

@@ -1,0 +1,180 @@
+# docker-compose.prod.yml — Production overlay.
+#
+# Usage:
+#   cp .env.example .env   # then fill in real secrets
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This overlay:
+#   - replaces the dev Mosquitto (anonymous) config with the production one
+#     (requires the HTTP auth plugin image — see mosquitto/README.md);
+#   - puts the API behind Traefik with automatic Let's Encrypt HTTPS;
+#   - adds scheduled backup sidecars for Postgres, ClickHouse, and MinIO.
+#
+# Required environment (set in .env):
+#   TRAEFIK_ACME_EMAIL, DOMAIN
+#   POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+#   MINIO_ROOT_USER, MINIO_ROOT_PASSWORD
+#   JWT_SECRET, MQTT_USER, MQTT_PASSWORD
+#   S3_BACKUP_* (off-host backup target for minio-backup; optional)
+#
+# Backups land in named volumes: pgbackups, chbackups. Rotate with the
+# `keep_days`/`keep_weeks`/`keep_months` env vars per backup image.
+
+services:
+  traefik:
+    image: traefik:v3.1
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # Redirect all HTTP to HTTPS.
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      # Let's Encrypt ACME via TLS-ALPN-01.
+      - "--certificatesresolvers.le.acme.tlschallenge=true"
+      - "--certificatesresolvers.le.acme.email=${TRAEFIK_ACME_EMAIL:?TRAEFIK_ACME_EMAIL required}"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      - "--logging.level=INFO"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - letsencrypt:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  postgres:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-powermon}
+      POSTGRES_USER: ${POSTGRES_USER:-powermon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+    # No host port in prod — only reachable from the compose network.
+    ports: []
+
+  clickhouse:
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD required}
+    ports: []
+
+  mosquitto:
+    # Production config uses the HTTP auth plugin to authenticate devices
+    # against /api/v1/mqtt/auth (see mosquitto/config/mosquitto.conf).
+    # The stock eclipse-mosquitto:2 image lacks the plugin; build a custom
+    # image that compiles and installs mosquitto-auth-plug (HTTP backend).
+    # See mosquitto/README.md for the Dockerfile and build steps.
+    image: iot-platform-mosquitto:latest
+    build:
+      context: ./mosquitto
+      dockerfile: Dockerfile
+    volumes:
+      - mqtt_data:/mosquitto/data
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "1883:1883"   # expose to devices; firewall to known subnets only
+      # no 9001 websockets in prod unless fronted by Traefik
+
+  minio:
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD required}
+    ports: []
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.minio-console.rule=Host(`minio.${DOMAIN:?DOMAIN required}`)"
+      - "traefik.http.routers.minio-console.entrypoints=websecure"
+      - "traefik.http.routers.minio-console.tls.certresolver=le"
+      - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
+
+  minio-init:
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+
+  api:
+    ports: []
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`${DOMAIN:?DOMAIN required}`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=le"
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
+      # WebSocket support — Upgrade headers + long-lived connections.
+      - "traefik.http.routers.api.middlewares=ws-headers@docker"
+      - "traefik.http.middlewares.ws-headers.headers.customrequestheaders.Connection=Upgrade"
+      - "traefik.http.middlewares.ws-headers.headers.customrequestheaders.Upgrade=websocket"
+
+  ingest:
+    env_file: .env
+    ports: []
+
+  # ── Backups ─────────────────────────────────────────────────────────
+
+  postgres-backup:
+    image: prodrigestivill/postgres-backup-local:16
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-powermon}
+      POSTGRES_USER: ${POSTGRES_USER:-powermon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+    volumes:
+      - pgbackups:/backups
+    restart: unless-stopped
+
+  clickhouse-backup:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    depends_on:
+      clickhouse: { condition: service_healthy }
+    entrypoint: >
+      /bin/sh -c '
+        set -e;
+        mkdir -p /backups;
+        while true; do
+          ts=$$(date +%Y%m%d-%H%M%S);
+          clickhouse-client --host=clickhouse
+            --user=${CLICKHOUSE_USER:-default}
+            --password=${CLICKHOUSE_PASSWORD}
+            --query="BACKUP DATABASE default TO Disk(''backups'', ''$$ts.zip'')";
+          find /backups -name "*.zip" -mtime +7 -delete || true;
+          sleep 86400;
+        done
+      '
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    volumes:
+      - chbackups:/backups
+    restart: unless-stopped
+
+  minio-backup:
+    image: minio/mc
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: >
+      /bin/sh -c '
+        set -e;
+        mc alias set src http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+        while true; do
+          ts=$$(date +%Y%m%d-%H%M%S);
+          mc mirror --overwrite src/firmware /backups/firmware-$$ts || true;
+          find /backups -type d -name "firmware-*" -mtime +7 -exec rm -rf {} + || true;
+          sleep 86400;
+        done
+      '
+    volumes:
+      - minio_backups:/backups
+    restart: unless-stopped
+
+volumes:
+  letsencrypt:
+  pgbackups:
+  chbackups:
+  minio_backups:

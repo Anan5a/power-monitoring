@@ -13,10 +13,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// OTAHandler implements firmware-over-the-air release management. Org admins
+// publish releases; ESP32 devices poll the check endpoint to discover updates
+// and download the binary directly from object storage.
 type OTAHandler struct {
-	pg *pgxpool.Pool
+	pg          *pgxpool.Pool
+	auditor     *Auditor
+	publicMinIO string // device-reachable base URL, e.g. https://firmware.example.com
+	bucket      string
 }
 
+// OTACheckResponse is the body returned to a device polling for updates. Fields
+// beyond UpdateAvailable are only populated when an update is available, so the
+// firmware can decide whether to fetch the binary and verify its SHA256.
 type OTACheckResponse struct {
 	UpdateAvailable bool   `json:"update_available"`
 	Version         string `json:"version,omitempty"`
@@ -25,8 +34,10 @@ type OTACheckResponse struct {
 	BinarySize      int    `json:"binary_size,omitempty"`
 }
 
-func NewOTAHandler(pg *pgxpool.Pool) *OTAHandler {
-	return &OTAHandler{pg: pg}
+// NewOTAHandler constructs an OTAHandler backed by the given pool, the
+// device-reachable MinIO base URL, and the firmware bucket.
+func NewOTAHandler(pg *pgxpool.Pool, publicMinIO, bucket string) *OTAHandler {
+	return &OTAHandler{pg: pg, auditor: NewAuditor(pg), publicMinIO: publicMinIO, bucket: bucket}
 }
 
 // CheckOTA is polled by ESP32 devices to check for firmware updates
@@ -61,6 +72,10 @@ func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 		SHA256     string
 		BinarySize int
 	}
+	// Pick the newest stable release for this device type. There is at most
+	// one row because the INSERT path enforces (device_type, version)
+	// uniqueness; channel is hard-coded to "stable" so beta/edge channels are
+	// not offered to production devices.
 	err = h.pg.QueryRow(r.Context(), `
 		SELECT version, binary_path, sha256, binary_size
 		FROM ota_releases
@@ -68,10 +83,15 @@ func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 		ORDER BY created_at DESC LIMIT 1`,
 		deviceType).Scan(&release.Version, &release.BinaryPath, &release.SHA256, &release.BinarySize)
 	if err != nil {
+		// No release exists yet for this device type — not an error from the
+		// device's perspective, just "no update available".
 		writeJSON(w, http.StatusOK, OTACheckResponse{UpdateAvailable: false})
 		return
 	}
 
+	// Only advertise an update if the published version is strictly newer than
+	// the device's current version. A missing current_ver means "always offer".
+	// semverGreater compares major.minor.patch numerically.
 	if currentVer != "" && !semverGreater(release.Version, currentVer) {
 		writeJSON(w, http.StatusOK, OTACheckResponse{UpdateAvailable: false})
 		return
@@ -80,12 +100,20 @@ func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, OTACheckResponse{
 		UpdateAvailable: true,
 		Version:         release.Version,
-		BinaryURL:       "http://minio:9000/firmware/" + release.BinaryPath,
-		SHA256:          release.SHA256,
-		BinarySize:      release.BinarySize,
+		// Build a device-reachable URL: publicMinIO is the externally resolvable
+		// base (the API process may talk to an internal MinIO endpoint that
+		// devices cannot reach). Trim a trailing slash to avoid double slashes.
+		BinaryURL:  strings.TrimRight(h.publicMinIO, "/") + "/" + h.bucket + "/" + release.BinaryPath,
+		SHA256:     release.SHA256,
+		BinarySize: release.BinarySize,
 	})
 }
 
+// semverGreater reports whether v1 is strictly newer than v2, comparing the
+// three numeric components of a semantic version left-to-right. Non-numeric or
+// missing components are treated as 0, so "1.2" is equivalent to "1.2.0".
+// Pre-release suffixes (e.g. "-rc1") are ignored: this is intentionally simple
+// because firmware tags are always plain MAJOR.MINOR.PATCH.
 func semverGreater(v1, v2 string) bool {
 	p1 := parseSemver(v1)
 	p2 := parseSemver(v2)
@@ -97,6 +125,10 @@ func semverGreater(v1, v2 string) bool {
 	return false
 }
 
+// parseSemver splits a version string like "v1.2.3" into a [3]int major,
+// minor, patch triple. A leading "v" is stripped. If fewer than three dot
+// separated components are present the remaining slots stay 0; extra
+// components beyond the third are ignored.
 func parseSemver(v string) [3]int {
 	var parts [3]int
 	v = strings.TrimLeft(v, "v")
@@ -134,5 +166,11 @@ func (h *OTAHandler) CreateRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "conflict", "release version already exists", http.StatusConflict)
 		return
 	}
+	LogFromRequest(r.Context(), h.auditor, r, AuditEntry{
+		ActorType:    "user",
+		Action:       "ota.release.create",
+		ResourceType: "ota_release",
+		Details:      map[string]any{"device_type": req.DeviceType, "version": req.Version, "channel": req.Channel},
+	})
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "created"})
 }

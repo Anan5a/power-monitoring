@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var upgrader = websocket.Upgrader{
@@ -21,12 +22,14 @@ var upgrader = websocket.Upgrader{
 }
 
 type WebSocketHub struct {
+	pg      *pgxpool.Pool
 	mu      sync.RWMutex
 	clients map[string]map[*websocket.Conn]bool
 }
 
-func NewWebSocketHub() *WebSocketHub {
+func NewWebSocketHub(pg *pgxpool.Pool) *WebSocketHub {
 	return &WebSocketHub{
+		pg:      pg,
 		clients: make(map[string]map[*websocket.Conn]bool),
 	}
 }
@@ -44,7 +47,8 @@ func NewWebSocketHub() *WebSocketHub {
 // @Security     BearerAuth
 // @Router       /ws [get]
 func (hub *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
-	if _, ok := r.Context().Value(ContextUserID).(string); !ok {
+	userID, ok := r.Context().Value(ContextUserID).(string)
+	if !ok || userID == "" {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -57,6 +61,8 @@ func (hub *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	// Start a goroutine that closes the connection if the client goes silent.
+	// It closes the underlying conn on ping failure; the read loop then errors
+	// out and exits without re-closing the done channel.
 	done := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -65,7 +71,7 @@ func (hub *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 			select {
 			case <-ticker.C:
 				if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(5*time.Second)); err != nil {
-					close(done)
+					_ = conn.Close()
 					return
 				}
 			case <-done:
@@ -84,10 +90,16 @@ func (hub *WebSocketHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		switch msg.Type {
 		case "subscribe":
+			subscribed := []string{}
 			for _, key := range msg.DeviceKeys {
+				if !IsDeviceOwner(r.Context(), hub.pg, key, userID) {
+					_ = conn.WriteJSON(map[string]any{"type": "error", "message": "device not found: " + key})
+					continue
+				}
 				hub.subscribe(key, conn)
+				subscribed = append(subscribed, key)
 			}
-			_ = conn.WriteJSON(map[string]string{"type": "subscribed"})
+			_ = conn.WriteJSON(map[string]any{"type": "subscribed", "device_keys": subscribed})
 		case "unsubscribe":
 			for _, key := range msg.DeviceKeys {
 				hub.unsubscribe(key, conn)

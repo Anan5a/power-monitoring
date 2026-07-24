@@ -16,6 +16,29 @@ definitions:
       request_id:
         type: string
     type: object
+  internal.AuditEntry:
+    properties:
+      action:
+        description: e.g. 'device.claim', 'user.login'
+        type: string
+      actor_id:
+        type: string
+      actor_type:
+        description: '''user'', ''device'', ''system'''
+        type: string
+      details:
+        additionalProperties: {}
+        type: object
+      ip_address:
+        type: string
+      resource_id:
+        type: string
+      resource_type:
+        description: e.g. 'device', 'user'
+        type: string
+      user_agent:
+        type: string
+    type: object
   internal.AuthResponse:
     properties:
       access_token:
@@ -29,6 +52,27 @@ definitions:
     properties:
       api_key:
         type: string
+    type: object
+  internal.CommandResultRequest:
+    properties:
+      error:
+        type: string
+      result:
+        additionalProperties: {}
+        type: object
+      status:
+        description: applied / failed
+        type: string
+    type: object
+  internal.CreateCommandRequest:
+    properties:
+      cmd_type:
+        type: string
+      device_key:
+        type: string
+      payload:
+        additionalProperties: {}
+        type: object
     type: object
   internal.CreateGroupRequest:
     properties:
@@ -95,19 +139,35 @@ definitions:
         description: nil = unclaimed
         type: string
     type: object
-  internal.ExportRequestResponse:
+  internal.DeviceCommand:
     properties:
-      job_id:
+      applied_at:
         type: string
-    type: object
-  internal.ExportStatusResponse:
-    properties:
-      completed_at:
+      cmd_type:
         type: string
-      file_path:
+      created_at:
         type: string
+      device_key:
+        type: string
+      error:
+        type: string
+      id:
+        type: integer
+      payload:
+        additionalProperties: {}
+        type: object
+      result:
+        additionalProperties: {}
+        type: object
       status:
         type: string
+    type: object
+  internal.ExportDownloadResponse:
+    properties:
+      download_url:
+        type: string
+      expires_in_seconds:
+        type: integer
     type: object
   internal.Group:
     properties:
@@ -170,6 +230,25 @@ definitions:
         type: integer
       total_energy_wh:
         type: number
+    type: object
+  internal.LicensePlan:
+    properties:
+      audience:
+        type: string
+      features:
+        items:
+          type: string
+        type: array
+      id:
+        type: integer
+      max_devices:
+        type: integer
+      name:
+        type: string
+      price_monthly:
+        type: integer
+      retention_days:
+        type: integer
     type: object
   internal.LoginRequest:
     properties:
@@ -260,12 +339,19 @@ definitions:
   internal.SearchResult:
     properties:
       entity_type:
+        description: EntityType names the kind of record matched, e.g. "device" or
+          "audit".
         type: string
       id:
+        description: 'ID is the entity identifier: device_key for devices, audit_log.id
+          for audit.'
         type: string
       label:
+        description: Label is the human-readable primary text shown for the result.
         type: string
       subtitle:
+        description: Subtitle is an optional secondary line (e.g. device type or resource
+          type).
         type: string
     type: object
   internal.SetTagRequest:
@@ -315,6 +401,41 @@ info:
   title: IoT Platform API
   version: 1.0.0
 paths:
+  /admin/audit:
+    get:
+      parameters:
+      - description: Filter by action
+        in: query
+        name: action
+        type: string
+      - description: Filter by resource type
+        in: query
+        name: resource_type
+        type: string
+      - default: 50
+        description: Max results
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Result offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal.AuditEntry'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: Query audit log
+      tags:
+      - Admin
   /admin/maintenance:
     post:
       consumes:
@@ -408,7 +529,9 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal.AuthResponse'
+            additionalProperties:
+              type: string
+            type: object
         "401":
           description: Unauthorized
           schema:
@@ -546,6 +669,99 @@ paths:
       summary: Mark invoice as paid
       tags:
       - Billing
+  /billing/plans:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal.LicensePlan'
+            type: array
+      summary: List license plans
+      tags:
+      - Billing
+  /commands:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Command details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.CreateCommandRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/internal.DeviceCommand'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal.APIError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      security:
+      - BearerAuth: []
+      summary: Send command to device
+      tags:
+      - Commands
+  /commands/{id}/result:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Command ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Result details
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal.CommandResultRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Report command result
+      tags:
+      - Commands
+  /commands/{key}/pending:
+    get:
+      parameters:
+      - description: Device key
+        in: path
+        name: key
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal.DeviceCommand'
+            type: array
+      summary: Poll pending commands for a device
+      tags:
+      - Commands
   /devices:
     get:
       produces:
@@ -701,6 +917,34 @@ paths:
       summary: Set a device tag
       tags:
       - Tags
+  /export/download/{id}:
+    get:
+      parameters:
+      - description: Export job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal.ExportDownloadResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal.APIError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal.APIError'
+      security:
+      - BearerAuth: []
+      summary: Download export
+      tags:
+      - Export
   /export/request:
     post:
       produces:
@@ -709,7 +953,9 @@ paths:
         "202":
           description: Accepted
           schema:
-            $ref: '#/definitions/internal.ExportRequestResponse'
+            additionalProperties:
+              type: string
+            type: object
       security:
       - BearerAuth: []
       summary: Request data export
@@ -729,7 +975,8 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal.ExportStatusResponse'
+            additionalProperties: true
+            type: object
         "404":
           description: Not Found
           schema:

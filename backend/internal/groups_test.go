@@ -18,6 +18,7 @@ func TestCreateGroup_Validation(t *testing.T) {
 	body := `{"name": ""}`
 	req := httptest.NewRequest("POST", "/api/v1/groups", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), internal.ContextUserID, "user-1"))
 	rec := httptest.NewRecorder()
 	h.CreateGroup(rec, req)
 	if rec.Code != http.StatusBadRequest {

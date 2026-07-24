@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS uq_alert_events_firing;

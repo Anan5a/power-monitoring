@@ -12,7 +12,7 @@ import (
 )
 
 func TestGetExportStatus_NotFound(t *testing.T) {
-	h := internal.NewExportHandler(nil, nil, "firmware", "http://localhost:8080")
+	h := internal.NewExportHandler(nil, nil, "firmware")
 	req := httptest.NewRequest("GET", "/api/v1/export/status/nonexistent", nil)
 	req = req.WithContext(context.WithValue(req.Context(), internal.ContextUserID, "user-1"))
 	rec := httptest.NewRecorder()

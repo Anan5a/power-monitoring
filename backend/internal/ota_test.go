@@ -12,7 +12,7 @@ import (
 )
 
 func TestOTACheck_NoUpdate(t *testing.T) {
-	h := internal.NewOTAHandler(nil)
+	h := internal.NewOTAHandler(nil, "", "firmware")
 	r := chi.NewRouter()
 	r.Get("/api/v1/ota/check/{key}", h.CheckOTA)
 

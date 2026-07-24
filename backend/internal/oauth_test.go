@@ -20,7 +20,7 @@ func TestGenerateState(t *testing.T) {
 }
 
 func TestOAuthCallback_UnsupportedProvider(t *testing.T) {
-	h := NewOAuthHandler(nil, nil, "", "", "", "", "http://localhost:8080")
+	h := NewOAuthHandler(nil, nil, nil, "", "", "", "", "http://localhost:8080")
 	req := httptest.NewRequest("GET", "/api/v1/auth/oauth/unknown/callback?code=x&state=y", nil)
 	rec := httptest.NewRecorder()
 	h.Callback(rec, req)
@@ -30,7 +30,7 @@ func TestOAuthCallback_UnsupportedProvider(t *testing.T) {
 }
 
 func TestOAuthRedirect_UnsupportedProvider(t *testing.T) {
-	h := NewOAuthHandler(nil, nil, "", "", "", "", "http://localhost:8080")
+	h := NewOAuthHandler(nil, nil, nil, "", "", "", "", "http://localhost:8080")
 	req := httptest.NewRequest("GET", "/api/v1/auth/oauth/unknown", nil)
 	rec := httptest.NewRecorder()
 	h.Redirect(rec, req)

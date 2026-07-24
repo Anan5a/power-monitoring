@@ -13,12 +13,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// BillingHandler implements the manual billing/invoicing endpoints. Admins
+// create invoices; when an invoice is marked paid the user's license plan is
+// upgraded in the same transaction. All mutations are recorded via the Auditor.
 type BillingHandler struct {
-	pg *pgxpool.Pool
+	pg      *pgxpool.Pool
+	auditor *Auditor
 }
 
+// NewBillingHandler constructs a BillingHandler and its own Auditor backed by
+// the given pool.
 func NewBillingHandler(pg *pgxpool.Pool) *BillingHandler {
-	return &BillingHandler{pg: pg}
+	return &BillingHandler{pg: pg, auditor: NewAuditor(pg)}
 }
 
 // CreateInvoice creates a new invoice (admin only)
@@ -63,6 +69,9 @@ func (h *BillingHandler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Invoice numbers are generated locally from year + low bits of UnixMilli.
+	// Uniqueness relies on the millisecond suffix; collisions are extremely
+	// unlikely for the low admin-driven volume of manual invoices.
 	invoiceNumber := fmt.Sprintf("INV-%d-%04d", time.Now().Year(), time.Now().UnixMilli()%10000)
 
 	var id string
@@ -77,6 +86,13 @@ func (h *BillingHandler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "internal_error", "failed to create invoice", http.StatusInternalServerError)
 		return
 	}
+	LogFromRequest(r.Context(), h.auditor, r, AuditEntry{
+		ActorType:    "user",
+		Action:       "billing.invoice.create",
+		ResourceType: "invoice",
+		ResourceID:   id,
+		Details:      map[string]any{"user_id": req.UserID, "amount_cents": req.AmountCents},
+	})
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "invoice_number": invoiceNumber})
 }
 
@@ -97,7 +113,16 @@ func (h *BillingHandler) MarkInvoicePaid(w http.ResponseWriter, r *http.Request)
 		writeError(w, "unauthorized", "missing user context", http.StatusUnauthorized)
 		return
 	}
+	if h.pg == nil {
+		writeError(w, "internal_error", "database unavailable", http.StatusInternalServerError)
+		return
+	}
 
+	// The entire "mark paid → upgrade license → log change" sequence runs in
+	// one transaction so the invoice and license never disagree, even if the
+	// process crashes mid-way. Row-level locking on the invoice (FOR UPDATE)
+	// prevents two concurrent mark-paid requests from both succeeding and
+	// double-upgrading the license.
 	tx, err := h.pg.Begin(r.Context())
 	if err != nil {
 		writeError(w, "internal_error", "transaction failed", http.StatusInternalServerError)
@@ -111,6 +136,8 @@ func (h *BillingHandler) MarkInvoicePaid(w http.ResponseWriter, r *http.Request)
 		Audience string
 		Status   string
 	}
+	// FOR UPDATE locks the invoice row for the duration of the transaction so
+	// a concurrent mark-paid request blocks until this tx commits/rolls back.
 	err = tx.QueryRow(r.Context(),
 		`SELECT user_id, plan_id, audience, status FROM invoices WHERE id = $1 FOR UPDATE`,
 		invoiceID).Scan(&inv.UserID, &inv.PlanID, &inv.Audience, &inv.Status)
@@ -119,6 +146,7 @@ func (h *BillingHandler) MarkInvoicePaid(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if inv.Status != "pending" {
+		// Idempotency guard: a non-pending invoice has already been processed.
 		writeError(w, "conflict", "invoice already processed", http.StatusConflict)
 		return
 	}
@@ -130,6 +158,10 @@ func (h *BillingHandler) MarkInvoicePaid(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Upsert the user's license to the invoice's plan. ON CONFLICT handles
+	// users who already have a license row (plan upgrade/downgrade) vs. first
+	// time license creation. device_count is (re)set to 0 so the new plan's
+	// cap is enforced fresh.
 	if _, err := tx.Exec(r.Context(),
 		`INSERT INTO user_licenses (user_id, plan_id, device_count, starts_at)
 		 VALUES ($1, $2, 0, now())
@@ -139,6 +171,8 @@ func (h *BillingHandler) MarkInvoicePaid(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Append to the license change log for audit history: who changed, to
+	// which plan, for which invoice, and by which admin.
 	if _, err := tx.Exec(r.Context(),
 		`INSERT INTO license_change_log (user_id, audience, to_plan_id, reason, invoice_id, changed_by)
 		 VALUES ($1, $2, $3, 'payment_received', $4, $5)`,
@@ -151,6 +185,13 @@ func (h *BillingHandler) MarkInvoicePaid(w http.ResponseWriter, r *http.Request)
 		writeError(w, "internal_error", "commit failed", http.StatusInternalServerError)
 		return
 	}
+	LogFromRequest(r.Context(), h.auditor, r, AuditEntry{
+		ActorType:    "user",
+		Action:       "billing.invoice.paid",
+		ResourceType: "invoice",
+		ResourceID:   invoiceID,
+		Details:      map[string]any{"user_id": inv.UserID, "plan_id": inv.PlanID},
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "paid"})
 }
 
@@ -179,8 +220,15 @@ func (h *BillingHandler) ListInvoices(w http.ResponseWriter, r *http.Request) {
 	invoices := []Invoice{}
 	for rows.Next() {
 		var inv Invoice
-		rows.Scan(&inv.ID, &inv.InvoiceNumber, &inv.Description, &inv.TotalCents, &inv.Status, &inv.CreatedAt)
+		if err := rows.Scan(&inv.ID, &inv.InvoiceNumber, &inv.Description, &inv.TotalCents, &inv.Status, &inv.CreatedAt); err != nil {
+			writeError(w, "internal_error", "failed to read invoices", http.StatusInternalServerError)
+			return
+		}
 		invoices = append(invoices, inv)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, "internal_error", "failed to read invoices", http.StatusInternalServerError)
+		return
 	}
 	writeJSON(w, http.StatusOK, invoices)
 }

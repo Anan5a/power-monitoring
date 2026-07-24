@@ -21,17 +21,26 @@ import (
 	"golang.org/x/oauth2/google"
 )
 
+// OAuthHandler drives the OAuth/OIDC login flow (Google and GitHub) and
+// exchanges the provider's authorization code for local JWTs. The in-memory
+// states map holds short-lived CSRF tokens keyed by the random state sent to
+// the provider, so a forged callback cannot mint tokens without first
+// obtaining a state issued by this server.
 type OAuthHandler struct {
 	pg      *pgxpool.Pool
 	jwt     *JWTManager
+	refresh *RefreshTokenStore
 	configs map[string]*oauth2.Config
 	states  sync.Map
 }
 
-func NewOAuthHandler(pg *pgxpool.Pool, jwt *JWTManager, googleID, googleSecret, githubID, githubSecret, baseURL string) *OAuthHandler {
+// NewOAuthHandler constructs an OAuthHandler with the supplied provider
+// credentials and a base URL used to build the per-provider callback URLs.
+func NewOAuthHandler(pg *pgxpool.Pool, jwt *JWTManager, refresh *RefreshTokenStore, googleID, googleSecret, githubID, githubSecret, baseURL string) *OAuthHandler {
 	h := &OAuthHandler{
 		pg:      pg,
 		jwt:     jwt,
+		refresh: refresh,
 		configs: make(map[string]*oauth2.Config),
 	}
 	h.configs["google"] = &oauth2.Config{
@@ -67,6 +76,8 @@ func (h *OAuthHandler) Redirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := generateState()
+	// States live at most 10 minutes so a leaked state value is only useful
+	// for a short window; sync.Map keeps this lock-free across concurrent logins.
 	h.states.Store(state, time.Now().Add(10*time.Minute))
 	url := config.AuthCodeURL(state, oauth2.AccessTypeOffline)
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
@@ -79,7 +90,7 @@ func (h *OAuthHandler) Redirect(w http.ResponseWriter, r *http.Request) {
 // @Param        provider  path  string  true  "Provider (google, github)"
 // @Param        code      query string  true  "Authorization code"
 // @Param        state     query string  true  "CSRF state token"
-// @Success      200  {object}  AuthResponse
+// @Success      200  {object}  map[string]string
 // @Failure      401  {object}  APIError
 // @Router       /auth/oauth/{provider}/callback [get]
 func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
@@ -93,9 +104,12 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	expiry, ok := h.states.Load(state)
 	if !ok {
+		// Unknown state: either forged, replayed after deletion, or from a
+		// server restart. Refuse rather than risk accepting a crafted callback.
 		writeError(w, "unauthorized", "invalid state parameter", http.StatusUnauthorized)
 		return
 	}
+	// Delete before consuming so a parallel replay of the same state fails.
 	h.states.Delete(state)
 	if expiry.(time.Time).Before(time.Now()) {
 		writeError(w, "unauthorized", "state expired", http.StatusUnauthorized)
@@ -158,8 +172,16 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	access, _ := h.jwt.IssueAccessToken(userID, "user")
-	refresh, _ := h.jwt.IssueRefreshToken(userID)
+	access, err := h.jwt.IssueAccessToken(userID, "user")
+	if err != nil {
+		writeError(w, "internal_error", "failed to issue access token", http.StatusInternalServerError)
+		return
+	}
+	refresh, err := h.refresh.Issue(r.Context(), userID)
+	if err != nil {
+		writeError(w, "internal_error", "failed to issue refresh token", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"access_token":  access,
 		"refresh_token": refresh,
@@ -178,10 +200,15 @@ func (h *OAuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, prov
 		return userID, nil
 	}
 
-	// No linked OAuth account. Try to find an existing user by email.
+	// No linked OAuth account. Try to find an existing user by email — but only
+	// link to it if that account has no password set. Linking an OAuth identity
+	// to a pre-existing password account would let whoever registered the email
+	// first (possibly an attacker, since emails are not verified at registration)
+	// take over the OAuth user's data. Accounts created by a prior OAuth login
+	// have an empty password_hash and are safe to re-link.
 	if email != "" {
 		err = h.pg.QueryRow(ctx,
-			`SELECT id FROM users WHERE email = $1`,
+			`SELECT id FROM users WHERE email = $1 AND (password_hash IS NULL OR password_hash = '')`,
 			email).Scan(&userID)
 		if err == nil {
 			_, err = h.pg.Exec(ctx,
@@ -202,6 +229,14 @@ func (h *OAuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, prov
 		 VALUES ($1, '', $2) RETURNING id`,
 		email, displayName).Scan(&userID)
 	if err != nil {
+		// Most likely the email already belongs to a password account. Do not
+		// silently merge — surface a clear error instead of a generic 500.
+		var exists bool
+		if qerr := h.pg.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM users WHERE email = $1 AND password_hash <> '')`,
+			email).Scan(&exists); qerr == nil && exists {
+			return "", fmt.Errorf("account exists with password: log in with email/password and link %s from settings", provider)
+		}
 		return "", fmt.Errorf("create user: %w", err)
 	}
 	_, err = h.pg.Exec(ctx,
@@ -216,6 +251,10 @@ func (h *OAuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, prov
 
 func generateState() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand should not fail in practice; panic rather than emit a
+		// predictable (all-zero) CSRF state.
+		panic(fmt.Sprintf("crypto/rand: %v", err))
+	}
 	return hex.EncodeToString(b)
 }

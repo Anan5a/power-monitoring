@@ -68,7 +68,7 @@ type FakeMQTTMessage struct {
 	payload []byte
 }
 
-func (m FakeMQTTMessage) Topic() string  { return m.topic }
+func (m FakeMQTTMessage) Topic() string   { return m.topic }
 func (m FakeMQTTMessage) Payload() []byte { return m.payload }
 func (m FakeMQTTMessage) Ack()            {}
 

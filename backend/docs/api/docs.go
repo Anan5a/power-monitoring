@@ -23,6 +23,61 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/admin/audit": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Query audit log",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by action",
+                        "name": "action",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by resource type",
+                        "name": "resource_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Max results",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Result offset",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal.AuditEntry"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/admin/maintenance": {
             "post": {
                 "security": [
@@ -168,7 +223,10 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal.AuthResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "401": {
@@ -382,6 +440,152 @@ const docTemplate = `{
                         "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/billing/plans": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Billing"
+                ],
+                "summary": "List license plans",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal.LicensePlan"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/commands": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Commands"
+                ],
+                "summary": "Send command to device",
+                "parameters": [
+                    {
+                        "description": "Command details",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal.CreateCommandRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/internal.DeviceCommand"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal.APIError"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/commands/{id}/result": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Commands"
+                ],
+                "summary": "Report command result",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Command ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Result details",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal.CommandResultRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/commands/{key}/pending": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Commands"
+                ],
+                "summary": "Poll pending commands for a device",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Device key",
+                        "name": "key",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal.DeviceCommand"
+                            }
                         }
                     }
                 }
@@ -636,6 +840,51 @@ const docTemplate = `{
                 }
             }
         },
+        "/export/download/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Export"
+                ],
+                "summary": "Download export",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Export job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal.ExportDownloadResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal.APIError"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal.APIError"
+                        }
+                    }
+                }
+            }
+        },
         "/export/request": {
             "post": {
                 "security": [
@@ -654,7 +903,10 @@ const docTemplate = `{
                     "202": {
                         "description": "Accepted",
                         "schema": {
-                            "$ref": "#/definitions/internal.ExportRequestResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -687,7 +939,8 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal.ExportStatusResponse"
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     },
                     "404": {
@@ -1195,6 +1448,39 @@ const docTemplate = `{
                 }
             }
         },
+        "internal.AuditEntry": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "description": "e.g. 'device.claim', 'user.login'",
+                    "type": "string"
+                },
+                "actor_id": {
+                    "type": "string"
+                },
+                "actor_type": {
+                    "description": "'user', 'device', 'system'",
+                    "type": "string"
+                },
+                "details": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "ip_address": {
+                    "type": "string"
+                },
+                "resource_id": {
+                    "type": "string"
+                },
+                "resource_type": {
+                    "description": "e.g. 'device', 'user'",
+                    "type": "string"
+                },
+                "user_agent": {
+                    "type": "string"
+                }
+            }
+        },
         "internal.AuthResponse": {
             "type": "object",
             "properties": {
@@ -1214,6 +1500,37 @@ const docTemplate = `{
             "properties": {
                 "api_key": {
                     "type": "string"
+                }
+            }
+        },
+        "internal.CommandResultRequest": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "result": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "status": {
+                    "description": "applied / failed",
+                    "type": "string"
+                }
+            }
+        },
+        "internal.CreateCommandRequest": {
+            "type": "object",
+            "properties": {
+                "cmd_type": {
+                    "type": "string"
+                },
+                "device_key": {
+                    "type": "string"
+                },
+                "payload": {
+                    "type": "object",
+                    "additionalProperties": {}
                 }
             }
         },
@@ -1316,25 +1633,48 @@ const docTemplate = `{
                 }
             }
         },
-        "internal.ExportRequestResponse": {
+        "internal.DeviceCommand": {
             "type": "object",
             "properties": {
-                "job_id": {
+                "applied_at": {
+                    "type": "string"
+                },
+                "cmd_type": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "device_key": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "payload": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "result": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "status": {
                     "type": "string"
                 }
             }
         },
-        "internal.ExportStatusResponse": {
+        "internal.ExportDownloadResponse": {
             "type": "object",
             "properties": {
-                "completed_at": {
+                "download_url": {
                     "type": "string"
                 },
-                "file_path": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "string"
+                "expires_in_seconds": {
+                    "type": "integer"
                 }
             }
         },
@@ -1429,6 +1769,35 @@ const docTemplate = `{
                 },
                 "total_energy_wh": {
                     "type": "number"
+                }
+            }
+        },
+        "internal.LicensePlan": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "type": "string"
+                },
+                "features": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "max_devices": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "price_monthly": {
+                    "type": "integer"
+                },
+                "retention_days": {
+                    "type": "integer"
                 }
             }
         },
@@ -1570,15 +1939,19 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "entity_type": {
+                    "description": "EntityType names the kind of record matched, e.g. \"device\" or \"audit\".",
                     "type": "string"
                 },
                 "id": {
+                    "description": "ID is the entity identifier: device_key for devices, audit_log.id for audit.",
                     "type": "string"
                 },
                 "label": {
+                    "description": "Label is the human-readable primary text shown for the result.",
                     "type": "string"
                 },
                 "subtitle": {
+                    "description": "Subtitle is an optional secondary line (e.g. device type or resource type).",
                     "type": "string"
                 }
             }

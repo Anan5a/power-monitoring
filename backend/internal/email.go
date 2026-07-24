@@ -17,6 +17,9 @@ import (
 	"gopkg.in/gomail.v2"
 )
 
+// EmailService renders queued email templates and delivers them via SMTP.
+// It is decoupled from request handling: callers Enqueue rows into
+// email_queue and a background DrainLoop processes them with retry/backoff.
 type EmailService struct {
 	pg       *pgxpool.Pool
 	fromAddr string
@@ -28,6 +31,8 @@ type EmailService struct {
 	baseURL  string
 }
 
+// NewEmailService constructs an EmailService bound to the given pool and SMTP
+// settings. platform/baseURL are hardcoded defaults used for template rendering.
 func NewEmailService(pg *pgxpool.Pool, fromAddr, smtpHost string, smtpPort int, smtpUser, smtpPass string) *EmailService {
 	return &EmailService{
 		pg:       pg,
@@ -44,6 +49,9 @@ func NewEmailService(pg *pgxpool.Pool, fromAddr, smtpHost string, smtpPort int, 
 // Enqueue inserts an email into the queue. Returns immediately.
 func (e *EmailService) Enqueue(ctx context.Context, templateKey, recipient, userID string, data map[string]any) {
 	payload, _ := json.Marshal(data)
+	// Fire-and-forget insert: the DrainLoop picks this up on its next tick.
+	// Errors are intentionally ignored so a transient DB blip never blocks the
+	// caller's request; the queue is best-effort.
 	e.pg.Exec(ctx,
 		`INSERT INTO email_queue (template_key, recipient, user_id, data) VALUES ($1, $2, $3, $4)`,
 		templateKey, recipient, userID, payload)
@@ -58,11 +66,16 @@ func (e *EmailService) DrainLoop(ctx context.Context) {
 		case <-ticker.C:
 			e.drainBatch(ctx)
 		case <-ctx.Done():
+			// Context cancel (process shutdown) exits the loop; in-flight rows
+			// left in 'sending' status are recovered on the next run.
 			return
 		}
 	}
 }
 
+// drainBatch pulls up to 10 due rows from email_queue. It uses
+// FOR UPDATE SKIP LOCKED so multiple worker processes can drain concurrently
+// without contending on the same rows.
 func (e *EmailService) drainBatch(ctx context.Context) {
 	rows, err := e.pg.Query(ctx, `
 		SELECT id, template_key, recipient, data FROM email_queue
@@ -78,12 +91,20 @@ func (e *EmailService) drainBatch(ctx context.Context) {
 		var id int64
 		var key, recipient string
 		var data []byte
-		rows.Scan(&id, &key, &recipient, &data)
+		if err := rows.Scan(&id, &key, &recipient, &data); err != nil {
+			slog.Warn("email queue scan", "error", err)
+			continue
+		}
 		e.sendOne(ctx, id, key, recipient, data)
 	}
+	_ = rows.Err()
 }
 
+// sendOne renders one queued email and sends it, updating queue status around
+// the SMTP call. The status transitions queued -> sending -> sent|failed.
 func (e *EmailService) sendOne(ctx context.Context, id int64, key, recipient string, data []byte) {
+	// Mark 'sending' and bump attempts first so a crash mid-send leaves the row
+	// in a state the next drain can reason about.
 	e.pg.Exec(ctx, `UPDATE email_queue SET status='sending', attempts=attempts+1 WHERE id=$1`, id)
 
 	tmpl, err := e.loadTemplate(ctx, key)
@@ -94,6 +115,8 @@ func (e *EmailService) sendOne(ctx context.Context, id int64, key, recipient str
 
 	var vars map[string]any
 	json.Unmarshal(data, &vars)
+	// Inject the platform name so templates can reference {{.PlatformName}}
+	// without each caller supplying it.
 	vars["PlatformName"] = e.platform
 
 	subject := renderText(tmpl.Subject, vars)
@@ -115,12 +138,14 @@ func (e *EmailService) sendOne(ctx context.Context, id int64, key, recipient str
 	e.pg.Exec(ctx, `UPDATE email_queue SET status='sent', sent_at=now() WHERE id=$1`, id)
 }
 
+// emailTemplate is a row from email_templates rendered into an outgoing message.
 type emailTemplate struct {
 	Subject  string
 	BodyText string
 	BodyHTML string
 }
 
+// loadTemplate fetches the subject/body trio for a template key from the DB.
 func (e *EmailService) loadTemplate(ctx context.Context, key string) (*emailTemplate, error) {
 	var t emailTemplate
 	err := e.pg.QueryRow(ctx,
@@ -132,6 +157,9 @@ func (e *EmailService) loadTemplate(ctx context.Context, key string) (*emailTemp
 	return &t, nil
 }
 
+// failOne records a send failure with exponential backoff. After 3 attempts
+// the row is marked 'failed' (no further retries); otherwise it returns to
+// 'queued' with next_attempt_at pushed out by 2^attempts minutes.
 func (e *EmailService) failOne(ctx context.Context, id int64, err error) {
 	e.pg.Exec(ctx, `
 		UPDATE email_queue
@@ -142,6 +170,8 @@ func (e *EmailService) failOne(ctx context.Context, id int64, err error) {
 	slog.Error("email send failed", "id", id, "error", err)
 }
 
+// renderText executes a text/template, returning the raw template on parse
+// error so a broken template never blank-silences the email body.
 func renderText(tmpl string, vars map[string]any) string {
 	t, err := template.New("").Parse(tmpl)
 	if err != nil {
@@ -152,6 +182,8 @@ func renderText(tmpl string, vars map[string]any) string {
 	return buf.String()
 }
 
+// renderHTML executes an html/template, returning the raw template on parse
+// error (see renderText). Uses html/template for context-aware auto-escaping.
 func renderHTML(tmpl string, vars map[string]any) string {
 	t, err := htmltemplate.New("").Parse(tmpl)
 	if err != nil {
