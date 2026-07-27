@@ -1,8 +1,15 @@
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, type ComponentType } from 'react'
 import { useAtomValue } from 'jotai'
 import type { LayoutEntry } from '../lib/types'
 import { registry } from './registry'
 import { selectedDeviceAtom } from '../state/atoms'
+
+// Pre-create lazy components once at module level so React doesn't see a new
+// component type on every render (which would unmount/remount the widget).
+const widgetComponents: Record<string, ComponentType<any>> = {}
+for (const key of Object.keys(registry) as (keyof typeof registry)[]) {
+  widgetComponents[key] = lazy(registry[key].loader)
+}
 
 interface Props {
   entry: LayoutEntry
@@ -18,7 +25,7 @@ export default function WidgetHost({ entry }: Props) {
       </div>
     )
   }
-  const Component = lazy(def.loader)
+  const Component = widgetComponents[entry.type]
   // Inject deviceKey from the global atom so widgets don't need it in layout.props
   const props = { ...(entry.props ?? {}), ...(device?.device_key ? { deviceKey: device.device_key } : {}) }
   return (
