@@ -125,7 +125,7 @@ const DRILLDOWN_SPAN_MS = 2 * 60 * 60 * 1000
 const DRILLDOWN_ZOOM_RATIO = 2.5
 
 function HistoryChartWidget({ deviceKey }: Props) {
-  const [range, setRange] = useState<HistoryRange>('24h')
+  const [range, setRange] = useState<HistoryRange>('6h')
   const [metric, setMetric] = useState<HistoryMetric>('power')
   const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(new Set())
   // Source of truth for the chart: state, not a ref. The build effect writes
