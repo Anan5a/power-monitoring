@@ -999,6 +999,14 @@ static void handle_command(const char* json) {
     } else if (strcmp(cmd, "ota_start") == 0) {
         ota_trigger_check();
         send_ok(cmd, "ota check triggered");
+    } else if (strcmp(cmd, "ota_set_backend_url") == 0) {
+        const char* url = doc["url"] | "";
+        if (!url[0]) {
+            send_error(cmd, "url required");
+        } else {
+            settings_save_ota_backend_url(url);
+            send_ok(cmd, "backend URL updated");
+        }
     } else {
         // DEBUG-level log so unrecognised commands are visible in
         // CORE_DEBUG_LEVEL=3 builds but don't spam release logs.
@@ -1446,6 +1454,12 @@ bool apply_settings_command(const char* cmd_type, const char* payload_json) {
     } else if (strcmp(cmd_type, "ota_set_interval") == 0) {
         uint32_t interval = doc["interval"] | 0;
         ota_set_poll_interval(interval);
+        return true;
+    } else if (strcmp(cmd_type, "ota_set_backend_url") == 0) {
+        const char* url = doc["url"] | "";
+        if (url[0]) {
+            settings_save_ota_backend_url(url);
+        }
         return true;
     } else {
         LOG_PRINT("[CMD] unknown: %s\n", cmd_type);
