@@ -49,7 +49,7 @@ IDLE ──[poll timer fires]──> CHECKING ──[update avail]──> DOWNLO
 |---|---|
 | `OTA_IDLE` | Waiting for poll timer. Timer is NVS-configurable (default 300 s). |
 | `OTA_CHECKING` | HTTP GET to `GET /ota/check/{device_key}?current_ver=X.X.X`. Backend returns `{update_available, version, binary_url, sha256, binary_size, poll_interval_seconds}`. |
-| `OTA_DOWNLOADING` | Streaming HTTP(S) GET from `binary_url`. Feed chunks to `esp_ota_write()` + mbedTLS SHA256 update. Report progress via MQTT status topic. |
+| `OTA_DOWNLOADING` | Non-blocking chunked HTTP(S) GET from `binary_url`. One chunk per `loop_ota_client()` call. Feed chunks to `esp_ota_write()` + mbedTLS SHA256 update. Report progress via MQTT status topic. HTTP client + OTA handle + SHA256 context persist across calls. |
 | `OTA_APPLYING` | Download complete. Compare computed SHA256 vs expected. If match: `esp_ota_set_boot_partition()`, mark pending verify. If mismatch: abort, stay on current. |
 | `OTA_REBOOTING` | `esp_restart()`. On next boot, firmware calls `esp_ota_mark_app_valid_cancel_rollback()` after successful init. If crash before that, bootloader reverts. |
 
@@ -65,21 +65,35 @@ IDLE ──[poll timer fires]──> CHECKING ──[update avail]──> DOWNLO
 
 ## 3. Streaming Download & SHA256 Verification
 
-### Download Flow
+### Download Flow (Non-Blocking)
+
+The download is NOT a blocking loop. It runs one chunk per `loop_ota_client()` call so the network task stays responsive (MQTT, BLE, display, Supabase all continue). State is preserved across calls via static variables:
 
 ```
-1. WiFiClientSecure connect to binary_url (HTTPS)
-2. esp_ota_begin() → get OTA handle for inactive partition
-3. mbedtls_sha256_ret() init context
-4. Loop: read HTTP chunk (256-1024 bytes)
-   ├── esp_ota_write(handle, chunk, len)
-   ├── mbedtls_sha256_update(context, chunk, len)
-   └── every 10%: publish MQTT status "downloading:XX%"
-5. esp_ota_end(handle)
-6. mbedtls_sha256_finish() → computed_hash
-7. computed_hash == expected_sha256?
-   ├── YES: esp_ota_set_boot_partition(), mark pending verify, reboot
-   └── NO:  log error, stay on current firmware
+OTA_DOWNLOADING state, per tick:
+  ├── [first call] WiFiClientSecure connect to binary_url (HTTPS)
+  ├── [first call] esp_ota_begin() → OTA handle for inactive partition
+  ├── [first call] mbedtls_sha256_ret() init context
+  ├── [first call] total_bytes_written = 0
+  │
+  ├── [every call] esp_task_wdt_reset()  ← prevents 30s TWDT trip
+  ├── [every call] read one HTTP chunk (256-1024 bytes)
+  │   ├── chunk received → esp_ota_write(handle, chunk, len)
+  │   │                    mbedtls_sha256_update(context, chunk, len)
+  │   │                    total_bytes_written += len
+  │   │                    every 10%: publish MQTT status "downloading:XX%"
+  │   └── no chunk yet (TCP buffer empty) → return, try again next tick
+  │
+  └── [last call] HTTP response fully consumed
+      ├── esp_ota_end(handle)
+      ├── mbedtls_sha256_finish() → computed_hash
+      ├── total_bytes_written == binary_size?
+      │   ├── NO → log error, abort, return to IDLE
+      │   └── YES → continue
+      ├── computed_hash == expected_sha256?
+      │   ├── YES: esp_ota_set_boot_partition(), mark pending verify, reboot
+      │   └── NO:  log error, abort, return to IDLE
+      └── cleanup: close HTTP, free OTA handle, zero static state
 ```
 
 ### Memory
@@ -87,13 +101,15 @@ IDLE ──[poll timer fires]──> CHECKING ──[update avail]──> DOWNLO
 - No large buffer — streams through a small chunk buffer (~1 KB stack)
 - SHA256 context: ~100 bytes heap
 - OTA handle: pointer
+- HTTP client + response stream: ~500 bytes heap (reuses existing `WiFiClientSecure`)
 
 ### Timeout Strategy
 
 - HTTP connect timeout: 10 s
-- Read timeout: 5 s per chunk
+- Read timeout: 5 s per chunk (per `loop_ota_client()` tick)
 - Total download timeout: 5 min for 1.9 MB @ ~50 KB/s = ~40 s typical
 - If any timeout: abort OTA, log event, stay on current firmware
+- Timeout is tracked as elapsed wall-clock since download started; if exceeded, abort
 
 ### Error Handling
 
@@ -104,7 +120,9 @@ IDLE ──[poll timer fires]──> CHECKING ──[update avail]──> DOWNLO
 | esp_ota_begin() fail | Abort, log event, return to IDLE |
 | esp_ota_write() fail | Abort, log event, return to IDLE |
 | SHA256 mismatch | Abort, log event, return to IDLE |
+| Size mismatch (downloaded != binary_size) | Abort, log event, return to IDLE |
 | Download interrupted mid-way | Abort, log event, return to IDLE. Next poll will retry. |
+| Total download timeout exceeded | Abort, log event, return to IDLE |
 
 ---
 
@@ -123,8 +141,11 @@ ESP32 boots
   │   ├── init_event_log()
   │   ├── init_device_identity()
   │   ├── init_sensors()
-  │   ├── init_connectivity()
-  │   ├── NTP sync succeeds
+  │   ├── init_switches()
+  │   ├── init_core_shared()
+  │   ├── sensor task starts, first read_sensors() succeeds
+  │   ├── first evaluate_switches() pass completes
+  │   ├── 60-second grace timer expires (fed by esp_task_wdt_reset)
   │   └── → esp_ota_mark_app_valid_cancel_rollback()
   │       └── firmware is now "confirmed" — bootloader will not revert
   │
@@ -134,10 +155,12 @@ ESP32 boots
       └── old firmware boots with crash_count > 0
 ```
 
+**Why firmware-health signal instead of NTP sync:** Network reachability (NTP, WiFi) is an environmental condition, not a firmware-health condition. A healthy firmware that boots on a network-less site should not roll back. The mark_valid trigger is: sensors init + first sensor read + first switch eval + 60s grace timer. This proves the firmware core loop works. Network services are started in parallel but do not gate the rollback confirmation.
+
 ### Rollback Detection
 
 - On boot after OTA (detected by checking `esp_ota_get_state_partition()` returns `ESP_OTA_IMG_PENDING_VERIFY`):
-  - If init succeeds through NTP sync → `esp_ota_mark_app_valid_cancel_rollback()`
+  - If firmware-health signal fires (sensors init + first read + first switch eval + 60s grace) → `esp_ota_mark_app_valid_cancel_rollback()`
   - If crash before that → bootloader auto-reverts
 - If crash count ≥ 5 before mark_valid → safe mode on old firmware
 
@@ -146,6 +169,16 @@ ESP32 boots
 - `mark_clean_shutdown()` is called before OTA reboot
 - On successful boot after OTA, crash counter is reset
 - The existing safe mode (5+ crashes) still works — if the new firmware keeps crashing before mark_valid, the bootloader reverts AND the crash counter eventually triggers safe mode on the old firmware
+
+### Safe Mode Tradeoff
+
+A bad OTA that bootloops 5 times will:
+1. Increment crash_count to 5 on the new firmware
+2. Bootloader reverts to old firmware
+3. Old firmware sees crash_count ≥ 5 → enters safe mode (no network, no BLE)
+4. Recovery requires serial reflash or factory reset
+
+This is an acceptable last-resort safety: a persistently crashing firmware cannot keep re-applying itself via OTA. The tradeoff is that a healthy old firmware is temporarily locked in safe mode. The user must serial-flash a known-good build to recover. This is consistent with the existing safe mode behavior.
 
 ---
 
@@ -185,7 +218,7 @@ struct TelemetryOTA {
     bool    ota_in_progress;    // true while downloading/applying
     char    ota_version[16];    // version being applied
     uint8_t ota_progress_pct;   // 0..100 during download
-    char    ota_status[12];     // "idle", "checking", "downloading",
+    char    ota_status[16];     // "idle", "checking", "downloading",
                                 // "applying", "rebooting", "failed"
 };
 ```
@@ -201,6 +234,21 @@ Publish to `status/{device_key}/ota`:
 {"status":"failed","version":"2.1.0","error":"SHA256 mismatch"}
 ```
 
+### Reentrancy / Idempotency
+
+- While state is CHECKING, DOWNLOADING, APPLYING, or REBOOTING: ignore all new triggers (poll timer, BLE `ota_check`, Supabase command)
+- Only IDLE state accepts triggers
+- State transitions are atomic (single-task, no concurrency concern — all OTA runs on the network task)
+
+### TLS Posture
+
+The firmware uses `WiFiClientSecure::setInsecure()` for all HTTPS connections (telemetry, Supabase, and OTA check/download). This accepts any server certificate — no CA pinning. The security model for OTA relies on:
+
+1. **SHA256 verification** of the downloaded binary against the hash returned by the backend's `/ota/check` endpoint
+2. **Integrity chain**: if an attacker MITMs the `/ota/check` response, they can substitute both the `binary_url` and the `sha256`, defeating verification. This is a pre-existing limitation shared with all other HTTPS paths in the firmware.
+
+For production deployments requiring stronger guarantees, replace `setInsecure()` with `setCACert()` using the MinIO/backend CA certificate. This is a config change, not an architecture change.
+
 ### BLE Commands
 
 | Command | Description |
@@ -215,7 +263,7 @@ Publish to `status/{device_key}/ota`:
 
 ### OTA Check Response
 
-Add `poll_interval_seconds` to `GET /ota/check/{key}` response:
+Add `poll_interval_seconds` to `GET /ota/check/{key}` response. The value comes from the `ota_releases` table's `rollout_pct`-related config or a global/org-level default. If not set, the device uses its NVS default (300 s).
 
 ```json
 {
@@ -229,6 +277,15 @@ Add `poll_interval_seconds` to `GET /ota/check/{key}` response:
 ```
 
 When `update_available: false`, still include `poll_interval_seconds` so the device can adjust its polling cadence even without an update.
+
+### Downgrade / Rollback Releases
+
+The `ota_releases` table has an `is_rollback` column. The backend's `semverGreater` check only offers updates when `release > current`, so rollback releases (lower version) are never offered to devices. If forced downgrade is needed:
+
+- Backend: add a `force` flag to the check response that bypasses semver comparison
+- Firmware: accept the binary regardless of version when `force: true`
+
+This is not implemented in the initial version. The initial version only upgrades (semver greater).
 
 ### MQTT Topic
 
@@ -259,7 +316,6 @@ New topic: `status/{device_key}/ota` — backend should consume this to track ro
 | `include/config.h` | Add OTA defaults: `OTA_POLL_INTERVAL_S`, `OTA_HTTP_TIMEOUT_MS`, `OTA_CHUNK_SIZE` |
 | `include/settings_manager.h` | Add `settings_load_ota_poll_interval()`, `settings_save_ota_poll_interval()` |
 | `src/settings_manager.cpp` | Implement OTA NVS persistence |
-| `platformio.ini` | Switch all envs to OTA partition layouts (`partitions_ota_4m.csv` / `partitions_ota_8m.csv`) |
 | `backend/internal/ota.go` | Add `poll_interval_seconds` to `OTACheckResponse` and `CheckOTA` response |
 
 ---
@@ -268,16 +324,16 @@ New topic: `status/{device_key}/ota` — backend should consume this to track ro
 
 ### Partition Layouts
 
-All environments switch to OTA-capable partition tables:
+All environments already use OTA-capable partition tables (no change needed):
 
-| Env | Current | New | OTA Slot Size |
-|---|---|---|---|
-| `esp32dev` | `min_spiffs.csv` | `partitions_ota_4m.csv` | 2 × 1.9 MB |
-| `esp32c3` | `min_spiffs.csv` | `partitions_ota_4m.csv` | 2 × 1.9 MB |
-| `esp32c3_nodisplay` | `min_spiffs.csv` | `partitions_ota_4m.csv` | 2 × 1.9 MB |
-| `esp32s3` | `partitions_ota_8m.csv` | `partitions_ota_8m.csv` | 2 × 3.7 MB (no change) |
+| Env | Partition Table | OTA Slot Size |
+|---|---|---|
+| `esp32dev` | `partitions_ota_4m.csv` | 2 × 1.9 MB |
+| `esp32c3` | `partitions_ota_4m.csv` | 2 × 1.9 MB |
+| `esp32c3_nodisplay` | `partitions_ota_4m.csv` | 2 × 1.9 MB |
+| `esp32s3` | `partitions_ota_8m.csv` | 2 × 3.7 MB |
 
-The `min_spiffs.csv` partition file is no longer used and can be removed.
+The stale `min_spiffs.csv` file was already deleted from the working tree. The `CLAUDE.md` reference to `min_spiffs.csv` should be updated to `partitions_ota_4m.csv`.
 
 ### Firmware Version
 

@@ -133,7 +133,7 @@ At `115200 baud`, type commands:
 - Blynk is initialized with `Blynk.config()` after WiFi is connected. If Blynk server is unreachable, init logs a failure but does not block indefinitely.
 - BLE uses the built-in ESP32 Arduino BLE library. No extra `lib_deps` required. Works on both classic ESP32 and ESP32-C3.
 - There is only ONE BLE server in the firmware (in `ble_provisioner.cpp`). The `connectivity_manager` calls `ble_notify_sensor_data()` to push live data; it does not create its own BLE server.
-- `board_build.partitions = min_spiffs.csv` provides ~1.9MB app partition. SPIFFS is only used for log overflow fallback when network is unavailable.
+- `board_build.partitions = partitions_ota_4m.csv` provides two 1.9 MB OTA slots (2 × 1.9 MB on 4 MB flash, 2 × 3.7 MB on 8 MB flash). SPIFFS is only used for log overflow fallback when network is unavailable.
 - `CORE_DEBUG_LEVEL=3` enables ESP32 debug logs. Lower to `0` for release builds to save flash and reduce serial noise.
 - Log buffer is 32KB RAM (not 180KB as originally planned) because the Arduino framework + static data + BLE stack consumes significant DRAM. On ESP32 with 320KB RAM, this leaves ~220KB for heap/stack.
 
