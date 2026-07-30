@@ -95,6 +95,7 @@ struct TelemetryOTA {
     uint8_t ota_progress_pct;   // 0..100 during download
     char    ota_status[16];     // "idle", "checking", "downloading",
                                 // "applying", "rebooting", "failed"
+    char    ota_error[64];      // last error message
 };
 
 struct TelemetrySnapshot {
@@ -116,6 +117,22 @@ struct TelemetrySnapshot {
 
     TelemetryLogMeta log;
     uint32_t heap_free;
+    uint32_t min_free_heap;
+    uint8_t  reset_reason;       // 0=power-on, 1=hardware-wdt, 2=task-wdt,
+                                 // 3=exception, 4=sw-reset, 5=deep-sleep
+    char     hw_rev[16];
+    uint32_t crash_count;
+    bool     safe_mode;
+    bool     ntp_synced;
+    bool     ble_active;
+    bool     ble_connected;
+    bool     mqtt_connected;
+    bool     http_configured;
+    bool     supabase_configured;
+    bool     network_skipped;
+    bool     sd_present;
+    uint8_t  log_buffer_used_pct; // 0..100
+    bool     sensors_calibrating;
     TelemetryOTA ota;
 };
 
