@@ -226,6 +226,13 @@ static void sensorTask(void* param) {
         update_cycle_counter(data, dt_seconds);
         evaluate_switches(data);
 
+        // Confirm OTA firmware validity after first successful sensor cycle
+        static bool ota_confirmed = false;
+        if (!ota_confirmed) {
+            ota_confirm_valid();
+            ota_confirmed = true;
+        }
+
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000));
     }
 }
@@ -968,7 +975,6 @@ void setup() {
     ui_set_heartbeat(true);
     init_core_shared();
     init_ota_client();
-    ota_confirm_valid();
 
     LOG_PRINT("Free heap before BLE: %u bytes\n", ESP.getFreeHeap());
     LOG_PRINT("Min free heap: %u bytes\n", ESP.getMinFreeHeap());

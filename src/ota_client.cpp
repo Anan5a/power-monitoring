@@ -120,19 +120,9 @@ void loop_ota_client() {
 
         case OTA_CHECKING: {
             // Build URL: /ota/check/{device_key}?current_ver=X.X.X
-            // The backend base URL is read from NVS (set via BLE/Supabase command).
+            // Read backend URL from NVS (set via BLE/Supabase ota_set_backend_url)
             char backend_url[128] = "";
-            {
-                Preferences prefs;
-                if (prefs.begin("pm-ota", true)) {
-                    String s = prefs.getString("backend_url", "");
-                    if (s.length() > 0) {
-                        strncpy(backend_url, s.c_str(), sizeof(backend_url) - 1);
-                    }
-                    prefs.end();
-                }
-            }
-            if (backend_url[0] == '\0') {
+            if (!settings_load_ota_backend_url(backend_url, sizeof(backend_url))) {
                 // No backend URL configured — skip check, go back to IDLE
                 set_state(OTA_IDLE);
                 return;
@@ -473,6 +463,13 @@ uint32_t ota_get_poll_interval() {
 
 void ota_confirm_valid() {
     if (g_rollback_confirmed) return;
+
+    // Wait for the grace period before confirming. This gives the firmware
+    // time to complete init, run a few sensor ticks, and prove it's stable.
+    // If the device crashes during the grace window, the bootloader reverts.
+    if (millis() < (unsigned long)OTA_GRACE_SECONDS * 1000) {
+        return; // grace period not yet elapsed
+    }
 
     const esp_partition_t* running = esp_ota_get_running_partition();
     if (!running) return;
