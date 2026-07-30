@@ -5,15 +5,18 @@
 #include <time.h>
 #include "sensor_manager.h"
 #include "settings_manager.h"
+#include "telemetry.h"
 
 void init_connectivity();
 void loop_connectivity();
 void publish_data(const SensorSnapshot& data);
+void publish_data(const SensorSnapshot& data, const TelemetrySnapshot& snap);
 const char* get_local_ip_str();
 time_t get_epoch_time();
 bool try_sync_epoch_time();
 void publish_data_http(const SensorSnapshot& data, const char* json_buffer, size_t json_len);
 void publish_data_supabase(const SensorSnapshot& data);
+void publish_data_supabase(const SensorSnapshot& data, const TelemetrySnapshot& snap);
 void publish_log_batch();
 void publish_log_batch_supabase();
 void sync_calibration_to_supabase();
@@ -21,6 +24,8 @@ void sync_ble_pin_to_supabase();
 void publish_switch_state(uint8_t idx, bool is_energized);
 bool get_ble_pin_from_supabase(char* pin_str, size_t len);
 bool is_cloud_connected();
+bool mqtt_is_connected();
+bool network_is_skipped();
 
 // True once NTP has successfully synced the wall clock. Until then
 // `time()` returns a stale / untrusted value and the telemetry path stamps
@@ -41,6 +46,10 @@ void apply_settings_posthook(const char* cmd_type);  // reconnect WiFi/MQTT, res
 
 // Relay state publishing
 void publish_switch_state(uint8_t idx, bool is_energized);
+
+// Publish OTA status to MQTT topic status/{device_key}/ota
+void publish_ota_status(const char* status, const char* version,
+                         uint8_t progress_pct, const char* error);
 
 // Telemetry heartbeat helpers (telemetry.h is the schema definition; these
 // functions live here because they talk to Supabase).

@@ -6,6 +6,8 @@
 #include "settings_manager.h"
 #include "data_logger.h"
 #include "ble_provisioner.h"
+#include "event_log.h"
+#include "device_identity.h"
 #include "battery_profile.h"
 #include "coulomb_counter.h"
 #include "energy_counter.h"
@@ -23,14 +25,17 @@
 #include <ArduinoJson.h>
 // #include <BlynkSimpleEsp32.h> // Blynk disabled
 // Blynk disabled — uncomment above and set BLYNK_AUTH_TOKEN to enable
+#if USE_PROTOBUF
+#include "telemetry_pb.h"
+#endif
 #include <HTTPClient.h>
 #include <time.h>
 #include <stdlib.h>     // setenv
 #include <math.h>       // isfinite
 #include <esp_sntp.h>
 
-static WiFiClient wifiClient;
-static PubSubClient mqtt(wifiClient);
+static WiFiClientSecure mqttClient;
+static PubSubClient mqtt(mqttClient);
 
 static char ip_str[16] = "0.0.0.0";
 
@@ -118,8 +123,12 @@ static bool telemetry_http_prepare(const char* full_url, const char* anon_key) {
     if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_PUBLISH) return false;
     if (!g_telemetry_http_ready) {
         g_telemetry_client.setInsecure();
-        g_telemetry_client.setHandshakeTimeout(30);
+        // 10 s handshake (was 30) keeps any single TLS connect well under the
+        // 30 s task WDT; a dead server fails faster instead of stalling the
+        // network task into a WDT reboot loop.
+        g_telemetry_client.setHandshakeTimeout(10);
         g_telemetry_http.setReuse(true);  // connection reuse for high-frequency telemetry
+        g_telemetry_http.setTimeout(4000);  // bound each request well under the WDT
         if (!g_telemetry_http.begin(g_telemetry_client, full_url)) {
             g_telemetry_http_ready = false;
             return false;
@@ -163,10 +172,11 @@ static bool supabase_http_prepare(const char* full_url, const char* anon_key) {
     static bool g_supa_client_configured = false;
     if (!g_supa_client_configured) {
         g_supa_client.setInsecure();
-        g_supa_client.setHandshakeTimeout(30);
+        g_supa_client.setHandshakeTimeout(10);  // 10 s (was 30) — see telemetry_http_prepare
         g_supa_client_configured = true;
     }
     g_supa_http.setReuse(false);
+    g_supa_http.setTimeout(4000);  // bound each low-freq request under the WDT
     if (!g_supa_http.begin(g_supa_client, full_url)) {
         LOG_PRINT("[SUPA_HTTP] begin failed: %s\n", full_url);
         supabase_http_reset();
@@ -292,6 +302,8 @@ static bool g_ntp_timeout_warned = false;
 static const uint32_t NTP_TIMEOUT_MS = 5000;
 
 bool ntp_is_synced() { return g_ntp_synced; }
+bool mqtt_is_connected() { return mqtt.connected(); }
+bool network_is_skipped() { return skip_network; }
 
 static SyncResult sync_time() {
     if (skip_network) return SYNC_NO_WIFI;
@@ -316,12 +328,14 @@ static SyncResult sync_time() {
         // to flag the uptime-based timestamp.
         log_epoch_valid_set(false);
         g_ntp_synced = false;
+        log_event(EVENT_LOG_WARN, "ntp", "sync timeout");
         return SYNC_TIMEOUT;
     }
     epoch_time = t;
     log_set_epoch(t);
     log_epoch_valid_set(true);  // trusted post-2023 epoch
     g_ntp_synced = true;
+    log_event(EVENT_LOG_INFO, "ntp", "synced");
     // Reset the warning latch so the next timeout (e.g. after a WiFi
     // reconnect) prints a fresh message instead of staying silent.
     g_ntp_timeout_warned = false;
@@ -366,6 +380,14 @@ enum WifiState { WST_INIT, WST_CONNECTING, WST_CONNECTED, WST_RETRY_BACKOFF };
 static WifiState s_wifi_state = WST_INIT;
 static uint32_t s_wifi_state_entered_ms = 0;
 static uint32_t s_wifi_connect_deadline = 0;
+
+// Post-connect work is split across ticks so each blocking call (NTP sync,
+// Supabase calibration sync, MQTT connect) runs in its own 10 ms network-task
+// tick instead of all at once in the CONNECTING->CONNECTED transition. This
+// keeps every tick well under the 30 s WDT and lets mqtt.loop()/BLE run between
+// steps. Steps run in order; PCS_DONE means steady state.
+enum PostConnectStep { PCS_IDLE, PCS_NTP, PCS_CAL, PCS_MQTT, PCS_DONE };
+static PostConnectStep s_post_connect = PCS_IDLE;
 static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 5000;
 static const uint32_t WIFI_RETRY_BACKOFF_MS = 30000;
 
@@ -402,23 +424,14 @@ static void wifi_state_tick() {
                 LOG_PRINTLN(" — connected");
                 IPAddress ip = WiFi.localIP();
                 snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+                log_event(EVENT_LOG_INFO, "wifi", "connected %s", ip_str);
                 // Disable BLE to free ~50KB heap for TLS operations.
                 LOG_PRINTLN("[BLE] disabling BLE stack to free heap for TLS");
                 deinit_ble_provisioner();
-                // Bounded NTP sync; may fail if no internet, that's fine.
-                SyncResult r = sync_time();
-                if (r == SYNC_OK) {
-                    sync_calibration_to_supabase();
-                }
-                // Configure MQTT broker (we don't block on connect — connect_mqtt
-                // is rate-limited and runs in loop_connectivity).
-                char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
-                if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
-                    mqtt.setServer(mqtt_broker, mqtt_port);
-                    connect_mqtt();
-                } else {
-                    LOG_PRINTLN("MQTT: not configured (skip)");
-                }
+                // Defer NTP / Supabase calibration sync / MQTT connect to the
+                // WST_CONNECTED tick (s_post_connect) so no single tick does
+                // all of it and risks the 30 s WDT.
+                s_post_connect = PCS_NTP;
                 wifi_state_enter(WST_CONNECTED);
                 return;
             }
@@ -438,7 +451,32 @@ static void wifi_state_tick() {
             return;
         }
         case WST_CONNECTED:
-            // Steady state. Disconnect detection happens in loop_connectivity.
+            // Run post-connect work one step per tick so each blocking call
+            // (NTP, Supabase calibration sync, MQTT connect) is isolated and
+            // the task can still service mqtt.loop()/BLE between steps.
+            if (s_post_connect == PCS_NTP) {
+                SyncResult r = sync_time();
+                s_post_connect = (r == SYNC_OK) ? PCS_CAL : PCS_MQTT;
+                return;
+            }
+            if (s_post_connect == PCS_CAL) {
+                sync_calibration_to_supabase();
+                s_post_connect = PCS_MQTT;
+                return;
+            }
+            if (s_post_connect == PCS_MQTT) {
+                char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
+                if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
+                    mqtt.setServer(mqtt_broker, mqtt_port);
+                    connect_mqtt();
+                } else {
+                    LOG_PRINTLN("MQTT: not configured (skip)");
+                }
+                s_post_connect = PCS_DONE;
+                return;
+            }
+            // Steady state (PCS_IDLE/PCS_DONE). Disconnect detection happens
+            // in loop_connectivity.
             return;
         case WST_RETRY_BACKOFF:
             if (millis() - s_wifi_state_entered_ms >= WIFI_RETRY_BACKOFF_MS) {
@@ -450,23 +488,81 @@ static void wifi_state_tick() {
     }
 }
 
+// Resolve the per-device MQTT identity. The backend authenticates each device
+// with device_key (username/client id) + api_key (password), publishes
+// status/{device_key}/online for presence, and subscribes to
+// telemetry/{device_type}/{device_key} for ingestion. If no device_key is
+// configured (e.g. dev broker, no Supabase provisioning), fall back to a
+// MAC-derived id so two devices don't collide on a shared client id.
+static void get_mqtt_identity(char* device_key, size_t key_len) {
+    if (key_len > 0) device_key[0] = '\0';
+    char dk[64] = "";
+    if (settings_load_supabase_device_key(dk, sizeof(dk)) && is_valid_uuid(dk)) {
+        strlcpy(device_key, dk, key_len);
+        return;
+    }
+    // Fallback: MAC-based unique id (no backend auth; for dev/anonymous broker).
+    snprintf(device_key, key_len, "dev-%s", WiFi.macAddress().c_str());
+}
+
+static void publish_online_status(const char* device_key, bool online) {
+    char topic[96];
+    snprintf(topic, sizeof(topic), "status/%s/online", device_key);
+    // Backend expects {"online":bool,"ts":unix_seconds}; ts=0 falls back to
+    // the server clock, but send epoch when NTP has synced. The schema/fw
+    // fields let the backend negotiate/record the device's telemetry shape
+    // (forward-looking: a future backend can reject or upgrade on mismatch).
+    char payload[96];
+    time_t ts = get_epoch_time();
+    snprintf(payload, sizeof(payload),
+             "{\"online\":%s,\"ts\":%ld,\"schema\":\"%s\",\"fw\":\"%s\"}",
+             online ? "true" : "false", (long)ts,
+             TELEMETRY_PROFILE_STRING, TELEMETRY_FW_VERSION);
+    // Retained so a freshly-subscribed backend sees the last known state.
+    mqtt.publish(topic, payload, true);
+}
+
 static void connect_mqtt() {
     if (skip_network) return;
     static uint32_t last_mqtt_retry = -30000UL; // underflow so first call passes
     if (millis() - last_mqtt_retry < 30000) return; // rate limit: 1 attempt per 30s
     last_mqtt_retry = millis();
-    // Last-will-and-testament: when the broker sees this client drop, it
-    // publishes "offline" to <topic>/status. We override with "online" right
-    // after a successful connect so subscribers see the actual state.
-    // PubSubClient exposes LWT via the connect() overloads, not a setWill().
-    const char* will_topic = MQTT_TOPIC "/status";
-    bool connected = mqtt.connect("power-monitor-esp32", will_topic, 1, true, "offline");
+
+    // Configure TLS for MQTT. Using setInsecure() accepts any server cert;
+    // for production with a known broker, replace with setCACert().
+    mqttClient.setInsecure();
+    mqttClient.setHandshakeTimeout(10);  // 10 s handshake timeout
+
+    char device_key[64];
+    get_mqtt_identity(device_key, sizeof(device_key));
+
+    // LWT: broker publishes {"online":false} when this client drops ungracefully.
+    // QoS 1 + retained so the backend's online/offline detection is reliable.
+    char will_topic[96];
+    snprintf(will_topic, sizeof(will_topic), "status/%s/online", device_key);
+    char will_payload[48];
+    snprintf(will_payload, sizeof(will_payload), "{\"online\":false,\"ts\":0}");
+
+    // Authenticate with device_key/api_key when both are configured (production
+    // backend requires it). Without them, connect anonymously (dev broker).
+    char api_key[128] = "";
+    bool have_auth = settings_load_supabase_api_key(api_key, sizeof(api_key)) && api_key[0];
+    bool connected;
+    if (have_auth) {
+        connected = mqtt.connect(device_key, device_key, api_key,
+                                  will_topic, 1, true, will_payload);
+    } else {
+        connected = mqtt.connect(device_key, will_topic, 1, true, will_payload);
+    }
+
     if (connected) {
-        LOG_PRINTLN("MQTT connected");
-        // Override LWT with our actual liveness state.
-        mqtt.publish(will_topic, "online", true);
+        LOG_PRINT("MQTT connected (client=%s, auth=%s)\n", device_key, have_auth ? "yes" : "no");
+        log_event(EVENT_LOG_INFO, "mqtt", "connected");
+        // Override the LWT with our actual liveness state now that we're up.
+        publish_online_status(device_key, true);
     } else {
         LOG_PRINT("MQTT fail rc=%d\n", mqtt.state());
+        log_event(EVENT_LOG_WARN, "mqtt", "connect failed rc=%d", mqtt.state());
     }
 }
 
@@ -506,7 +602,24 @@ void publish_data_http(const SensorSnapshot& data, const char* json_buffer, size
     // LOG_PRINT("[HTTP] posting %d bytes to %s\n", json_len, url);
     // LOG_PRINT("[JSON] %.*s\n", json_len < 256 ? json_len : 256, json_buffer);
     HTTPClient http;
-    http.begin(url);
+    http.setTimeout(4000);  // bound each request under the 30 s task WDT
+    // http.begin(url) (single-arg) cannot do TLS on ESP32 Arduino; an https
+    // URL must be handed to begin(WiFiClientSecure&, url). Use a secure client
+    // for https:// and the plain TCP client for http://.
+    bool is_https = (strncmp(url, "https://", 8) == 0);
+    bool begun;
+    if (is_https) {
+        static WiFiClientSecure https_client;  // reused across calls; setInsecure once
+        https_client.setInsecure();
+        https_client.setHandshakeTimeout(10);
+        begun = http.begin(https_client, url);
+    } else {
+        begun = http.begin(url);
+    }
+    if (!begun) {
+        LOG_PRINTLN("[HTTP] begin() failed");
+        return;
+    }
     http.addHeader("Content-Type", "application/json");
     if (strlen(token) > 0) http.addHeader("Authorization", token);
     int rc = http.POST((uint8_t*)json_buffer, json_len);
@@ -548,10 +661,16 @@ void loop_connectivity() {
         telemetry_http_reset();  // kill stale TLS session after WiFi reconnect
     }
 
-    // WiFi dropped — restart BLE advertising so device can be re-provisioned.
+    // WiFi dropped — bring BLE back up so the device can be re-provisioned.
+    // WiFi connect tears the NimBLE stack down (deinit_ble_provisioner, to free
+    // ~50KB heap for TLS), so a bare start_ble_advertising() here does nothing —
+    // ble_initialized is false and it early-returns. Re-create the stack via
+    // init_ble_provisioner(); it's idempotent (gated on ble_initialized) so the
+    // per-tick calls while disconnected are cheap no-ops after the first.
     if (wifi_was_connected && !wifi_connected) {
-        LOG_PRINTLN("[WiFi] disconnected — restarting BLE advertising");
-        start_ble_advertising();
+        LOG_PRINTLN("[WiFi] disconnected — re-enabling BLE provisioning");
+        log_event(EVENT_LOG_WARN, "wifi", "disconnected");
+        init_ble_provisioner();
         telemetry_http_reset();  // kill TLS session on disconnect to prevent leak
     }
     wifi_was_connected = wifi_connected;
@@ -623,21 +742,44 @@ void publish_log_batch() {
     uint8_t batch[512];
     char encoded[700];
 
-    // Drain RAM buffer first
-    size_t batch_len = log_pop_batch(batch, sizeof(batch));
-    while (batch_len > 0) {
-        base64_encode(batch, batch_len, encoded);
-        if (!mqtt.publish(MQTT_LOG_TOPIC, encoded)) {
-#if CORE_DEBUG_LEVEL >= 3
-            LOG_PRINTLN("[MQTT] log publish() returned false — broker dropped or buffer full");
-#endif
-            break;  // stop draining — broker connection is likely dead
+    // Pending batch from a previous failed publish — emit it before popping
+    // new data so a transient broker failure doesn't lose the popped entries.
+    static uint8_t pending[512];
+    static size_t pending_len = 0;
+
+    if (pending_len > 0) {
+        base64_encode(pending, pending_len, encoded);
+        if (mqtt.publish(MQTT_LOG_TOPIC, encoded)) {
+            pending_len = 0;
+        } else {
+            return;  // still can't publish; keep pending for next tick
         }
-        batch_len = log_pop_batch(batch, sizeof(batch));
     }
 
-    // Then drain LittleFS overflow file
+    // Drain RAM buffer first. Only pop one batch at a time: if the publish
+    // fails, stash it in `pending` and stop so it is retried next tick instead
+    // of being dropped (the old loop popped everything up front and lost the
+    // tail on the first failed publish).
+    size_t batch_len = log_pop_batch(batch, sizeof(batch));
+    if (batch_len > 0) {
+        base64_encode(batch, batch_len, encoded);
+        if (mqtt.publish(MQTT_LOG_TOPIC, encoded)) {
+            // success — keep draining in subsequent calls
+        } else {
+            memcpy(pending, batch, batch_len);
+            pending_len = batch_len;
+#if CORE_DEBUG_LEVEL >= 3
+            LOG_PRINTLN("[MQTT] log publish() returned false — batch queued for retry");
+#endif
+            return;
+        }
+    }
+
+    // Then drain LittleFS overflow file. Only DELETE the file once it has
+    // been fully drained (n == 0); on a mid-drain publish failure, keep the
+    // file so the remaining entries survive for the next attempt.
     if (log_open_overflow_for_read()) {
+        bool drained = true;
         while (true) {
             size_t n = log_read_overflow_chunk(batch, sizeof(batch));
             if (n == 0) break;
@@ -646,10 +788,15 @@ void publish_log_batch() {
 #if CORE_DEBUG_LEVEL >= 3
                 LOG_PRINTLN("[MQTT] log publish() returned false during overflow drain");
 #endif
+                drained = false;
                 break;
             }
         }
-        log_close_overflow();
+        if (drained) {
+            log_close_overflow();       // fully drained: delete the file
+        } else {
+            log_close_overflow_keep();  // partial drain: keep the file for retry
+        }
     }
 }
 
@@ -745,10 +892,8 @@ static void serialize_telemetry_core(const TelemetrySnapshot& s, JsonObject root
         write_float(bo, "cumulative_Ah_in", b.cumulative_Ah_in);
         write_float(bo, "cumulative_Ah_out", b.cumulative_Ah_out);
         write_float(bo, "equivalent_full_cycles", b.equivalent_full_cycles);
-        bo["capacity_test_active"] = b.capacity_test_active;
-        if (b.capacity_test_soh_valid) {
-            write_float(bo, "capacity_test_soh_pct", b.capacity_test_soh_pct);
-        }
+        write_float(bo, "soh_pct", b.soh_pct);
+        bo["soh_samples"] = b.soh_samples;
     }
 
     JsonObject log = root["log"].to<JsonObject>();
@@ -883,6 +1028,10 @@ static JsonDocument g_supa_doc;
 // call but is bounded (~1 KB) and confined to the single network task.
 static uint8_t g_log_count = 0;
 static uint32_t g_log_last_ts = 0;
+// Count of log entries emitted while NTP was untrusted (recorded_at left to
+// the server default). Surfaced in telemetry so the operator can see how much
+// of the recent history lacks a device-side wall-clock stamp.
+static uint32_t g_log_ts_untrusted_count = 0;
 
 static void flush_log_batch(const char* supabase_url, const char* anon_key,
     const char* device_key, const char* api_key) {
@@ -891,11 +1040,15 @@ static void flush_log_batch(const char* supabase_url, const char* anon_key,
     StaticJsonDocument<1024> doc;
     JsonArray arr = doc.to<JsonArray>();
 
+    // g_log_last_ts == 0 means the entries were captured before NTP synced.
+    // Omit p_recorded_at so the Postgres column default (now()) applies;
+    // stamping 0 stored 1970-01-01 rows and polluted history.
+    bool trusted = (g_log_last_ts != 0);
     for (uint8_t e = 0; e < g_log_count; e++) {
         JsonObject elem = arr.add<JsonObject>();
         elem["p_device_key"] = device_key;
         elem["p_device_api_key"] = api_key;
-        elem["p_recorded_at"] = g_log_last_ts + e;  // approximate per-entry timestamps
+        if (trusted) elem["p_recorded_at"] = g_log_last_ts + e;
         elem["p_metadata"] = JsonObject();
     }
 
@@ -919,7 +1072,12 @@ static void send_log_entry(uint32_t timestamp_ms, const int16_t* v, const int16_
     const char* device_key, const char* api_key) {
     if (!is_valid_uuid(api_key)) return;
 
-    // Local doc per call (see fix-46 comment above g_log_count).
+    // Build a single-row RPC payload with the full sensor data and POST
+    // it immediately. The old code accumulated entries in g_log_count and
+    // called flush_log_batch at LOG_BATCH_SIZE, but flush_log_batch sent
+    // only placeholder rows (device_key + empty metadata) — the actual
+    // sensor data built here was silently dropped. Each entry is ~300
+    // bytes; posting individually is fine for the log drain rate (≤1/s).
     StaticJsonDocument<1024> doc;
     JsonArray arr = doc.to<JsonArray>();
 
@@ -959,22 +1117,26 @@ static void send_log_entry(uint32_t timestamp_ms, const int16_t* v, const int16_
     {
         time_t ts = log_to_epoch(timestamp_ms);
         if (ts == (time_t)-1) {
-            // log_epoch_valid was false at the moment of encoding. Stamp 0
-            // so the consumer knows the timestamp is untrusted, and warn
-            // once per log batch.
-            elem["p_recorded_at"] = 0;
             g_log_last_ts = 0;
-            LOG_PRINTLN("log timestamp invalid; stamping 0");
+            g_log_ts_untrusted_count++;
         } else {
             elem["p_recorded_at"] = (uint32_t)ts;
             g_log_last_ts = (uint32_t)ts;
         }
     }
-    g_log_count++;
 
-    if (g_log_count >= LOG_BATCH_SIZE) {
-        flush_log_batch(supabase_url, anon_key, device_key, api_key);
+    // POST immediately — no batching. The old batching path lost data.
+    size_t needed = serializeJson(doc, nullptr, 0) + 16;
+    uint8_t* buf = (uint8_t*)malloc(needed);
+    if (!buf) {
+        LOG_PRINTLN("[LOG] OOM in send_log_entry — dropping entry");
+        return;
     }
+    size_t len = serializeJson(doc, buf, needed);
+    telemetry_post("/rest/v1/rpc/insert_telemetry", (char*)buf, len,
+                    supabase_url, anon_key);
+    free(buf);
+    g_log_count++;
 }
 
 static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
@@ -1000,7 +1162,10 @@ static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
             offset += sizeof(BaseEntry);
         } else if (type == ENTRY_DELTA) {
             if (offset + sizeof(DeltaEntry) > len) break;
-            if (!*have_abs) { offset++; continue; }
+            // A delta with no preceding base cannot be reconstructed into
+            // absolute values. Skip the whole DeltaEntry (not 1 byte — that
+            // would desync the rest of the stream by sizeof(DeltaEntry)-1).
+            if (!*have_abs) { offset += sizeof(DeltaEntry); continue; }
             DeltaEntry e;
             memcpy(&e, data + offset, sizeof(e));
             *abs_ts += e.dt_ms;
@@ -1122,7 +1287,12 @@ void publish_log_batch_supabase() {
     }
 
     if (state == ST_DONE) {
-        flush_log_batch(supabase_url, anon_key, device_key, api_key);
+        // send_log_entry now POSTs each entry immediately, so there are
+        // no pending entries to flush. g_log_count is just a counter.
+        if (g_log_count > 0) {
+            LOG_PRINT("[LOG] drain complete: %u entries sent\n", (unsigned)g_log_count);
+            g_log_count = 0;
+        }
         if (log_entries_count() > 0 || log_has_overflow_file()) {
             state = ST_RAM;
             ram_have = false;
@@ -1135,17 +1305,53 @@ void publish_log_batch_supabase() {
 
 static JsonDocument g_pub_doc;
 
+// Drain one pending telemetry overflow entry and publish it via MQTT.
+// Called at the start of publish_data() so queued payloads are retried
+// before new data is published. Drains at most one entry per call to
+// keep the tick short.
+static void drain_pending_telemetry_overflow() {
+    if (!sd_is_present()) return;
+    char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
+    if (!settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) return;
+    if (!mqtt.connected()) return;
+
+    char payload[2048];
+    size_t plen = drain_telemetry_overflow(payload, sizeof(payload));
+    if (plen == 0) return;
+
+    char device_key[64];
+    get_mqtt_identity(device_key, sizeof(device_key));
+    char topic[128];
+    snprintf(topic, sizeof(topic), "telemetry/%s/%s", DEVICE_TYPE, device_key);
+    if (mqtt.publish(topic, payload)) {
+        LOG_PRINT("[MQTT] overflow replay: %u bytes\n", (unsigned)plen);
+    } else {
+        // Re-queue on failure — prepend back to the file
+        save_telemetry_overflow(payload, plen);
+    }
+}
+
 void publish_data(const SensorSnapshot& data) {
+    if (skip_network) return;
+    // Build once and delegate so the MQTT/HTTP/BLE path and the Supabase path
+    // share a single TelemetrySnapshot — see publish_data(data, snap).
+    TelemetrySnapshot snap;
+    telemetry_build(snap);
+    publish_data(data, snap);
+}
+
+void publish_data(const SensorSnapshot& data, const TelemetrySnapshot& snap) {
     (void)data;
     if (skip_network) return;
 
-    // Build the canonical snapshot from all current sources. We do not depend
-    // on the SensorSnapshot argument here because telemetry_build() pulls
-    // fresh data from sensor_manager / counters / NVS at the moment of
-    // publish, which is the right semantic for a 5-s publish tick.
-    TelemetrySnapshot snap;
-    telemetry_build(snap);
+    // Drain any pending telemetry overflow entries before publishing new
+    // data. This retries failed publishes from previous ticks.
+    drain_pending_telemetry_overflow();
 
+    // snap was built by the caller (publish_data(data)) so both transports
+    // share one TelemetrySnapshot. telemetry_build() clears the one-shot
+    // capacity-test SoH flag, so building twice per cycle (the old behavior)
+    // meant the second publish never carried capacity_test_soh_valid.
 #if MQTT_LEGACY_PAYLOAD
     // Legacy payload shape preserved for existing MQTT consumers. Re-emits
     // the ina3221/ina226/ads1115/ch_N_V/relayN/log_* keys exactly as before.
@@ -1207,8 +1413,11 @@ void publish_data(const SensorSnapshot& data) {
     static char buffer[TELEMETRY_BUF_BYTES];
     size_t len = serialize_telemetry(snap, buffer, sizeof(buffer));
     if (len == 0) {
-        // Should not happen at full saturation; bail to avoid publishing a
-        // truncated JSON.
+        // Serialization overflowed the 4 KB buffer (or the snapshot is huge).
+        // Previously this returned silently, so a swollen payload quietly
+        // blackholed telemetry with no log trail. Log it so the operator can
+        // raise TELEMETRY_BUF_BYTES or trim the schema.
+        LOG_PRINTLN("[TELEM] serialize overflow — publish dropped (raise TELEMETRY_BUF_BYTES)");
         return;
     }
 #endif
@@ -1218,16 +1427,45 @@ void publish_data(const SensorSnapshot& data) {
         ESP.getFreeHeap());
 #endif
 
-    // MQTT — keep the legacy 1-second rate limit so the broker doesn't drown
-    char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic[64];
+    // MQTT — publish to the backend contract topic
+    // telemetry/{device_type}/{device_key}. Keep the 1-second rate limit so
+    // the broker doesn't drown.
+    char mqtt_broker[64]; uint16_t mqtt_port; char mqtt_topic_unused[64];
     static unsigned long last_mqtt_pub = 0;
-    if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic, sizeof(mqtt_broker))) {
+    if (settings_load_mqtt(mqtt_broker, &mqtt_port, mqtt_topic_unused, sizeof(mqtt_broker))) {
         if (mqtt.connected() && millis() - last_mqtt_pub >= 1000) {
             last_mqtt_pub = millis();
-            if (!mqtt.publish(MQTT_TOPIC, buffer, len)) {
-#if CORE_DEBUG_LEVEL >= 3
-                LOG_PRINTLN("[MQTT] publish() returned false — broker dropped or buffer full");
+            char device_key[64];
+            get_mqtt_identity(device_key, sizeof(device_key));
+            char topic[128];
+#if USE_PROTOBUF
+            // Protobuf-encode and publish to the /pb topic suffix. The backend
+            // does not yet consume this topic — this is firmware-side plumbing
+            // only. JSON publish is skipped when protobuf is active.
+            static uint8_t pb_buf[TELEMETRY_BUF_BYTES];
+            size_t pb_len = encode_telemetry_pb(snap, pb_buf, sizeof(pb_buf));
+            if (pb_len > 0) {
+                snprintf(topic, sizeof(topic), "telemetry/%s/%s/pb", DEVICE_TYPE, device_key);
+                if (!mqtt.publish(topic, (const char*)pb_buf, pb_len)) {
+                    LOG_PRINTLN("[MQTT] pb publish() returned false");
+                }
+            } else {
+                LOG_PRINTLN("[MQTT] pb encode failed — skipping publish");
+            }
+#else
+            snprintf(topic, sizeof(topic), "telemetry/%s/%s", DEVICE_TYPE, device_key);
+            if (!mqtt.publish(topic, buffer, len)) {
+                LOG_PRINTLN("[MQTT] publish failed — queuing to SD overflow");
+                save_telemetry_overflow(buffer, len);
+            }
 #endif
+            // Periodic presence heartbeat: the backend's staleness sweep marks
+            // a device offline after 60 s without an online message, so
+            // re-publish every 45 s while connected.
+            static unsigned long last_heartbeat = 0;
+            if (millis() - last_heartbeat >= 45000) {
+                last_heartbeat = millis();
+                publish_online_status(device_key, true);
             }
         }
     }
@@ -1242,14 +1480,26 @@ void publish_data(const SensorSnapshot& data) {
     if (blen > 0) {
         ble_notify_sensor_data(ble_buf, blen);
     } else {
-        // Fall back to full buffer if subset serializer fails (shouldn't, but
-        // keeps the notify path resilient).
-        ble_notify_sensor_data(buffer, len);
+        // Subset serializer overflowed. The full buffer (up to ~1.4 KB) does
+        // NOT fit the default 20-byte ATT MTU, so sending it would truncate
+        // mid-notify and hand the dashboard a corrupt JSON fragment. Drop the
+        // notify instead — the next tick's subset will go out once the
+        // payload shrinks (it's bounded at full channel saturation).
+        LOG_PRINTLN("[BLE] telemetry subset overflow — notify dropped (MTU too small for full payload)");
     }
     vTaskDelay(pdMS_TO_TICKS(25));  // space out notifies — avoids BLE stack crowding / UX jitter
 }
 
 void publish_data_supabase(const SensorSnapshot& data) {
+    if (skip_network) return;
+    // Build once and delegate so the Supabase path shares the same
+    // TelemetrySnapshot as the MQTT/HTTP/BLE path (see publish_data(data,snap)).
+    TelemetrySnapshot snap;
+    telemetry_build(snap);
+    publish_data_supabase(data, snap);
+}
+
+void publish_data_supabase(const SensorSnapshot& data, const TelemetrySnapshot& snap) {
     (void)data;
     if (skip_network) return;
     if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_PUBLISH) {
@@ -1281,8 +1531,8 @@ void publish_data_supabase(const SensorSnapshot& data) {
     }
 
     // Build the canonical snapshot once and serialize it.
-    TelemetrySnapshot snap;
-    telemetry_build(snap);
+    // (snap is provided by the caller — publish_data_supabase(data) — so the
+    // MQTT/HTTP/BLE and Supabase paths share one TelemetrySnapshot.)
 
     // Wrap it in the Supabase RPC envelope: array of {p_device_key,
     // p_device_api_key, p_payload, p_recorded_at}. One row per call keeps the
@@ -1317,11 +1567,11 @@ void publish_data_supabase(const SensorSnapshot& data) {
 
     int rc = telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
     if (rc == 200 || rc == 201 || rc == 204) {
-        // Network confirmed up and reachable — clear any stale overflow file
-        // since entries were captured in RAM and have now been published.
-        if (log_has_overflow_file()) {
-            log_close_overflow();
-        }
+        // Live snapshot published. Do NOT close the LittleFS overflow file
+        // here: this RPC carries the current reading, not the backlog that was
+        // spilled while offline. The backlog is drained and the file closed by
+        // publish_log_batch_supabase(); deleting it here would destroy
+        // undrained historical data the moment connectivity returns.
     } else {
         print_http_error(g_supa_http, rc);
         if (rc == 400) {
@@ -1577,6 +1827,32 @@ void publish_switch_state(uint8_t idx, bool is_energized) {
     }
 }
 
+void publish_ota_status(const char* status, const char* version,
+                         uint8_t progress_pct, const char* error) {
+    if (!mqtt.connected()) return;
+
+    char topic[128];
+    char device_key[64] = "";
+    settings_load_supabase_device_key(device_key, sizeof(device_key));
+    if (device_key[0] == '\0') {
+        // Fall back to device serial if no device_key configured
+        strncpy(device_key, get_device_serial(), sizeof(device_key) - 1);
+    }
+    snprintf(topic, sizeof(topic), "status/%s/ota", device_key);
+
+    StaticJsonDocument<256> doc;
+    doc["status"] = status;
+    if (version && version[0]) doc["version"] = version;
+    if (progress_pct > 0) doc["progress"] = progress_pct;
+    if (error && error[0]) doc["error"] = error;
+
+    char buf[256];
+    size_t n = serializeJson(doc, buf, sizeof(buf));
+    if (n > 0) {
+        mqtt.publish(topic, 0, false, buf);
+    }
+}
+
 void apply_settings_posthook(const char* cmd_type) {
     if (strcmp(cmd_type, "set_wifi") == 0) {
         char ssid[64] = "", pass[64] = "";
@@ -1584,6 +1860,15 @@ void apply_settings_posthook(const char* cmd_type) {
             WiFi.disconnect(true);
             vTaskDelay(pdMS_TO_TICKS(100));
             WiFi.begin(ssid, pass);
+            // Reset the connection state machine so the post-connect sequence
+            // (NTP sync, Supabase calibration sync, MQTT connect) re-runs for
+            // the new link. Without this, s_wifi_state stays WST_CONNECTED and
+            // s_post_connect stays PCS_DONE, so a credentials change would
+            // leave NTP/MQTT bound to the old (or no) session.
+            s_post_connect = PCS_IDLE;
+            wifi_state_enter(WST_CONNECTING);
+            s_wifi_connect_deadline = millis() + WIFI_CONNECT_TIMEOUT_MS;
+            g_ntp_synced = false;
             LOG_PRINTLN("[CMD] WiFi reconnecting with new credentials");
         }
     } else if (strcmp(cmd_type, "set_mqtt") == 0) {
