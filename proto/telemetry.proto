@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+import "nanopb.proto";
+
+// ── Telemetry snapshot ───────────────────────────────────────────────
+// Mirrors TelemetrySnapshot (include/telemetry.h). The Battery message
+// carries soh_pct/soh_samples (Part 3) instead of the removed
+// capacity_test fields.
+
+message TelemetryDevice {
+    bytes id   = 1 [(nanopb).max_size = 24];
+    bytes fw   = 2 [(nanopb).max_size = 16];
+    uint32 uptime_ms = 3;
+}
+
+message TelemetryWifi {
+    sint32 rssi = 1;  // int8_t, signed
+    bytes ip   = 2 [(nanopb).max_size = 16];
+}
+
+message TelemetryChannel {
+    uint32 ch = 1;
+    float  V  = 2;
+    float  I  = 3;
+    float  P  = 4;
+    float  energy_Wh  = 5;
+    float  charge_mAh = 6;
+}
+
+message TelemetrySwitch {
+    uint32 idx        = 1;
+    uint32 type       = 2;
+    bool   state      = 3;
+    bool   auto_mode  = 4;
+    bool   rule_tripped = 5;
+}
+
+message TelemetryBattery {
+    uint32 ch          = 1;
+    uint32 profile_id  = 2;
+    uint32 chemistry   = 3;
+    float  rated_Ah    = 4;
+    float  soc_pct     = 5;
+    float  V           = 6;
+    float  I           = 7;
+    float  cumulative_Ah_in  = 8;
+    float  cumulative_Ah_out = 9;
+    float  equivalent_full_cycles = 10;
+    // capacity_test fields removed in Part 3; replaced by continuous SoH:
+    float  soh_pct     = 11;
+    uint32 soh_samples = 12;
+}
+
+message TelemetryLogMeta {
+    uint32 entries = 1;
+    bool   overflow = 2;
+}
+
+message TelemetrySnapshot {
+    uint32 ts      = 1;
+    uint32 ts_ms   = 2;
+    uint32 schema_version = 3;
+    bytes schema  = 4 [(nanopb).max_size = 16];
+
+    TelemetryDevice device = 5;
+    TelemetryWifi   wifi   = 6;
+
+    uint32 channel_count = 7;
+    uint32 switch_count  = 8;
+    uint32 num_batteries = 9;
+
+    repeated TelemetryChannel channels = 10
+        [(nanopb).max_count = 16];
+    repeated TelemetrySwitch  switches = 11
+        [(nanopb).max_count = 8];
+    repeated TelemetryBattery battery  = 12
+        [(nanopb).max_count = 8];
+
+    TelemetryLogMeta log = 13;
+    uint32 heap_free = 14;
+}

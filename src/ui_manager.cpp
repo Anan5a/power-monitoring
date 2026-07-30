@@ -20,6 +20,7 @@ struct ButtonState {
     bool pending_short;
     bool pending_long;
     bool pending_double;
+    bool long_fired;  // latched for the duration of a hold so long-press fires once
 };
 
 static ButtonState buttons[UI_BUTTON_COUNT];
@@ -170,12 +171,14 @@ void loop_ui() {
                 if (raw) {
                     // pressed
                     buttons[i].press_start_ms = now;
+                    buttons[i].long_fired = false;  // fresh press may fire a long again
                 } else {
-                    // released
+                    // released. A long press already fired while held (below),
+                    // so on release we only classify short/double for presses
+                    // shorter than the long threshold — firing long again here
+                    // would double-trigger the handler.
                     unsigned long dur = now - buttons[i].press_start_ms;
-                    if (dur >= 5000) {
-                        buttons[i].pending_long = true;
-                    } else if (dur >= 30) {
+                    if (dur < 5000 && dur >= 30) {
                         if ((now - buttons[i].last_release_ms) < 300) {
                             buttons[i].pending_double = true;
                         } else {
@@ -187,9 +190,11 @@ void loop_ui() {
             }
         }
 
-        // Long press detection while still held
-        if (buttons[i].stable && (now - buttons[i].press_start_ms) >= 5000 && !buttons[i].pending_long) {
+        // Long press detection while still held. `long_fired` latches for the
+        // whole hold so the handler runs exactly once, not every 50 ms tick.
+        if (buttons[i].stable && (now - buttons[i].press_start_ms) >= 5000 && !buttons[i].long_fired) {
             buttons[i].pending_long = true;
+            buttons[i].long_fired = true;
         }
     }
 

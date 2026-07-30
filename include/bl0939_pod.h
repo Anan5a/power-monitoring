@@ -15,7 +15,15 @@
 // Initialize the configured BL0939 UART meter(s).
 void bl0939_pod_init();
 
-// Read into a PodState. The PodState must already describe the device/channel layout.
+// Record that the pod registered with `pod_id` corresponds to BL0939 `slot`
+// (index into BL0939_ADDRESSES). Called by sensor_manager at registration
+// time so bl0939_pod_read() knows which address's frames to route into the
+// passed PodState.
+void bl0939_set_pod_slot(uint8_t pod_id, uint8_t slot);
+
+// Read into a PodState. The PodState must already describe the device/channel
+// layout. Drains the shared UART and routes frames to the matching slot's
+// cache; copies this pod's slot into the passed PodState.
 void bl0939_pod_read(PodState* pod);
 
 #ifdef BL0939_EXPOSE_FOR_TESTING

@@ -13,6 +13,7 @@
 #include "settings_manager.h"
 #include "coulomb_counter.h"
 #include "config.h"
+#include <cstring>
 #include "log_serial.h"
 #include "connectivity_manager.h"
 #include "data_logger.h"  // log_epoch_valid() for SCHEDULE_WINDOW gate
@@ -49,6 +50,8 @@ struct SwitchState {
     bool was_energized;  // track prior state for change detection
     unsigned long condition_start_ms;
     bool condition_active;
+    bool pulse_active;          // a non-blocking pulse is in flight
+    unsigned long pulse_off_at_ms;  // when the pulse should end
 };
 static SwitchState switch_states[MAX_SWITCHES];
 static bool switch_auto_enabled = false;  // off by default — user enables via serial/BLE
@@ -318,7 +321,15 @@ const char* switch_logic_name(uint8_t logic) {
 }
 
 void init_switches() {
-    switch_auto_enabled = false;
+    // Load the persisted auto-trip flag so a reboot (power loss, OTA, crash)
+    // does not silently disable all safety rules. Previously this was hardcoded
+    // to false, which meant overcurrent/undervoltage/SoC protection was off
+    // after every reboot until a human sent "switch auto on".
+    switch_auto_enabled = settings_load_switch_auto_enabled();
+    if (!switch_auto_enabled) {
+        LOG_PRINTLN("[SWITCH] WARNING: auto-trip is DISABLED — safety rules will "
+                    "not fire until 'switch auto on' (or BLE set_switch_auto)");
+    }
     // One-time diagnostic: log struct sizes so NVS migration can be cross-checked.
     static bool logged = false;
     if (!logged) {
@@ -369,16 +380,18 @@ void init_switches() {
                                   (int)ch.gpio_pin, (unsigned)i);
                 } else {
                     pinMode(ch.gpio_pin, OUTPUT);
-                    // Restore persisted physical state: if the switch was
-                    // energized when we last shut down, drive it active on
-                    // boot. Otherwise keep it OFF.
-                    bool drive_high = ch.active_high ? ch.is_energized : !ch.is_energized;
-                    digitalWrite(ch.gpio_pin, drive_high ? HIGH : LOW);
+                    // Safe-state-on-boot: drive every relay OFF, regardless of
+                    // the persisted is_energized flag. If a rule should keep
+                    // the load energized, the first evaluate_switches() pass
+                    // (within 1 s, when auto is enabled) re-energizes it after
+                    // re-checking live conditions. This prevents a load that was
+                    // manually ON before a reboot from coming back ON with no
+                    // rule evaluation while auto-trip is disabled.
+                    digitalWrite(ch.gpio_pin, ch.active_high ? LOW : HIGH);
                 }
-                // Sync runtime mirror with the persisted state we just
-                // drove to the pin.
-                switch_states[i].energized     = ch.is_energized;
-                switch_states[i].was_energized = ch.is_energized;
+                // Runtime mirror starts de-energized; eval will set it on trip.
+                switch_states[i].energized     = false;
+                switch_states[i].was_energized = false;
                 switch_states[i].condition_start_ms = 0;
                 switch_states[i].condition_active   = false;
             }
@@ -391,29 +404,45 @@ void init_switches() {
     }
 }
 
+// Forward: defined below switch_pulse().
+static void switch_pulse_tick(unsigned long now);
+
 void evaluate_switches(const SensorSnapshot& snapshot) {
+    unsigned long now = millis();
+    // Drive non-blocking pulses to completion regardless of auto-trip state,
+    // so a pulse started while auto is off still ends on time.
+    switch_pulse_tick(now);
     // Auto-trip disabled until user enables via 'switch auto on'
     if (!switch_auto_enabled) return;
 
     uint8_t count = settings_load_switch_count();
-    unsigned long now = millis();
 
     for (uint8_t i = 0; i < count && i < MAX_SWITCHES; i++) {
+        // A non-blocking pulse owns this switch for its duration — skip auto
+        // eval so the rule engine can't override or race the pulse.
+        if (switch_states[i].pulse_active) continue;
         SwitchChannel ch;
         SwitchRule rule;
         if (!settings_load_switch(i, &ch) || !ch.enabled) continue;
         if (!settings_load_switch_rule(i, &rule) || !rule.enabled) continue;
         if (rule.channel >= snapshot.total_logical_channels) continue;
+        // Snapshot the loaded rule so we can persist it only when hysteresis
+        // state (condition_latched[]) actually changes — not on every 1 Hz
+        // tick. The previous unconditional save wrote ~8 flash pages/sec per
+        // switch and raced BLE/serial rule edits.
+        SwitchRule prev_rule = rule;
 
         // Per-condition hysteresis-aware latching. We update
         // rule.condition_latched[i] in place based on the eval result.
         bool cond_satisfied[SC_MAX_CONDITIONS] = { false };
+        uint8_t active_count = 0;  // non-disabled conditions (AND denominator)
         for (uint8_t j = 0; j < rule.condition_count && j < SC_MAX_CONDITIONS; j++) {
             const SwitchCondition& c = rule.conditions[j];
             if (c.kind == SCK_DISABLED) {
                 rule.condition_latched[j] = false;
                 continue;
             }
+            active_count++;
             if (c.kind == SCK_SCHEDULE_WINDOW) {
                 if (eval_schedule(c)) {
                     cond_satisfied[j] = true;
@@ -439,7 +468,11 @@ void evaluate_switches(const SensorSnapshot& snapshot) {
         }
         bool condition_met;
         if (rule.logic == SL_AND) {
-            condition_met = (true_count >= rule.condition_count);
+            // AND requires every ACTIVE (non-disabled) condition. Using
+            // condition_count as the denominator made an AND rule with any
+            // disabled condition permanently un-trippable (the disabled
+            // condition could never be satisfied, but still counted).
+            condition_met = (active_count > 0 && true_count >= active_count);
         } else {
             uint8_t need = rule.min_conditions ? rule.min_conditions : 1;
             condition_met = (true_count >= need);
@@ -485,17 +518,25 @@ void evaluate_switches(const SensorSnapshot& snapshot) {
         }
 
         // Persist updated per-condition latched state and is_energized so
-        // a reboot resumes with the same hysteresis memory.
+        // a reboot resumes with the same hysteresis memory — but only when
+        // something actually changed, to avoid wearing the flash (~8 writes
+        // per second per switch previously) and to narrow the window in which
+        // a BLE/serial rule edit could be clobbered by this read-modify-write.
         if (ch.is_energized != st.energized) {
             ch.is_energized = st.energized;
             settings_save_switch(i, &ch);
         }
-        settings_save_switch_rule(i, &rule);
+        if (memcmp(&prev_rule, &rule, sizeof(SwitchRule)) != 0) {
+            settings_save_switch_rule(i, &rule);
+        }
     }
 }
 
 void switch_set_auto(bool enabled) {
     switch_auto_enabled = enabled;
+    // Persist so the choice survives reboot (see init_switches).
+    settings_save_switch_auto_enabled(enabled);
+    LOG_PRINT("[SWITCH] auto-trip %s\n", enabled ? "ENABLED" : "DISABLED");
     // When auto is turned OFF, the rule-based reset path can no longer
     // fire, so any switch that is currently energized under a rule must
     // be force-reset immediately. Otherwise it would stay stuck ON
@@ -539,13 +580,37 @@ void switch_set(uint8_t idx, bool is_energized) {
 }
 
 void switch_pulse(uint8_t idx, uint32_t duration_ms) {
+    if (idx >= MAX_SWITCHES) return;
     SwitchChannel ch;
     if (!settings_load_switch(idx, &ch)) return;
     LOG_PRINT("Pulsing switch %d (GPIO %d) for %u ms...\n", idx, ch.gpio_pin, (unsigned)duration_ms);
+    // Energize now; the pulse is ended by switch_pulse_tick() (called from
+    // evaluate_switches on the sensor task) when the duration elapses. This
+    // avoids blocking the caller's task for `duration_ms` and lets
+    // evaluate_switches skip auto-eval for this switch while the pulse runs
+    // (see the pulse_active check in the per-switch loop).
     switch_set(idx, true);
-    vTaskDelay(pdMS_TO_TICKS(duration_ms));
-    switch_set(idx, false);
-    LOG_PRINTLN("Switch pulse done.");
+    switch_states[idx].pulse_active = true;
+    switch_states[idx].pulse_off_at_ms = millis() + duration_ms;
+}
+
+bool switch_pulse_active(uint8_t idx) {
+    if (idx >= MAX_SWITCHES) return false;
+    return switch_states[idx].pulse_active;
+}
+
+// Drive the non-blocking pulse to completion. Called every tick from
+// evaluate_switches regardless of switch_auto_enabled so a pulse always ends
+// even when auto-trip is off.
+static void switch_pulse_tick(unsigned long now) {
+    for (uint8_t i = 0; i < MAX_SWITCHES; i++) {
+        if (!switch_states[i].pulse_active) continue;
+        if ((long)(now - switch_states[i].pulse_off_at_ms) >= 0) {
+            switch_set(i, false);
+            switch_states[i].pulse_active = false;
+            LOG_PRINT("Switch %d pulse done.\n", i);
+        }
+    }
 }
 
 bool get_switch_state(uint8_t idx) {

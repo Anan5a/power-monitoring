@@ -27,7 +27,9 @@ uint8_t battery_channel_profile(uint8_t channel);
 bool   battery_channel_set_profile(uint8_t channel, uint8_t profile_id);
 void   battery_channel_clear(uint8_t channel);
 
-// Per-channel battery state (cycle counter + capacity test state)
+// Per-channel battery state (cycle counter + continuous SoH)
+// CapacityTestState removed in v3 — capacity tracking is now automatic
+// (continuous SoH from completed discharge legs), not on-request.
 struct CapacityTestState {
     bool     active;            // true while a test is in progress
     uint8_t  mode;              // 0=MANUAL, 1=AUTOMATED
@@ -51,9 +53,16 @@ struct BatteryState {
     float    last_I;
     uint32_t last_update_ms;
     float    last_session_start_pct;
-    // Capacity test
-    CapacityTestState test;
+    // Continuous SoH (v3+, replaces on-request CapacityTestState)
+    float    soh_pct;           // 0..100, EWMA from completed discharge legs
+    uint32_t soh_samples;       // number of legs contributing to soh_pct
+    float    last_full_discharge_Ah;  // Ah of the most recent completed leg
 };
+// Lock the persisted blob size so a toolchain/packing change (or a field
+// reorder) is caught at compile time instead of silently mis-decoding NVS.
+// If you change BatteryState, update this and add a migration in
+// battery_state.cpp.
+static_assert(sizeof(BatteryState) == 44, "BatteryState size drift — update NVS migration");
 
 void init_battery_states();
 bool battery_state_load(uint8_t channel, BatteryState* out);

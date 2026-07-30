@@ -74,11 +74,32 @@ size_t log_buffer_capacity();
 // so callers see a consistent snapshot.
 size_t log_buffer_used_pct();
 
-// LittleFS overflow management
+// SD card / overflow management
+bool sd_is_present();
 bool log_has_overflow_file();
+
+// Telemetry overflow queueing: when MQTT publish fails, the payload is
+// saved to /telemetry_overflow.jsonl on the SD card and retried on
+// subsequent ticks. Each line is one complete JSON telemetry payload.
+// Returns true if the payload was queued (SD present + write succeeded).
+bool save_telemetry_overflow(const char* data, size_t len);
+
+// Drain one entry from the telemetry overflow file. Copies the first
+// line into `out` (up to `out_len` bytes) and advances past it.
+// Returns the number of bytes copied, or 0 if the file is empty.
+// The caller is responsible for publishing the payload and calling
+// this again on the next tick to drain the next entry.
+size_t drain_telemetry_overflow(char* out, size_t out_len);
 size_t log_overflow_file_size();
 bool log_open_overflow_for_read();
 size_t log_read_overflow_chunk(uint8_t* buf, size_t len);
+// Close the read handle and DELETE the overflow file. Use only after the
+// file has been fully drained; calling this on a partial drain destroys the
+// remaining backlog.
 void log_close_overflow();
+// Close the read handle but KEEP the overflow file on disk. Use when a drain
+// was interrupted (e.g. broker publish failed mid-batch) so the remaining
+// entries survive for the next drain attempt.
+void log_close_overflow_keep();
 
 #endif

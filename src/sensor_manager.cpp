@@ -2,6 +2,7 @@
 #include "settings_manager.h"
 #include "config.h"
 #include "log_serial.h"
+#include "bl0939_pod.h"
 #include <Wire.h>
 
 #if ENABLE_INA3221
@@ -148,6 +149,7 @@ static void pod_ina3221_read(PodState* pod) {
             max_dev > SPIKE_DEVIATION_MA;
 #endif
     g_meta[hw_ch] = {sd, spike};
+    ch->meta = {sd, spike};  // also expose to callers via sensor_get_meta()
 
     float cal_ma = (med - cal.curr_offset_ma[hw_ch]) * cal.curr_gain[hw_ch];
     if (fabsf(cal_ma) < 5.0f) cal_ma = 0.0f; // dead-zone
@@ -157,6 +159,7 @@ static void pod_ina3221_read(PodState* pod) {
 #else
     ch->current = 0.0f;
     g_meta[hw_ch] = {0.0f, false};
+    ch->meta = {0.0f, false};
 #endif
 
 #if ENABLE_INA3221_VOLT
@@ -189,7 +192,14 @@ static void pod_ina226_read(PodState* pod) {
     float p = ina226_devices[dev_idx]->getPower();
     ch->voltage = v * ina226_volt_ratios[dev_idx] + ina226_v_offsets[dev_idx];
     ch->current = i_a * ina226_i_gains[dev_idx];
-    ch->power   = p;
+    // Power must be consistent with the calibrated V and I; the device's
+    // raw getPower() ignores the per-channel calibration applied above, so
+    // recompute it (downstream cross-checks of P == V*I would otherwise drift).
+    ch->power = ch->voltage * ch->current;
+    // INA226 takes a single sample per tick (no burst), so stddev/spike are
+    // not computed here — meta is explicitly "no spike". Burst sampling for
+    // INA226 is a future enhancement.
+    ch->meta = {0.0f, false};
 }
 #endif
 
@@ -256,7 +266,10 @@ static void discover_ina226() {
         LOG_PRINT("[DISC] INA226 found at 0x%02X (pod %d)\n", addr, g_pod_count - 1);
 
         found++;
-        if (found >= MAX_INA226) break;
+        // Cap at INA226_COUNT (the ina226_devices[]/read limit). MAX_INA226 is
+        // a compile-time ceiling (8) but ina226_devices is only INA226_COUNT
+        // entries, so registering more would create pods that always read zero.
+        if (found >= INA226_COUNT) break;
     }
 
     // Persist the final count so init_sensors() can use the cache next boot.
@@ -357,6 +370,26 @@ void init_sensors() {
     }
 #else
     LOG_PRINTLN("ADS1115 disabled");
+#endif
+
+    // Register BL0939 AC energy-meter pods (UART). Each BL0939 chip exposes 2
+    // channels. The driver was previously implemented but never wired in, so
+    // AC readings never flowed. Pods are registered after INA226 so their
+    // logical channel indices follow the DC channels.
+#if ENABLE_BL0939 && BL0939_COUNT > 0
+    bl0939_pod_init();
+    {
+        const uint8_t bl_count = BL0939_COUNT;
+        for (uint8_t i = 0; i < bl_count && i < MAX_BL0939; i++) {
+            char name[16];
+            snprintf(name, sizeof(name), "BL0939@%u", (unsigned)i);
+            register_pod(POD_BL0939, name, 2, bl0939_pod_read);
+            // The pod just registered is at g_pod_count-1; bind it to BL0939
+            // slot i so bl0939_pod_read() routes the right address's frames.
+            bl0939_set_pod_slot((uint8_t)(g_pod_count - 1), i);
+            LOG_PRINT("[SENS] registered BL0939 pod %u (slot %u)\n", (unsigned)(g_pod_count - 1), (unsigned)i);
+        }
+    }
 #endif
 
     // Register legacy INA3221 pods (if enabled and no discovery data)

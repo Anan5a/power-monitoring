@@ -78,11 +78,19 @@ struct SwitchRule {
     bool     condition_latched[SC_MAX_CONDITIONS]; // per-condition trip state
     SwitchCondition conditions[SC_MAX_CONDITIONS];
 };
+// Lock persisted blob sizes so a field reorder/packing change is caught at
+// compile time instead of silently mis-decoding NVS. The rule blob is written
+// on hysteresis-state changes (see switch_controller.cpp) and loaded on every
+// eval tick, so a layout drift would corrupt relay behavior.
+static_assert(sizeof(SwitchChannel) == 30, "SwitchChannel size drift");
+static_assert(sizeof(SwitchCondition) == 32, "SwitchCondition size drift");
+static_assert(sizeof(SwitchRule) == 148, "SwitchRule size drift");
 
 void init_switches();
 void evaluate_switches(const SensorSnapshot& snapshot);
 void switch_set(uint8_t idx, bool is_energized);
-void switch_pulse(uint8_t idx, uint32_t duration_ms);
+void switch_pulse(uint8_t idx, uint32_t duration_ms);  // non-blocking; ends via evaluate_switches()
+bool switch_pulse_active(uint8_t idx);                 // true while a pulse is in flight
 bool get_switch_state(uint8_t idx);
 void switch_set_auto(bool enabled);
 bool switch_get_auto_enabled();  // telemetry snapshot accessor

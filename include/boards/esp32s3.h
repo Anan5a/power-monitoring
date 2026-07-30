@@ -61,4 +61,10 @@ static const int BAD_GPIO_PINS_ESP32S3[] = { 0, 3, 19, 20, 26, 27, 28, 29, 30, 3
 #define BL0939_ADDRESSES    {0}
 #define BL0939_BAUD         4800
 
+// SD card SPI (avoids I2C 8/9, relays 10-13, BL0939 15/16)
+#define SD_CS   4
+#define SD_MOSI 6
+#define SD_MISO 5
+#define SD_CLK  7
+
 #endif // BOARDS_ESP32S3_H

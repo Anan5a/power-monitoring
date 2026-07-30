@@ -21,7 +21,6 @@
 #include "cycle_counter.h"
 #include "log_serial.h"
 #include "telemetry.h"
-#include "device_state.h"
 #include "device_identity.h"
 #include "event_log.h"
 #include "ota_client.h"

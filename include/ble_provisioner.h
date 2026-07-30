@@ -20,4 +20,8 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len);
 // on success — a failed apply must not trigger side effects.
 bool apply_settings_command(const char* cmd_type, const char* payload_json);
 
+// Device state accessors
+bool ble_is_active();       // NimBLE stack initialized
+bool ble_is_connected();    // client currently paired/connected
+
 #endif

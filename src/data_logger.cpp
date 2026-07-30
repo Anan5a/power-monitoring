@@ -1,11 +1,10 @@
 #include "data_logger.h"
 #include "config.h"
 #include "log_serial.h"
+#include "event_log.h"
 #include <string.h>
 #include <Arduino.h>
 #include <WiFi.h>
-#include <FS.h>
-#include <LittleFS.h>
 
 #if defined(ESP32) || defined(ESP32C3) || defined(ESP32S3)
     #include <freertos/FreeRTOS.h>
@@ -107,61 +106,258 @@ static size_t pop_ring(uint8_t* out, size_t out_len) {
     return written;
 }
 
-static File g_overflow_file;
+// ── SD card (auto-detect) ───────────────────────────────────────────
+// SD card is auto-detected on every boot. If present, it serves two
+// purposes:
+//   1. Binary overflow file (/log_overflow.bin) — when the 16 KB RAM
+//      ring fills and the network is down, entries spill here for later
+//      drain by the MQTT/Supabase path. Capped at 1 MB.
+//   2. Daily CSV logs (/logs/YYYY-MM-DD.csv) — one row per sensor
+//      sample, human-readable, for long-term inspection. Oldest CSV
+//      files are pruned when free space drops below 5%.
+//
+// Fault tolerance:
+//   - Card presence checked before every write (re-init on failure).
+//   - Write errors logged; data silently dropped (no crash).
+//   - Card removal mid-write: file handle closed, next write re-inits.
+//   - All I/O happens OUTSIDE the LOG_LOCK spinlock so a slow SD write
+//     can't block the other core's log_pop_batch or trip the WDT.
+#include <SD.h>
+#include <SPI.h>
 
-// ── Flush ring buffer to LittleFS overflow file ─────────────────────
-// 1 MB cap on the overflow file. LittleFS doesn't support truncating-from-
-// middle, so the simplest correct safety cap is to close and remove the
-// file when it reaches the limit. The data is lost; this prevents the
-// flash from filling up and bricking the device on a long network outage.
+static File g_overflow_file;
+static bool g_sd_initialized = false;
+static bool g_sd_present = false;
 static const size_t LOG_OVERFLOW_MAX_BYTES = 1UL * 1024UL * 1024UL;
 
-static void flush_to_littlefs() {
-    if (tail == head) return;
-    // Close read handle first — LittleFS can't have same file open twice
+// Scratch buffer for deferring SD writes out of the LOG_LOCK spinlock.
+static uint8_t g_sd_flush_buf[LOG_BUFFER_BYTES];
+static size_t g_pending_sd_flush_len = 0;
+
+// CSV batching: accumulate lines and flush periodically.
+#define CSV_LINE_BUF_SIZE 256
+static char g_csv_line_buf[CSV_LINE_BUF_SIZE];
+static size_t g_csv_line_len = 0;
+static uint32_t g_csv_last_flush_ms = 0;
+static const uint32_t CSV_FLUSH_INTERVAL_MS = 5000;  // flush every 5 s
+static const float SD_LOW_SPACE_PCT = 5.0f;   // prune when < 5% free
+static const float SD_TARGET_SPACE_PCT = 10.0f; // target after prune
+
+static bool init_sd() {
+    if (g_sd_initialized) return g_sd_present;
+    SPI.begin(SD_CLK, SD_MISO, SD_MOSI, SD_CS);
+    if (!SD.begin(SD_CS)) {
+        g_sd_present = false;
+    } else {
+        uint64_t sz = SD.cardSize() / (1024UL * 1024UL);
+        LOG_PRINT("[SD] ready: %llu MB\n", (unsigned long long)sz);
+        log_event(EVENT_LOG_INFO, "sd", "ready %llu MB", (unsigned long long)sz);
+        g_sd_present = true;
+    }
+    g_sd_initialized = true;
+    return g_sd_present;
+}
+
+static void sd_reset() {
+    if (g_overflow_file) {
+        g_overflow_file.close();
+        g_overflow_file = File();
+    }
+    g_sd_initialized = false;
+    g_sd_present = false;
+}
+
+// ── Storage management ──────────────────────────────────────────────
+// When free space drops below SD_LOW_SPACE_PCT, delete the oldest CSV
+// files in /logs/ until free space exceeds SD_TARGET_SPACE_PCT.
+static void sd_prune_old_csv() {
+    uint64_t total = SD.totalBytes();
+    uint64_t used = SD.usedBytes();
+    if (total == 0) return;
+    float free_pct = (float)(total - used) / (float)total * 100.0f;
+    if (free_pct >= SD_LOW_SPACE_PCT) return;
+
+    LOG_PRINT("[SD] low space: %.1f%% free — pruning old CSV files\n", free_pct);
+
+    File root = SD.open("/logs");
+    if (!root || !root.isDirectory()) {
+        if (root) root.close();
+        return;
+    }
+
+    // Collect CSV filenames (they sort lexicographically = chronologically
+    // when named YYYY-MM-DD.csv). We delete oldest first.
+    struct CsvFile { char name[32]; size_t size; };
+    CsvFile files[64];
+    int count = 0;
+
+    File entry = root.openNextFile();
+    while (entry && count < 64) {
+        if (!entry.isDirectory()) {
+            const char* fn = entry.name();
+            // Match YYYY-MM-DD.csv pattern
+            size_t fnlen = strlen(fn);
+            if (fnlen >= 14 && strcmp(fn + fnlen - 4, ".csv") == 0) {
+                strncpy(files[count].name, fn, sizeof(files[count].name) - 1);
+                files[count].name[sizeof(files[count].name) - 1] = '\0';
+                files[count].size = entry.size();
+                count++;
+            }
+        }
+        entry.close();
+        entry = root.openNextFile();
+    }
+    root.close();
+
+    // Sort by name (oldest first — YYYY-MM-DD sorts lexicographically)
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (strcmp(files[i].name, files[j].name) > 0) {
+                CsvFile tmp = files[i];
+                files[i] = files[j];
+                files[j] = tmp;
+            }
+        }
+    }
+
+    // Delete oldest until above target
+    for (int i = 0; i < count; i++) {
+        used = SD.usedBytes();
+        free_pct = (float)(total - used) / (float)total * 100.0f;
+        if (free_pct >= SD_TARGET_SPACE_PCT) break;
+
+        char path[64];
+        snprintf(path, sizeof(path), "/logs/%s", files[i].name);
+        if (SD.remove(path)) {
+            LOG_PRINT("[SD] pruned %s (freed %u bytes)\n", files[i].name, (unsigned)files[i].size);
+        }
+    }
+}
+
+// ── Daily CSV logging ───────────────────────────────────────────────
+// Build a CSV row from the current sensor snapshot and append it to
+// /logs/YYYY-MM-DD.csv. Creates the file with a header row on first
+// write of the day. Rows are batched in g_csv_line_buf and flushed
+// every CSV_FLUSH_INTERVAL_MS to reduce write frequency.
+static void sd_write_csv_row(const SensorSnapshot& data, uint32_t timestamp_ms) {
+    if (!g_sd_present) return;
+
+    // Build the date string for the filename
+    time_t now_epoch = (g_log_epoch_valid)
+        ? (epoch_offset + timestamp_ms / 1000)
+        : 0;
+    struct tm* tm_info = localtime(&now_epoch);
+    char date_str[16];
+    if (g_log_epoch_valid && tm_info) {
+        strftime(date_str, sizeof(date_str), "%Y-%m-%d", tm_info);
+    } else {
+        // No valid epoch — use a fallback name so we don't create
+        // "1970-01-01.csv" which would collide with real data later.
+        // Use the uptime day number instead.
+        snprintf(date_str, sizeof(date_str), "uptime-%lu", timestamp_ms / 86400000UL);
+    }
+
+    // Build the CSV row
+    float v0 = get_channel_voltage(data, 0);
+    float i0 = get_channel_current(data, 0);
+    float p0 = get_channel_power(data, 0);
+    float v1 = get_channel_voltage(data, 1);
+    float i1 = get_channel_current(data, 1);
+    float p1 = get_channel_power(data, 1);
+    float v2 = get_channel_voltage(data, 2);
+    float i2 = get_channel_current(data, 2);
+    float p2 = get_channel_power(data, 2);
+    float v3 = get_channel_voltage(data, 3);
+    float i3 = get_channel_current(data, 3);
+    float p3 = get_channel_power(data, 3);
+
+    int row_len = snprintf(g_csv_line_buf + g_csv_line_len,
+        sizeof(g_csv_line_buf) - g_csv_line_len,
+        "%u,%ld,%.3f,%.3f,%.1f,%.3f,%.3f,%.1f,%.3f,%.3f,%.1f,%.3f,%.3f,%.1f\n",
+        timestamp_ms, (long)now_epoch,
+        v0, i0, p0, v1, i1, p1, v2, i2, p2, v3, i3, p3);
+
+    if (row_len > 0) {
+        g_csv_line_len += row_len;
+    }
+
+    // Flush if buffer is full or interval has elapsed
+    uint32_t now = millis();
+    bool time_to_flush = (now - g_csv_last_flush_ms >= CSV_FLUSH_INTERVAL_MS);
+    bool buf_full = (g_csv_line_len > sizeof(g_csv_line_buf) / 2);
+
+    if (!time_to_flush && !buf_full) return;
+
+    // Prune if space is low
+    sd_prune_old_csv();
+
+    // Ensure /logs/ directory exists
+    if (!SD.exists("/logs")) {
+        SD.mkdir("/logs");
+    }
+
+    char path[64];
+    snprintf(path, sizeof(path), "/logs/%s.csv", date_str);
+
+    // Write header if file is new (size == 0)
+    bool needs_header = !SD.exists(path);
+    File f = SD.open(path, FILE_APPEND);
+    if (!f) {
+        LOG_PRINTLN("[SD] CSV open failed");
+        sd_reset();
+        return;
+    }
+    if (needs_header) {
+        f.print("timestamp_ms,epoch,ch0_V,ch0_I,ch0_P,ch1_V,ch1_I,ch1_P,"
+                "ch2_V,ch2_I,ch2_P,ch3_V,ch3_I,ch3_P\n");
+    }
+    f.write((const uint8_t*)g_csv_line_buf, g_csv_line_len);
+    f.close();
+    g_csv_line_len = 0;
+    g_csv_last_flush_ms = now;
+}
+
+// ── Binary overflow file ────────────────────────────────────────────
+// When the RAM ring fills and the network is down, the ring is copied
+// to g_sd_flush_buf under the lock and written here after the lock is
+// released. The binary format (BaseEntry/DeltaEntry) is what the
+// MQTT/Supabase drain path expects.
+static void flush_buffer_to_sd(const uint8_t* data, size_t len) {
+    if (!data || len == 0) return;
+    if (!init_sd()) return;
+
     if (g_overflow_file) {
         g_overflow_file.close();
         g_overflow_file = File();
     }
 
-    // Cap check: if the overflow file is at or above the limit, drop it
-    // entirely and start fresh. The data currently in the ring buffer is
-    // also lost (the next iteration will re-flush, but we already chose
-    // to drop history).
-    if (LittleFS.exists(LOG_OVERFLOW_FILE)) {
-        File existing = LittleFS.open(LOG_OVERFLOW_FILE, FILE_READ);
-        if (existing) {
-            size_t sz = existing.size();
-            existing.close();
+    // Cap check: 1 MB max
+    if (SD.exists(LOG_OVERFLOW_FILE)) {
+        File f = SD.open(LOG_OVERFLOW_FILE, FILE_READ);
+        if (f) {
+            size_t sz = f.size();
+            f.close();
             if (sz >= LOG_OVERFLOW_MAX_BYTES) {
-                LOG_PRINT("[LittleFS] overflow file at %u bytes (cap %u) — wiping\n",
-                          (unsigned)sz, (unsigned)LOG_OVERFLOW_MAX_BYTES);
-                LittleFS.remove(LOG_OVERFLOW_FILE);
+                LOG_PRINT("[SD] overflow at %u bytes — wiping\n",
+                          (unsigned)sz);
+                SD.remove(LOG_OVERFLOW_FILE);
             }
         }
     }
 
-    File f = LittleFS.open(LOG_OVERFLOW_FILE, FILE_APPEND);
+    File f = SD.open(LOG_OVERFLOW_FILE, FILE_APPEND);
     if (!f) {
-        LOG_PRINTLN("[LittleFS] open failed for log append");
+        LOG_PRINTLN("[SD] overflow open failed");
+        sd_reset();
         return;
     }
-    size_t written = 0;
-    if (head >= tail) {
-        size_t n = head - tail;
-        written = f.write(buffer + tail, n);
-    } else {
-        size_t n1 = LOG_BUFFER_BYTES - tail;
-        written = f.write(buffer + tail, n1);
-        if (written == n1 && head > 0) {
-            written += f.write(buffer, head);
-        }
-    }
+    size_t written = f.write(data, len);
     f.close();
     if (written > 0) {
-        tail = head;
-        entry_count = 0;
-        LOG_PRINT("[LittleFS] flushed %u bytes\n", written);
+        LOG_PRINT("[SD] overflow: %u bytes\n", (unsigned)written);
+    } else {
+        LOG_PRINTLN("[SD] overflow write failed");
+        sd_reset();
     }
 }
 
@@ -173,13 +369,15 @@ void init_data_logger() {
     entry_count = 0;
     have_base = false;
     g_log_high_water_warned = false;
-    if (!LittleFS.begin(true)) {
-        LOG_PRINTLN("LittleFS init failed");
+    g_csv_line_len = 0;
+    g_csv_last_flush_ms = 0;
+    // Auto-detect SD card. If present, we get daily CSV logs + binary
+    // overflow backlog. If absent, logger is RAM-only (16 KB ring).
+    init_sd();
+    if (g_sd_present) {
+        LOG_PRINTLN("Data logger: 16 KB ring + SD card (CSV + overflow)");
     } else {
-        size_t total = LittleFS.totalBytes();
-        size_t used = LittleFS.usedBytes();
-        LOG_PRINT("LittleFS ready: %u/%u bytes used (%.1f%% free)\n",
-                      used, total, (total - used) * 100.0f / total);
+        LOG_PRINTLN("Data logger: RAM-only (16 KB ring, no SD card)");
     }
     // One-shot warning if NTP hasn't synced before log_sample() starts writing.
     // The check is deferred to the first log_sample() call so that any boot-time
@@ -239,14 +437,18 @@ void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms) {
             if (abs(dv[ch]) > LOG_MAX_DELTA_MV || abs(di[ch]) > LOG_MAX_DELTA_MA || abs(dp[ch]) > LOG_MAX_DELTA_POWER)
                 overflow = true;
         }
-        uint16_t dt = (uint16_t)(timestamp_ms - last_ts);
-        if (overflow || dt > 60000) {
+        // Compute the full 32-bit delta before the range check. The old code
+        // truncated to uint16_t first, so a real gap > 65.5 s (or a millis()
+        // wrap) wrapped into a small value, bypassed the 60 s BaseEntry
+        // fallback, and silently shifted every later reconstructed timestamp.
+        uint32_t dt32 = (uint32_t)(timestamp_ms - last_ts);
+        if (overflow || dt32 > 60000) {
             base_e = { ENTRY_BASE, timestamp_ms };
             memcpy(base_e.v, v, sizeof(v)); memcpy(base_e.i, i, sizeof(i)); memcpy(base_e.p, p, sizeof(p));
             is_base = true;
             entry_size = sizeof(BaseEntry);
         } else {
-            delta_e = { ENTRY_DELTA, dt };
+            delta_e = { ENTRY_DELTA, (uint16_t)dt32 };
             memcpy(delta_e.dv, dv, sizeof(dv)); memcpy(delta_e.di, di, sizeof(di)); memcpy(delta_e.dp, dp, sizeof(dp));
             is_base = false;
             entry_size = sizeof(DeltaEntry);
@@ -286,24 +488,37 @@ void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms) {
         }
         entry_count++;
     } else {
-        // Buffer full — only write to LittleFS if network is down.
-        // When WiFi is connected, entries go to RAM and get published directly.
+        // Buffer full. If the network is down, flush the ring to SD card
+        // (if available) so entries survive until connectivity returns.
+        // If the network is up, entries are published from RAM and we just
+        // drop the oldest to make room.
         bool network_down = (WiFi.status() != WL_CONNECTED);
-        size_t fs_total = LittleFS.totalBytes();
-        size_t fs_used  = LittleFS.usedBytes();
-        if (fs_used >= fs_total || (fs_total - fs_used) < 4096) {
-            LOG_PRINTLN("[LOG] flash full, dropping oldest entries");
+        size_t flush_len = 0;
+
+        if (network_down && init_sd()) {
+            // Copy the ring into the scratch buffer and advance tail/head
+            // so the ring is empty and ready for the new entry. The actual
+            // SD write happens after LOG_UNLOCK().
+            if (head >= tail) {
+                flush_len = head - tail;
+                memcpy(g_sd_flush_buf, buffer + tail, flush_len);
+            } else {
+                size_t n1 = LOG_BUFFER_BYTES - tail;
+                memcpy(g_sd_flush_buf, buffer + tail, n1);
+                if (head > 0) memcpy(g_sd_flush_buf + n1, buffer, head);
+                flush_len = n1 + head;
+            }
             tail = head;
             entry_count = 0;
-        } else if (network_down) {
-            flush_to_littlefs();
         } else {
-            // Network up — just drop oldest entries, they get published from RAM
-            LOG_PRINTLN("[LOG] buffer full but network up, dropping oldest");
+            // Network up (or no SD) — drop oldest; entries are published
+            // from RAM.
+            LOG_PRINTLN("[LOG] buffer full, dropping oldest entries");
             tail = head;
             entry_count = 0;
         }
-        // After flush (or drop), retry write
+
+        // Retry the write of the current entry now that the ring has space.
         if (can_fit(entry_size)) {
             size_t first = (head + entry_size >= LOG_BUFFER_BYTES) ? LOG_BUFFER_BYTES - head : entry_size;
             memcpy(buffer + head, entry_ptr, first);
@@ -314,8 +529,22 @@ void log_sample(const SensorSnapshot& data, uint32_t timestamp_ms) {
             }
             entry_count++;
         }
+        g_pending_sd_flush_len = flush_len;
     }
     LOG_UNLOCK();
+
+    // SD writes happen here, outside the spinlock.
+    if (g_pending_sd_flush_len > 0) {
+        size_t n = g_pending_sd_flush_len;
+        g_pending_sd_flush_len = 0;
+        flush_buffer_to_sd(g_sd_flush_buf, n);
+    }
+    // Write a CSV row to the daily log file (batched, flushed every 5 s).
+    // This runs on every tick so the CSV is always current, but the actual
+    // SD write is rate-limited by the CSV flush interval.
+    if (g_sd_present) {
+        sd_write_csv_row(data, timestamp_ms);
+    }
 
     if (crossed_high_water) {
         LOG_PRINT("[LOG] buffer occupancy crossed %d%% (%u/%u bytes) — "
@@ -369,21 +598,26 @@ size_t log_buffer_used_pct() {
     return pct;
 }
 
-bool log_has_overflow_file() { return LittleFS.exists(LOG_OVERFLOW_FILE); }
+bool sd_is_present() { return g_sd_present; }
+
+bool log_has_overflow_file() {
+    if (!init_sd()) return false;
+    return SD.exists(LOG_OVERFLOW_FILE);
+}
+
 size_t log_overflow_file_size() {
-    if (g_overflow_file) {
-        size_t s = g_overflow_file.size();
-        return s;
-    }
-    File f = LittleFS.open(LOG_OVERFLOW_FILE, FILE_READ);
+    if (!init_sd()) return 0;
+    if (g_overflow_file) return g_overflow_file.size();
+    File f = SD.open(LOG_OVERFLOW_FILE, FILE_READ);
     size_t s = f ? f.size() : 0;
     if (f) f.close();
     return s;
 }
 
 bool log_open_overflow_for_read() {
-    if (!LittleFS.exists(LOG_OVERFLOW_FILE)) return false;
-    g_overflow_file = LittleFS.open(LOG_OVERFLOW_FILE, FILE_READ);
+    if (!init_sd()) return false;
+    if (!SD.exists(LOG_OVERFLOW_FILE)) return false;
+    g_overflow_file = SD.open(LOG_OVERFLOW_FILE, FILE_READ);
     return g_overflow_file;
 }
 
@@ -395,7 +629,87 @@ size_t log_read_overflow_chunk(uint8_t* buf, size_t len) {
 void log_close_overflow() {
     if (g_overflow_file) {
         g_overflow_file.close();
-        LittleFS.remove(LOG_OVERFLOW_FILE);
+        SD.remove(LOG_OVERFLOW_FILE);
         g_overflow_file = File();
     }
+}
+
+void log_close_overflow_keep() {
+    if (g_overflow_file) {
+        g_overflow_file.close();
+        g_overflow_file = File();
+    }
+}
+
+// ── Telemetry overflow queueing ─────────────────────────────────────
+// When MQTT publish fails, the JSON payload is saved to
+// /telemetry_overflow.jsonl (one line per payload) and retried on
+// subsequent ticks. Capped at 1 MB to prevent filling the card.
+static const char* TELEM_OVERFLOW_FILE = "/telemetry_overflow.jsonl";
+static const size_t TELEM_OVERFLOW_MAX_BYTES = 1UL * 1024UL * 1024UL;
+static File g_telem_overflow_file;
+
+bool save_telemetry_overflow(const char* data, size_t len) {
+    if (!data || len == 0) return false;
+    if (!init_sd()) return false;
+
+    // Cap check
+    if (SD.exists(TELEM_OVERFLOW_FILE)) {
+        File f = SD.open(TELEM_OVERFLOW_FILE, FILE_READ);
+        if (f) {
+            size_t sz = f.size();
+            f.close();
+            if (sz >= TELEM_OVERFLOW_MAX_BYTES) {
+                SD.remove(TELEM_OVERFLOW_FILE);
+            }
+        }
+    }
+
+    File f = SD.open(TELEM_OVERFLOW_FILE, FILE_APPEND);
+    if (!f) return false;
+    size_t written = f.write((const uint8_t*)data, len);
+    // Append newline as JSONL delimiter
+    if (written == len) f.write((const uint8_t*)"\n", 1);
+    f.close();
+    return (written == len);
+}
+
+size_t drain_telemetry_overflow(char* out, size_t out_len) {
+    if (!out || out_len == 0) return 0;
+    if (!init_sd()) return 0;
+    if (!SD.exists(TELEM_OVERFLOW_FILE)) return 0;
+
+    // Open for reading if not already open
+    if (!g_telem_overflow_file) {
+        g_telem_overflow_file = SD.open(TELEM_OVERFLOW_FILE, FILE_READ);
+        if (!g_telem_overflow_file) return 0;
+    }
+
+    // Read one line (up to newline or EOF)
+    size_t pos = 0;
+    while (pos < out_len - 1) {
+        int c = g_telem_overflow_file.read();
+        if (c < 0) break;  // EOF
+        if (c == '\n') break;  // end of this entry
+        out[pos++] = (char)c;
+    }
+    out[pos] = '\0';
+
+    if (pos == 0) {
+        // Empty line or EOF — close and remove the file
+        g_telem_overflow_file.close();
+        g_telem_overflow_file = File();
+        SD.remove(TELEM_OVERFLOW_FILE);
+        return 0;
+    }
+
+    // Check if we've consumed the whole file
+    bool at_end = (g_telem_overflow_file.available() == 0);
+    if (at_end) {
+        g_telem_overflow_file.close();
+        g_telem_overflow_file = File();
+        SD.remove(TELEM_OVERFLOW_FILE);
+    }
+
+    return pos;
 }

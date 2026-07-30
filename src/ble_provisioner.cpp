@@ -8,7 +8,6 @@
 #include "coulomb_counter.h"
 #include "sensor_manager.h"
 #include "data_logger.h"
-#include "device_state.h"
 #include "device_identity.h"
 #include "event_log.h"
 #include "coulomb_counter.h"

@@ -56,9 +56,9 @@ constexpr int8_t  kDirIdle = 0;
 constexpr int8_t  kDirCharge = 1;
 constexpr int8_t  kDirDischarge = -1;
 
-// Stale-test bound: a capacity test running for longer than this is treated
-// as a crash recovery case and auto-cancelled on next NVS load.
-constexpr uint32_t kStaleTestMaxMs = 7UL * 24UL * 3600UL * 1000UL;  // 7 days
+// SoH smoothing factor (EWMA). Higher = slower adaptation.
+// soh_pct = SOH_ALPHA * soh_pct + (1 - SOH_ALPHA) * leg_soh
+constexpr float kSohAlpha = 0.7f;
 
 BatteryState g_state[MAX_LOGICAL_CHANNELS];
 bool g_loaded[MAX_LOGICAL_CHANNELS] = {false};
@@ -70,7 +70,17 @@ float compute_soc_pct(uint8_t channel, const BatteryChemistryProfile* bp) {
     if (!bp || bp->rated_capacity_Ah <= 0.001f) return -1.0f;
     float net_mAh = get_coulomb_mAh(channel);
     float cap_mAh = bp->rated_capacity_Ah * 1000.0f;
-    float soc = 100.0f + (net_mAh / cap_mAh) * 100.0f;
+    // Base SoC is the operator-set initial_soc_pct (BatteryConfig), defaulting
+    // to 100% when unset. Previously this was hardcoded to 100%, so a battery
+    // installed at 50% read 100% for its whole life until a full charge reset
+    // the reference. net_mAh is accumulated charge since the last reset, so
+    // soc = base + (net/cap)*100.
+    float base_soc = 100.0f;
+    BatteryConfig bat;
+    if (settings_load_battery(channel, &bat) && bat.initial_soc_pct >= 0.0f && bat.initial_soc_pct <= 100.0f) {
+        base_soc = bat.initial_soc_pct;
+    }
+    float soc = base_soc + (net_mAh / cap_mAh) * 100.0f;
     if (soc < 0.0f) soc = 0.0f;
     if (soc > 100.0f) soc = 100.0f;
     return soc;
@@ -82,26 +92,6 @@ int8_t classify(float current_a) {
     return kDirIdle;
 }
 
-// Cancel any capacity test that was active at NVS load time but whose
-// started_ms is suspiciously old — i.e. the firmware crashed mid-test and
-// the active flag was never cleared. Recovery is conservative: drop the
-// active flag, keep measured_Ah so the user can inspect it via BLE if
-// desired.
-//
-// Caller must already hold BATTERY_LOCK(). The mutation stays inside the
-// caller's critical section; the caller is responsible for persisting the
-// cleared state (see update_cycle_counter, which persists after releasing
-// the lock when stale_test_recovered is true).
-void recover_stale_test_if_needed(uint8_t ch) {
-    BatteryState& st = g_state[ch];
-    if (!st.test.active) return;
-    uint32_t now = millis();
-    // millis() can wrap or be smaller than started_ms on a fresh boot, so
-    // only treat the test as stale if the elapsed window fits.
-    if (now > st.test.started_ms && (now - st.test.started_ms) > kStaleTestMaxMs) {
-        st.test.active = false;
-    }
-}
 }  // namespace
 
 void init_cycle_counter() {
@@ -129,7 +119,6 @@ void update_cycle_counter(const SensorSnapshot& snap, float dt_seconds) {
         const BatteryChemistryProfile* bp = battery_profile_get(pid);
         if (!bp) continue;
 
-        bool stale_test_recovered = false;
         bool crossed_hysteresis = false;
         BATTERY_LOCK();
         if (!g_loaded[ch]) {
@@ -145,12 +134,6 @@ void update_cycle_counter(const SensorSnapshot& snap, float dt_seconds) {
             g_state[ch] = loaded;
             g_loaded[ch] = true;
             g_last_dir[ch] = 0;
-            // Auto-cancel any capacity test that survived a crash. Track
-            // whether we mutated the state so we can persist the
-            // cancellation after dropping the lock.
-            bool was_active = g_state[ch].test.active;
-            recover_stale_test_if_needed(ch);
-            stale_test_recovered = was_active && !g_state[ch].test.active;
         }
 
         BatteryState& st = g_state[ch];
@@ -188,6 +171,23 @@ void update_cycle_counter(const SensorSnapshot& snap, float dt_seconds) {
             if (delta > CYCLE_DOD_HYSTERESIS_PCT) {
                 st.equivalent_full_cycles += delta / 100.0f;
                 crossed_hysteresis = true;
+                // Continuous SoH: compute the leg's discharge Ah from the
+                // SoC span and rated capacity, then update the EWMA estimate.
+                // leg_Ah = delta_pct / 100 * rated_capacity_Ah
+                if (bp && bp->rated_capacity_Ah > 0.001f) {
+                    float leg_Ah = (delta / 100.0f) * bp->rated_capacity_Ah;
+                    st.last_full_discharge_Ah = leg_Ah;
+                    float leg_soh = (leg_Ah / bp->rated_capacity_Ah) * 100.0f;
+                    if (leg_soh > 100.0f) leg_soh = 100.0f;
+                    if (st.soh_samples == 0) {
+                        st.soh_pct = leg_soh;
+                    } else {
+                        st.soh_pct = kSohAlpha * st.soh_pct + (1.0f - kSohAlpha) * leg_soh;
+                    }
+                    if (st.soh_pct < 0.0f) st.soh_pct = 0.0f;
+                    if (st.soh_pct > 100.0f) st.soh_pct = 100.0f;
+                    st.soh_samples++;
+                }
             }
             // Whether or not the delta cleared the hysteresis, the new
             // session starts here. The sub-5% portion is absorbed: it
@@ -198,7 +198,7 @@ void update_cycle_counter(const SensorSnapshot& snap, float dt_seconds) {
         if (new_dir != 0) g_last_dir[ch] = new_dir;
         BATTERY_UNLOCK();
 
-        if (crossed_hysteresis || stale_test_recovered) persist_state(ch);
+        if (crossed_hysteresis) persist_state(ch);
     }
 
     if (now - g_last_persist_ms >= kPersistIntervalMs) {
@@ -222,7 +222,6 @@ void cycle_counter_get(uint8_t channel, BatteryState* out) {
         g_state[channel] = loaded;
         g_loaded[channel] = true;
         g_last_dir[channel] = 0;
-        recover_stale_test_if_needed(channel);
     }
     *out = g_state[channel];
     BATTERY_UNLOCK();
@@ -280,7 +279,6 @@ static void ensure_loaded(uint8_t channel) {
     g_state[channel] = loaded_state;
     g_loaded[channel] = true;
     g_last_dir[channel] = 0;
-    recover_stale_test_if_needed(channel);
     BATTERY_UNLOCK();
 }
 

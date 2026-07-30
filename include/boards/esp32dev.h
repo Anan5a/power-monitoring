@@ -61,4 +61,10 @@ static const int BAD_GPIO_PINS_ESP32DEV[] = { 0, 1, 3, 6, 7, 8, 9, 10, 11, 12, 1
 #define BL0939_ADDRESSES    {0}
 #define BL0939_BAUD         4800
 
+// SD card SPI (VSPI defaults — all free on esp32dev)
+#define SD_CS   5
+#define SD_MOSI 23
+#define SD_MISO 19
+#define SD_CLK  18
+
 #endif // BOARDS_ESP32DEV_H

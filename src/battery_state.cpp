@@ -23,12 +23,12 @@ constexpr const char* kBindKey  = "bat_ch_bind_v1";
 constexpr const char* kBindVer  = "bat_ch_bind_ver";
 constexpr uint8_t     kBindVersion = 1;
 
-// BatteryState blob version. v1 blobs had current_session_dod_Ah; v2 drops
-// that field. On load we reject any blob whose leading version byte doesn't
-// match kStateBlobVersion. The caller (cycle_counter) treats
-// `battery_state_load` returning false as "fresh state" and re-initialises
-// g_state[ch] = {} — no migration of v1 data is performed.
-constexpr uint8_t kStateBlobVersion = 2;
+// BatteryState blob version. v1 had current_session_dod_Ah; v2 dropped it;
+// v3 removes CapacityTestState and adds continuous SoH fields
+// (soh_pct, soh_samples, last_full_discharge_Ah). On load we reject blobs
+// whose version is > current (shouldn't happen). v2 blobs are migrated:
+// surviving fields are copied and SoH is seeded at 100%.
+constexpr uint8_t kStateBlobVersion = 3;
 
 uint8_t g_channel_profile[MAX_LOGICAL_CHANNELS];
 
@@ -97,17 +97,73 @@ bool battery_state_load(uint8_t channel, BatteryState* out) {
     if (!out || channel >= MAX_LOGICAL_CHANNELS) return false;
     char key[8];
     make_state_key(channel, key, sizeof(key));
-    // Layout: [version=1][BatteryState body]
+    // Layout: [version][BatteryState body]
     uint8_t buf[1 + sizeof(BatteryState)];
     size_t len = 0;
     if (!battery_nvs_state_get(key, buf, sizeof(buf), &len)) return false;
-    if (len != sizeof(buf)) return false;
-    if (buf[0] != kStateBlobVersion) {
-        LOG_PRINTLN("[battery_state] v? rejected");
+    if (len < 1) return false;
+    uint8_t ver = buf[0];
+    if (ver > kStateBlobVersion) {
+        LOG_PRINT("[battery_state] v%u > current %u — rejected\n", (unsigned)ver, (unsigned)kStateBlobVersion);
         return false;
     }
-    memcpy(out, &buf[1], sizeof(BatteryState));
-    return true;
+    if (ver == kStateBlobVersion) {
+        // Current version: direct copy.
+        if (len != sizeof(buf)) return false;
+        memcpy(out, &buf[1], sizeof(BatteryState));
+        return true;
+    }
+    // v2 → v3 migration: copy surviving fields, seed SoH at 100%.
+    // v2 BatteryState layout (68 bytes):
+    //   float cumulative_Ah_in (4)
+    //   float cumulative_Ah_out (4)
+    //   float equivalent_full_cycles (4)
+    //   float last_SoC_pct (4)
+    //   float last_V (4)
+    //   float last_I (4)
+    //   uint32_t last_update_ms (4)
+    //   float last_session_start_pct (4)
+    //   CapacityTestState test (32 bytes, to be dropped)
+    // v3 BatteryState layout (48 bytes):
+    //   same first 8 fields (32 bytes)
+    //   float soh_pct (4)
+    //   uint32_t soh_samples (4)
+    //   float last_full_discharge_Ah (4)
+    //   padding (4 bytes)
+    if (ver == 2) {
+        if (len < 1 + 32) return false;  // at least the first 8 fields
+        // Read the v2 fields at known offsets
+        struct V2Layout {
+            float cumulative_Ah_in;
+            float cumulative_Ah_out;
+            float equivalent_full_cycles;
+            float last_SoC_pct;
+            float last_V;
+            float last_I;
+            uint32_t last_update_ms;
+            float last_session_start_pct;
+            // CapacityTestState follows (32 bytes), ignored
+        } v2;
+        memcpy(&v2, &buf[1], sizeof(v2));
+        BatteryState s = {};
+        s.cumulative_Ah_in = v2.cumulative_Ah_in;
+        s.cumulative_Ah_out = v2.cumulative_Ah_out;
+        s.equivalent_full_cycles = v2.equivalent_full_cycles;
+        s.last_SoC_pct = v2.last_SoC_pct;
+        s.last_V = v2.last_V;
+        s.last_I = v2.last_I;
+        s.last_update_ms = v2.last_update_ms;
+        s.last_session_start_pct = v2.last_session_start_pct;
+        s.soh_pct = 100.0f;  // seed at 100% on migration
+        s.soh_samples = 0;
+        s.last_full_discharge_Ah = 0.0f;
+        *out = s;
+        LOG_PRINT("[battery_state] ch%u migrated v2→v3\n", (unsigned)channel);
+        return true;
+    }
+    // v1 or unknown: reject (caller re-inits to {})
+    LOG_PRINT("[battery_state] v%u unknown — rejected\n", (unsigned)ver);
+    return false;
 }
 
 bool battery_state_save(uint8_t channel, const BatteryState* in) {
