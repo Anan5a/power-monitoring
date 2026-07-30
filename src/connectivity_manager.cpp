@@ -1352,63 +1352,6 @@ void publish_data(const SensorSnapshot& data, const TelemetrySnapshot& snap) {
     // share one TelemetrySnapshot. telemetry_build() clears the one-shot
     // capacity-test SoH flag, so building twice per cycle (the old behavior)
     // meant the second publish never carried capacity_test_soh_valid.
-#if MQTT_LEGACY_PAYLOAD
-    // Legacy payload shape preserved for existing MQTT consumers. Re-emits
-    // the ina3221/ina226/ads1115/ch_N_V/relayN/log_* keys exactly as before.
-    g_pub_doc.clear();
-    JsonArray ina3221Arr = g_pub_doc["ina3221"].to<JsonArray>();
-    for (uint8_t i = 0; i < 3; i++) {
-        JsonObject ch = ina3221Arr.add<JsonObject>();
-        ch["v"] = isfinite(get_channel_voltage(i))   ? get_channel_voltage(i)   : 0.0f;
-        ch["i"] = isfinite(get_channel_current(i))   ? get_channel_current(i)   : 0.0f;
-    }
-#if ENABLE_INA226
-    JsonObject ina226Obj = g_pub_doc["ina226"].to<JsonObject>();
-    ina226Obj["v"] = isfinite(get_channel_voltage(3)) ? get_channel_voltage(3) : 0.0f;
-    ina226Obj["i"] = isfinite(get_channel_current(3)) ? get_channel_current(3) : 0.0f;
-    ina226Obj["p"] = isfinite(get_channel_power(3))   ? get_channel_power(3)   : 0.0f;
-#endif
-    JsonArray adcArr = g_pub_doc["ads1115"].to<JsonArray>();
-    for (uint8_t i = 0; i < 4; i++) {
-        float av = get_channel_voltage(i);
-        adcArr.add(isfinite(av) ? av : 0.0f);
-    }
-    g_pub_doc["log_entries"] = log_entries_count();
-    g_pub_doc["log_buffer_kb"] = log_buffer_capacity() / 1024;
-    g_pub_doc["log_overflow"] = log_has_overflow_file();
-    g_pub_doc["log_overflow_bytes"] = log_overflow_file_size();
-    for (uint8_t i = 0; i < 4; i++) {
-        char key[16];
-        snprintf(key, sizeof(key), "relay%d", i);
-        g_pub_doc[key] = get_switch_state(i);
-    }
-    for (uint8_t ch = 0; ch < 4; ch++) {
-        VirtualChannelConfig vc;
-        char key[16];
-        float v = 0, i = 0, p = 0;
-        if (settings_load_virtual_channel(ch, &vc) && (vc.voltage_src > 0 || vc.current_src > 0)) {
-            if (vc.voltage_src > 0) v = get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data);
-            if (vc.current_src > 0) {
-                i = get_sensor_current(vc.current_src, vc.current_idx, data);
-                if (vc.current_src == 3) p = get_sensor_power(vc.current_src, vc.current_idx, data);
-                else if (vc.voltage_src > 0) p = v * i;
-            }
-        } else if (ch < 3) {
-            v = get_channel_voltage(ch);
-            i = get_channel_current(ch);
-            p = v * i;
-        } else {
-            v = get_channel_voltage(3);
-            i = get_channel_current(3);
-            p = get_channel_power(3);
-        }
-        snprintf(key, sizeof(key), "ch%d_V", ch); g_pub_doc[key] = isfinite(v) ? v : 0.0f;
-        snprintf(key, sizeof(key), "ch%d_I", ch); g_pub_doc[key] = isfinite(i) ? i : 0.0f;
-        snprintf(key, sizeof(key), "ch%d_P", ch); g_pub_doc[key] = isfinite(p) ? p : 0.0f;
-    }
-    char buffer[1024];
-    size_t len = serializeJson(g_pub_doc, buffer, sizeof(buffer));
-#else
     // New shape: serialize TelemetrySnapshot into a 4 KB buffer.
     static char buffer[TELEMETRY_BUF_BYTES];
     size_t len = serialize_telemetry(snap, buffer, sizeof(buffer));
@@ -1420,7 +1363,6 @@ void publish_data(const SensorSnapshot& data, const TelemetrySnapshot& snap) {
         LOG_PRINTLN("[TELEM] serialize overflow — publish dropped (raise TELEMETRY_BUF_BYTES)");
         return;
     }
-#endif
 #if CORE_DEBUG_LEVEL >= 3
     LOG_PRINT("[TELEM] %u bytes (ch=%u sw=%u bat=%u heap=%u)\n",
         (unsigned)len, snap.channel_count, snap.switch_count, snap.battery_count,
