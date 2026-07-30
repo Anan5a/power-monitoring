@@ -1,22 +1,30 @@
 #include "ble_provisioner.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/queue.h>
 #include "config.h"
 #include "log_serial.h"
 #include "settings_manager.h"
 #include "coulomb_counter.h"
 #include "sensor_manager.h"
 #include "data_logger.h"
+#include "device_state.h"
+#include "device_identity.h"
+#include "event_log.h"
 #include "coulomb_counter.h"
 #include "switch_controller.h"
 #include "connectivity_manager.h"
 #include "battery_profile.h"
 #include "battery_state.h"
 #include "cycle_counter.h"
-#include "capacity_test.h"
+#include "ota_client.h"
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <ArduinoJson.h>
+#include <Update.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <esp_task_wdt.h>
 
 static NimBLECharacteristic* pCmdChar = nullptr;
 static NimBLECharacteristic* pRespChar = nullptr;
@@ -24,6 +32,11 @@ static NimBLECharacteristic* pStatusChar = nullptr;
 static NimBLECharacteristic* pSensorChar = nullptr;
 static bool bleClientConnected = false;
 static bool ble_initialized = false;
+
+// Decouples onWrite (NimBLE host task) from handle_command (network task).
+// Each entry is a NUL-terminated command JSON up to BLE_CMD_BUF_SIZE-1 bytes.
+#define BLE_CMD_BUF_SIZE 1025
+static QueueHandle_t ble_cmd_queue = nullptr;
 
 // Rate limiting: track commands per connection window
 #define RATE_WINDOW_MS    10000   // 10-second window
@@ -58,7 +71,6 @@ class CmdCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
         (void)connInfo;
         std::string val = pCharacteristic->getValue();
-        LOG_PRINT("[BLE] onWrite len=%d\n", val.length());
         if (val.empty()) return;
         // Reject oversized writes: 1024 is well over any reasonable command
         // JSON (largest legitimate command is ~600 bytes) and stops a bad
@@ -68,7 +80,16 @@ class CmdCallbacks : public NimBLECharacteristicCallbacks {
             send_response("{\"ok\":false,\"error\":\"payload_too_large\"}");
             return;
         }
-        handle_command(val.c_str());
+        // Enqueue for the network task (loop_ble_provisioner) instead of
+        // running handle_command here on the NimBLE host task. The host task
+        // must return quickly; NVS writes / WiFi reconnects / sensor cal
+        // would otherwise block it and drop the BLE connection.
+        char buf[BLE_CMD_BUF_SIZE];
+        size_t n = val.copy(buf, sizeof(buf) - 1);
+        buf[n] = '\0';
+        if (!ble_cmd_queue || xQueueSend(ble_cmd_queue, buf, 0) != pdTRUE) {
+            send_response("{\"ok\":false,\"error\":\"server_busy\"}");
+        }
     }
 };
 
@@ -82,16 +103,66 @@ static void send_response(const char* msg) {
 // Centralized error responder — every command error MUST go through here so we
 // (a) include a `cmd` echo (contract) and (b) log at debug level. The caller
 // passes the cmd name it parsed (may be empty for parse-level errors).
+// Validate a logical channel index. Returns true if 0 <= ch < MAX_LOGICAL_CHANNELS.
+// Handlers that accept a "channel" parameter MUST call this before using the value
+// to index into channel arrays, preventing out-of-bounds reads/writes.
+static bool valid_channel(uint8_t ch) {
+    return ch < MAX_LOGICAL_CHANNELS;
+}
+
 static void send_error(const char* cmd, const char* err) {
-    char buf[160];
-    snprintf(buf, sizeof(buf), "{\"ok\":false,\"error\":\"%s\",\"cmd\":\"%s\"}",
-             err, (cmd && *cmd) ? cmd : "");
+    // Build the error doc via ArduinoJson so that err/cmd strings containing
+    // special characters (quotes, backslashes, etc.) are properly escaped.
+    // The old snprintf approach could produce invalid JSON if an error string
+    // contained a double-quote character.
+    JsonDocument doc;
+    doc["ok"] = false;
+    doc["error"] = err;
+    if (cmd && *cmd) doc["cmd"] = cmd;
+    char buf[192];
+    serializeJson(doc, buf);
     send_response(buf);
 }
 
+static void send_ok(const char* cmd, const char* msg) {
+    JsonDocument doc;
+    doc["ok"] = true;
+    doc["cmd"] = cmd;
+    doc["msg"] = msg;
+    char buf[192];
+    serializeJson(doc, buf);
+    send_response(buf);
+}
+
+// Brute-force protection: a persistent failed-PIN counter in NVS plus an
+// in-session exponential backoff. The old burst limiter only counted commands
+// within a 100 ms window, so one command every ~100 ms never tripped it —
+// ~10 PIN guesses/sec with no backoff and no persistent lockout.
+static unsigned long ble_last_fail_ms = 0;
+
 static bool check_pin(JsonDocument& doc) {
     uint32_t expected = settings_load_ble_pin();
-    if (expected == 0) return true; // no security
+    if (expected == 0) {
+        // No PIN configured — refuse all commands. The user must call
+        // set_pin first (which does NOT go through check_pin) to establish
+        // a PIN before any other command is accepted. This prevents an
+        // unconfigured device from being controlled by anyone who can reach
+        // its BLE advertising.
+        return false;
+    }
+    uint16_t fails = settings_load_ble_fail_count();
+    // Required cool-off grows exponentially with the persistent fail count,
+    // capped at 1 hour. Even after a reboot (which resets the in-session
+    // timer) the high fail count forces a long first cool-off.
+    unsigned long cooloff_ms = 1000UL;
+    if (fails > 0) {
+        unsigned long unit = 1000UL << (fails > 12 ? 12 : fails); // 1s, 2s, 4s, ...
+        cooloff_ms = (unit > 3600000UL) ? 3600000UL : unit;
+    }
+    if (fails > 0 && (millis() - ble_last_fail_ms) < cooloff_ms) {
+        send_response("{\"ok\":false,\"error\":\"rate_limited\"}");
+        return false;
+    }
     // Accept PIN as number or as string (dashboard sends "123456" as JSON string)
     uint32_t provided = 0;
     if (doc["pin"].is<const char*>()) {
@@ -100,9 +171,14 @@ static bool check_pin(JsonDocument& doc) {
         provided = doc["pin"] | 0;
     }
     if (provided != expected) {
+        ble_last_fail_ms = millis();
+        if (fails < 65535) fails++;
+        settings_save_ble_fail_count(fails);
         send_response("{\"ok\":false,\"error\":\"invalid_pin\"}");
         return false;
     }
+    // Success: reset the persistent fail counter.
+    if (fails != 0) settings_save_ble_fail_count(0);
     return true;
 }
 
@@ -127,7 +203,9 @@ static bool check_rate_limit() {
 }
 
 static void handle_command(const char* json) {
-    LOG_PRINT("[BLE] command: %s\n", json);
+    // NOTE: do NOT log the raw `json` here — it contains the BLE PIN on every
+    // PIN-protected command. The command name is logged after parsing below.
+    (void)json;
     if (!check_rate_limit()) { LOG_PRINTLN(F("[BLE] rate limited")); return; }
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
@@ -136,10 +214,6 @@ static void handle_command(const char* json) {
     const char* cmd = doc["cmd"] | "";
     LOG_PRINT("[BLE] cmd: %s\n", cmd);
     if (strcmp(cmd, "set_wifi") == 0) {
-        uint32_t pin = doc["pin"] | 0;
-        LOG_PRINT("[BLE] set_wifi pin=%lu\n", pin);
-        uint32_t stored_pin = settings_load_ble_pin();
-        LOG_PRINT("[BLE] stored_pin=%lu expected=%lu\n", stored_pin, pin);
         if (!check_pin(doc)) { LOG_PRINTLN("[BLE] pin check failed"); return; }
         settings_save_wifi(doc["ssid"], doc["pass"]);
         apply_settings_posthook("set_wifi");
@@ -152,21 +226,35 @@ static void handle_command(const char* json) {
         send_response("{\"ok\":true,\"msg\":\"mqtt_saved\"}");
     } else if (strcmp(cmd, "set_http") == 0) {
         if (!check_pin(doc)) return;
+        bool enabled = doc["enabled"] | true;
         settings_save_http_endpoint(doc["url"], doc["token"]);
-        settings_save_http_enabled(doc["enabled"] | true);
-        send_response("{\"ok\":true,\"msg\":\"http_saved\"}");
+        settings_save_http_enabled(enabled);
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+            "{\"ok\":true,\"msg\":\"http_saved\",\"enabled\":%s}",
+            enabled ? "true" : "false");
+        send_response(buf);
     } else if (strcmp(cmd, "set_switch") == 0 || strcmp(cmd, "set_relay") == 0) {
         if (!check_pin(doc)) return;
         uint8_t idx = doc["idx"] | 0;
         // switch_controller supports up to 8 switches (MAX_SWITCHES).
         if (idx > 7) { send_error(cmd, "invalid_idx"); return; }
         uint8_t default_switch_pins[4] = { RELAY_1_GPIO, RELAY_2_GPIO, RELAY_3_GPIO, RELAY_4_GPIO };
+        // Resolve the GPIO pin. Only idx 0-3 have a board default; idx 4-7
+        // must supply an explicit gpio_pin. Reading default_switch_pins[idx]
+        // for idx >= 4 would read past the 4-entry array (stack garbage → NVS).
+        int8_t pin_in;
+        if (doc["gpio_pin"].is<int>()) {
+            pin_in = (int8_t)doc["gpio_pin"].as<int>();
+        } else if (idx < (int)(sizeof(default_switch_pins) / sizeof(default_switch_pins[0]))) {
+            pin_in = default_switch_pins[idx];
+        } else {
+            send_error(cmd, "gpio_required");
+            return;
+        }
         // Validate the pin BEFORE we save to NVS — refusing a strapping /
-        // USB / out-of-range pin avoids corrupting a future boot. Only
-        // validate when the caller explicitly provides a gpio_pin; the
-        // default is always in range on supported boards.
-        int8_t pin_in = (int8_t)(doc["gpio_pin"] | default_switch_pins[idx]);
-        if (doc["gpio_pin"].is<int>() && !switch_gpio_allowed(pin_in)) {
+        // USB / out-of-range pin avoids corrupting a future boot.
+        if (!switch_gpio_allowed(pin_in)) {
             send_error(cmd, "gpio_reserved");
             return;
         }
@@ -296,6 +384,7 @@ static void handle_command(const char* json) {
         // dashboard is updated to always send `v: 2`.
         if (doc["v"].is<int>() && doc["v"].as<int>() == 2) {
             uint8_t ch = doc["channel"] | 0;
+            if (!valid_channel(ch)) { send_error(cmd, "bad_channel"); return; }
             int pid_in = doc["profile_id"] | -1;
             uint8_t pid;
             if (pid_in < 0) {
@@ -358,18 +447,39 @@ static void handle_command(const char* json) {
         sync_ble_pin_to_supabase();
         send_response("{\"ok\":true,\"msg\":\"pin_updated\"}");
     } else if (strcmp(cmd, "get_status") == 0) {
+        if (!check_pin(doc)) return;
+        DeviceState st;
+        build_device_state(&st);
         JsonDocument resp;
         resp["ok"] = true;
-        resp["entries"] = log_entries_count();
-        resp["buffer_kb"] = log_buffer_capacity() / 1024;
-        resp["overflow"] = log_has_overflow_file();
-        resp["switch_count"] = settings_load_switch_count();
-        char buf[256];
+        resp["uptime_ms"] = st.uptime_ms;
+        resp["free_heap"] = st.free_heap;
+        resp["min_free_heap"] = st.min_free_heap;
+        resp["reset_reason"] = st.reset_reason;
+        resp["wifi"] = st.wifi_connected;
+        resp["rssi"] = st.wifi_rssi;
+        if (st.wifi_connected) resp["ip"] = st.wifi_ip;
+        resp["ntp"] = st.ntp_synced;
+        resp["ble"] = st.ble_active;
+        resp["ble_conn"] = st.ble_connected;
+        resp["mqtt"] = st.mqtt_connected;
+        resp["http"] = st.http_configured;
+        resp["supabase"] = st.supabase_configured;
+        resp["offline"] = st.network_skipped;
+        resp["sd"] = st.sd_present;
+        resp["entries"] = (uint32_t)st.log_entries;
+        resp["buf_pct"] = (uint32_t)st.log_buffer_used_pct;
+        resp["overflow"] = st.log_overflow;
+        resp["channels"] = st.channel_count;
+        resp["switches"] = st.switch_count;
+        resp["calibrating"] = st.sensors_calibrating;
+        char buf[512];
         serializeJson(resp, buf);
         send_response(buf);
     } else if (strcmp(cmd, "reset_coulomb") == 0) {
         if (!check_pin(doc)) return;
         uint8_t ch = doc["channel"] | 0;
+        if (!valid_channel(ch)) { send_error(cmd, "bad_channel"); return; }
         reset_coulomb_counter(ch);
         send_response("{\"ok\":true,\"msg\":\"coulomb_reset\"}");
     } else if (strcmp(cmd, "calibrate_baseline") == 0) {
@@ -491,10 +601,22 @@ static void handle_command(const char* json) {
         send_response(buf);
     } else if (strcmp(cmd, "set_supabase") == 0) {
         if (!check_pin(doc)) return;
-        settings_save_supabase_url(doc["url"] | "");
-        settings_save_supabase_anon_key(doc["anon_key"] | "");
-        settings_save_supabase_api_key(doc["api_key"] | "");
-        settings_save_supabase_device_key(doc["device_key"] | "");
+        // Partial update: only overwrite a field when the caller provided a
+        // non-empty value. The old `doc["x"] | ""` fallback wrote an empty
+        // string for any omitted field, clobbering existing secrets and
+        // bricking Supabase connectivity on a partial BLE update.
+        if (doc["url"].is<const char*>() && doc["url"].as<const char*>()[0]) {
+            settings_save_supabase_url(doc["url"].as<const char*>());
+        }
+        if (doc["anon_key"].is<const char*>() && doc["anon_key"].as<const char*>()[0]) {
+            settings_save_supabase_anon_key(doc["anon_key"].as<const char*>());
+        }
+        if (doc["api_key"].is<const char*>() && doc["api_key"].as<const char*>()[0]) {
+            settings_save_supabase_api_key(doc["api_key"].as<const char*>());
+        }
+        if (doc["device_key"].is<const char*>() && doc["device_key"].as<const char*>()[0]) {
+            settings_save_supabase_device_key(doc["device_key"].as<const char*>());
+        }
         apply_settings_posthook("set_supabase");
         send_response("{\"ok\":true,\"msg\":\"supabase_saved\"}");
     } else if (strcmp(cmd, "get_supabase") == 0) {
@@ -814,6 +936,8 @@ static void handle_command(const char* json) {
         resp["last_V"] = st.last_V;
         resp["last_I"] = st.last_I;
         resp["last_update_ms"] = st.last_update_ms;
+        resp["soh_pct"] = st.soh_pct;
+        resp["soh_samples"] = st.soh_samples;
         char buf[384];
         serializeJson(resp, buf);
         send_response(buf);
@@ -838,62 +962,6 @@ static void handle_command(const char* json) {
         char buf[256];
         serializeJson(resp, buf);
         send_response(buf);
-    } else if (strcmp(cmd, "capacity_test") == 0) {
-        if (!check_pin(doc)) return;
-        const char* action = doc["action"] | "";
-        uint8_t ch = doc["channel"] | 0;
-        if (strcmp(action, "start") == 0) {
-            uint8_t mode = doc["mode"] | 0;
-            int8_t lsi = doc["load_switch_idx"] | -1;
-            float cutoff = doc["cutoff_v"] | 0.0f;
-            if (!capacity_test_start(ch, mode, lsi, cutoff)) {
-                send_response("{\"ok\":false,\"error\":\"start_failed\"}");
-                return;
-            }
-            char buf[128];
-            snprintf(buf, sizeof(buf),
-                "{\"ok\":true,\"msg\":\"capacity_test_started\",\"channel\":%u,\"mode\":%u}",
-                (unsigned)ch, (unsigned)mode);
-            send_response(buf);
-        } else if (strcmp(action, "stop") == 0) {
-            CapacityTestResult r = capacity_test_stop(ch);
-            if (!r.valid) {
-                send_response("{\"ok\":false,\"error\":\"not_running\"}");
-                return;
-            }
-            JsonDocument resp;
-            resp["ok"] = true;
-            resp["msg"] = "capacity_test_stopped";
-            resp["channel"] = r.channel;
-            resp["mode"] = r.mode;
-            resp["measured_Ah"] = r.measured_Ah;
-            resp["rated_Ah"] = r.rated_Ah;
-            resp["soh_pct"] = r.soh_pct;
-            resp["duration_s"] = r.duration_s;
-            resp["samples"] = r.samples;
-            resp["start_SoC_pct"] = r.start_SoC_pct;
-            resp["end_SoC_pct"] = r.end_SoC_pct;
-            char buf[384];
-            serializeJson(resp, buf);
-            send_response(buf);
-        } else if (strcmp(action, "status") == 0) {
-            BatteryState st;
-            cycle_counter_get(ch, &st);
-            JsonDocument resp;
-            resp["ok"] = true;
-            resp["channel"] = ch;
-            resp["active"] = st.test.active;
-            resp["mode"] = st.test.mode;
-            resp["measured_Ah"] = st.test.measured_Ah;
-            resp["start_SoC_pct"] = st.test.start_SoC_pct;
-            resp["cutoff_v"] = st.test.cutoff_v;
-            resp["load_switch_idx"] = st.test.load_switch_idx;
-            char buf[256];
-            serializeJson(resp, buf);
-            send_response(buf);
-        } else {
-            send_error(cmd, "invalid_action");
-        }
     } else if (strcmp(cmd, "factory_reset") == 0) {
         if (!check_pin(doc)) return;
         settings_factory_reset();
@@ -902,7 +970,32 @@ static void handle_command(const char* json) {
         if (!check_pin(doc)) return;
         send_response("{\"ok\":true,\"msg\":\"rebooting\"}");
         vTaskDelay(pdMS_TO_TICKS(100));
+        mark_clean_shutdown();
         ESP.restart();
+    } else if (strcmp(cmd, "ota_check") == 0) {
+        ota_trigger_check();
+        send_ok(cmd, "ota check triggered");
+    } else if (strcmp(cmd, "ota_status") == 0) {
+        StaticJsonDocument<256> resp;
+        resp["ok"] = true;
+        resp["cmd"] = cmd;
+        resp["state"] = (int)ota_get_state();
+        const char* state_names[] = {"idle","checking","downloading","applying","rebooting","failed"};
+        int st = (int)ota_get_state();
+        if (st >= 0 && st < 6) resp["state_name"] = state_names[st];
+        resp["version"] = ota_get_version();
+        resp["progress"] = ota_get_progress_pct();
+        resp["error"] = ota_get_last_error();
+        resp["poll_interval_s"] = ota_get_poll_interval();
+        char buf[512];
+        serializeJson(resp, buf, sizeof(buf));
+        send_response(buf);
+    } else if (strcmp(cmd, "ota_set_interval") == 0) {
+        uint32_t interval = doc["interval"] | 0;
+        if (interval < OTA_POLL_INTERVAL_MIN_S) interval = OTA_POLL_INTERVAL_MIN_S;
+        if (interval > OTA_POLL_INTERVAL_MAX_S) interval = OTA_POLL_INTERVAL_MAX_S;
+        ota_set_poll_interval(interval);
+        send_ok(cmd, "poll interval updated");
     } else {
         // DEBUG-level log so unrecognised commands are visible in
         // CORE_DEBUG_LEVEL=3 builds but don't spam release logs.
@@ -927,6 +1020,104 @@ static void handle_command(const char* json) {
 // and validation on claim_settings_command. Until then any caller able to
 // insert a row into the claimed-commands table can run these — but that is
 // the pre-fix behavior, and the schema fix is the proper fix.
+
+// Streaming OTA from a URL (backend-pushed via the ota_start command). Runs
+// on the network task; feeds the TWDT during the download so a multi-second
+// flash write doesn't trip the 30 s watchdog, then reboots into the new image.
+// Returns true only if the image was written and Update.end() succeeded (the
+// caller then reboots). On any failure Update is aborted and the running
+// image is left intact.
+static bool do_ota_from_url(const char* url, uint32_t expected_size) {
+    if (!url || !url[0]) {
+        LOG_PRINTLN("[OTA] no url");
+        return false;
+    }
+    LOG_PRINT("[OTA] starting from %s (size=%u)\n", url, (unsigned)expected_size);
+
+    WiFiClientSecure tls;
+    HTTPClient http;
+    http.setTimeout(15000);  // OTA download can be slow; per-read bounded below
+    bool begun = (strncmp(url, "https://", 8) == 0)
+                     ? (tls.setInsecure(), tls.setHandshakeTimeout(10), http.begin(tls, url))
+                     : http.begin(url);
+    if (!begun) {
+        LOG_PRINTLN("[OTA] begin() failed");
+        return false;
+    }
+    int rc = http.GET();
+    if (rc != 200) {
+        LOG_PRINT("[OTA] GET failed rc=%d\n", rc);
+        http.end();
+        return false;
+    }
+    int len = http.getSize();
+    if (expected_size == 0 && len > 0) expected_size = (uint32_t)len;
+    if (!Update.begin(expected_size ? expected_size : UPDATE_SIZE_UNKNOWN)) {
+        LOG_PRINTLN("[OTA] Update.begin failed");
+        http.end();
+        return false;
+    }
+    WiFiClient* stream = http.getStreamPtr();
+    uint8_t buf[1024];
+    size_t written = 0;
+    unsigned long last_wdt = millis();
+    while (http.connected() && stream->available() >= 0) {
+        size_t n = stream->readBytes(buf, sizeof(buf));
+        if (n == 0) {
+            if (!http.connected()) break;
+            // Feed the WDT while waiting for more bytes.
+            if (millis() - last_wdt > 1000) { esp_task_wdt_reset(); last_wdt = millis(); }
+            continue;
+        }
+        if (Update.write(buf, n) != n) {
+            LOG_PRINTLN("[OTA] Update.write short write — aborting");
+            Update.abort();
+            http.end();
+            return false;
+        }
+        written += n;
+        if (millis() - last_wdt > 1000) { esp_task_wdt_reset(); last_wdt = millis(); }
+        if (len > 0 && (int)written >= len) break;
+    }
+    http.end();
+    if (len > 0 && (int)written != len) {
+        LOG_PRINT("[OTA] short download: %u/%d — aborting\n", (unsigned)written, len);
+        Update.abort();
+        return false;
+    }
+    if (!Update.end(true)) {  // true = reboot on success
+        LOG_PRINT("[OTA] Update.end failed: %u\n", (unsigned)Update.getError());
+        log_event(EVENT_LOG_ERROR, "ota", "update failed err=%u", (unsigned)Update.getError());
+        Update.abort();
+        return false;
+    }
+    LOG_PRINTLN("[OTA] image written — rebooting");
+    log_event(EVENT_LOG_INFO, "ota", "image written, rebooting");
+    return true;  // caller reboots
+}
+
+// Verify a PIN-bearing payload for the Supabase command channel (which has
+// no BLE response to send). Destructive commands (set_pin/factory_reset/
+// reboot) must carry the current PIN so an attacker who can insert a command
+// row but does not know the device PIN cannot wipe, reboot, or change the
+// PIN and lock out the owner.
+static bool supa_pin_ok(JsonDocument& doc) {
+    uint32_t expected = settings_load_ble_pin();
+    if (expected == 0) return true; // no security configured
+    uint32_t provided = doc["pin"].is<const char*>()
+                            ? (uint32_t)atoi(doc["pin"].as<const char*>())
+                            : (uint32_t)(doc["pin"] | 0);
+    return provided == expected;
+}
+
+bool ble_is_active() {
+    return ble_initialized;
+}
+
+bool ble_is_connected() {
+    return bleClientConnected;
+}
+
 bool apply_settings_command(const char* cmd_type, const char* payload_json) {
     LOG_PRINT("[CMD] applying: %s\n", cmd_type);
     JsonDocument doc;
@@ -1254,6 +1445,21 @@ bool apply_settings_command(const char* cmd_type, const char* payload_json) {
         LOG_PRINTLN("[CMD] channel_name saved");
         return true;
     } else if (strcmp(cmd_type, "set_pin") == 0) {
+        // Destructive: require the current PIN (as `pin`) AND the matching
+        // `old_pin` before accepting a new PIN, so an attacker who can insert
+        // a command row cannot change the PIN and lock out the owner.
+        uint32_t expected = settings_load_ble_pin();
+        if (expected != 0 && !supa_pin_ok(doc)) {
+            LOG_PRINTLN("[CMD] set_pin rejected (pin missing/wrong)");
+            return false;
+        }
+        uint32_t old_pin = doc["old_pin"].is<const char*>()
+                              ? (uint32_t)atoi(doc["old_pin"].as<const char*>())
+                              : (uint32_t)(doc["old_pin"] | 0);
+        if (expected != 0 && old_pin != expected) {
+            LOG_PRINTLN("[CMD] set_pin rejected (old_pin mismatch)");
+            return false;
+        }
         // Reject 0 — that puts the device in an "open" state where any
         // client can reconfigure it. Also reject > 999999 (6-digit limit).
         uint32_t new_pin = doc["new_pin"] | 0;
@@ -1275,16 +1481,44 @@ bool apply_settings_command(const char* cmd_type, const char* payload_json) {
         LOG_PRINTLN("[CMD] sensor discovery complete");
         return true;
     } else if (strcmp(cmd_type, "factory_reset") == 0) {
+        // Destructive: require the current PIN so a stray/inserted command
+        // row can't wipe the device without knowing the PIN.
+        if (!supa_pin_ok(doc)) {
+            LOG_PRINTLN("[CMD] factory_reset rejected (pin missing/wrong)");
+            return false;
+        }
         settings_factory_reset();
         LOG_PRINTLN("[CMD] factory_reset done — rebooting");
         vTaskDelay(pdMS_TO_TICKS(100));
         ESP.restart();
         return true;  // unreachable
     } else if (strcmp(cmd_type, "reboot") == 0) {
+        if (!supa_pin_ok(doc)) {
+            LOG_PRINTLN("[CMD] reboot rejected (pin missing/wrong)");
+            return false;
+        }
         LOG_PRINTLN("[CMD] rebooting");
         vTaskDelay(pdMS_TO_TICKS(100));
         ESP.restart();
         return true;  // unreachable
+    } else if (strcmp(cmd_type, "ota_start") == 0) {
+        if (!supa_pin_ok(doc)) {
+            LOG_PRINTLN("[CMD] ota_start rejected (pin missing/wrong)");
+            return false;
+        }
+        ota_trigger_check();
+        LOG_PRINTLN("[CMD] ota check triggered via ota_start");
+        return true;
+    } else if (strcmp(cmd_type, "ota_check") == 0) {
+        ota_trigger_check();
+        return true;
+    } else if (strcmp(cmd_type, "ota_status") == 0) {
+        // Status is reported via telemetry and MQTT; this is a no-op trigger
+        return true;
+    } else if (strcmp(cmd_type, "ota_set_interval") == 0) {
+        uint32_t interval = doc["interval"] | 0;
+        ota_set_poll_interval(interval);
+        return true;
     } else {
         LOG_PRINT("[CMD] unknown: %s\n", cmd_type);
         return false;
@@ -1293,7 +1527,23 @@ bool apply_settings_command(const char* cmd_type, const char* payload_json) {
 
 void init_ble_provisioner() {
     if (ble_initialized) return;
+    // Queue that decouples the NimBLE host task from command execution.
+    // onWrite enqueues the raw JSON; loop_ble_provisioner() (network task)
+    // drains it and runs handle_command there. This keeps NVS writes, sensor
+    // calibration, WiFi reconnects, etc. off the BLE host task so it can't
+    // block and drop the connection.
+    if (!ble_cmd_queue) {
+        ble_cmd_queue = xQueueCreate(4, BLE_CMD_BUF_SIZE);
+    }
     NimBLEDevice::init(BT_DEVICE_NAME);
+    // Require an encrypted link for command writes. Pairing uses LE Secure
+    // Connections + bonding with no MITM (Just Works, no input/output on the
+    // device) — any client can pair, but the link is then encrypted so the
+    // app-layer PIN is no longer sent in plaintext over an open link. The PIN
+    // still gates every command; encryption removes the sniffing vector.
+    // Dashboards must pair (Just Works) before issuing commands.
+    NimBLEDevice::setSecurityAuth(/*bonding=*/true, /*mitm=*/false, /*sc=*/true);
+    NimBLEDevice::setSecurityIOCap(3);  // BLE_SM_IO_CAP_NO_IO -> Just Works
     NimBLEServer* pServer = NimBLEDevice::createServer();
     pServer->setCallbacks(new ProvServerCallbacks());
     pServer->advertiseOnDisconnect(true);  // NimBLE auto-restarts advertising on disconnect
@@ -1301,7 +1551,7 @@ void init_ble_provisioner() {
 
     pCmdChar = pService->createCharacteristic(
         BLE_CHAR_CMD_UUID,
-        NIMBLE_PROPERTY::WRITE
+        NIMBLE_PROPERTY::WRITE_ENC  // require encrypted (paired) link
     );
     pCmdChar->setCallbacks(new CmdCallbacks());
 
@@ -1363,7 +1613,17 @@ void deinit_ble_provisioner() {
 }
 
 void loop_ble_provisioner() {
-    if (!ble_initialized || !bleClientConnected || !pStatusChar) return;
+    if (!ble_initialized) return;
+    // Drain queued BLE commands here (network task) so the heavy work
+    // (handle_command: NVS writes, WiFi reconnect, sensor cal, response
+    // notify) runs off the NimBLE host task.
+    if (ble_cmd_queue) {
+        char buf[BLE_CMD_BUF_SIZE];
+        while (xQueueReceive(ble_cmd_queue, buf, 0) == pdTRUE) {
+            handle_command(buf);
+        }
+    }
+    if (!bleClientConnected || !pStatusChar) return;
     // Broadcast status every 2s to keep connection alive
     static unsigned long last_status = 0;
     if (millis() - last_status >= 2000) {
