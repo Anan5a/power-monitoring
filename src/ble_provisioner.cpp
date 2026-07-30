@@ -996,6 +996,9 @@ static void handle_command(const char* json) {
         if (interval > OTA_POLL_INTERVAL_MAX_S) interval = OTA_POLL_INTERVAL_MAX_S;
         ota_set_poll_interval(interval);
         send_ok(cmd, "poll interval updated");
+    } else if (strcmp(cmd, "ota_start") == 0) {
+        ota_trigger_check();
+        send_ok(cmd, "ota check triggered");
     } else {
         // DEBUG-level log so unrecognised commands are visible in
         // CORE_DEBUG_LEVEL=3 builds but don't spam release logs.
@@ -1020,81 +1023,6 @@ static void handle_command(const char* json) {
 // and validation on claim_settings_command. Until then any caller able to
 // insert a row into the claimed-commands table can run these — but that is
 // the pre-fix behavior, and the schema fix is the proper fix.
-
-// Streaming OTA from a URL (backend-pushed via the ota_start command). Runs
-// on the network task; feeds the TWDT during the download so a multi-second
-// flash write doesn't trip the 30 s watchdog, then reboots into the new image.
-// Returns true only if the image was written and Update.end() succeeded (the
-// caller then reboots). On any failure Update is aborted and the running
-// image is left intact.
-static bool do_ota_from_url(const char* url, uint32_t expected_size) {
-    if (!url || !url[0]) {
-        LOG_PRINTLN("[OTA] no url");
-        return false;
-    }
-    LOG_PRINT("[OTA] starting from %s (size=%u)\n", url, (unsigned)expected_size);
-
-    WiFiClientSecure tls;
-    HTTPClient http;
-    http.setTimeout(15000);  // OTA download can be slow; per-read bounded below
-    bool begun = (strncmp(url, "https://", 8) == 0)
-                     ? (tls.setInsecure(), tls.setHandshakeTimeout(10), http.begin(tls, url))
-                     : http.begin(url);
-    if (!begun) {
-        LOG_PRINTLN("[OTA] begin() failed");
-        return false;
-    }
-    int rc = http.GET();
-    if (rc != 200) {
-        LOG_PRINT("[OTA] GET failed rc=%d\n", rc);
-        http.end();
-        return false;
-    }
-    int len = http.getSize();
-    if (expected_size == 0 && len > 0) expected_size = (uint32_t)len;
-    if (!Update.begin(expected_size ? expected_size : UPDATE_SIZE_UNKNOWN)) {
-        LOG_PRINTLN("[OTA] Update.begin failed");
-        http.end();
-        return false;
-    }
-    WiFiClient* stream = http.getStreamPtr();
-    uint8_t buf[1024];
-    size_t written = 0;
-    unsigned long last_wdt = millis();
-    while (http.connected() && stream->available() >= 0) {
-        size_t n = stream->readBytes(buf, sizeof(buf));
-        if (n == 0) {
-            if (!http.connected()) break;
-            // Feed the WDT while waiting for more bytes.
-            if (millis() - last_wdt > 1000) { esp_task_wdt_reset(); last_wdt = millis(); }
-            continue;
-        }
-        if (Update.write(buf, n) != n) {
-            LOG_PRINTLN("[OTA] Update.write short write — aborting");
-            Update.abort();
-            http.end();
-            return false;
-        }
-        written += n;
-        if (millis() - last_wdt > 1000) { esp_task_wdt_reset(); last_wdt = millis(); }
-        if (len > 0 && (int)written >= len) break;
-    }
-    http.end();
-    if (len > 0 && (int)written != len) {
-        LOG_PRINT("[OTA] short download: %u/%d — aborting\n", (unsigned)written, len);
-        Update.abort();
-        return false;
-    }
-    if (!Update.end(true)) {  // true = reboot on success
-        LOG_PRINT("[OTA] Update.end failed: %u\n", (unsigned)Update.getError());
-        log_event(EVENT_LOG_ERROR, "ota", "update failed err=%u", (unsigned)Update.getError());
-        Update.abort();
-        return false;
-    }
-    LOG_PRINTLN("[OTA] image written — rebooting");
-    log_event(EVENT_LOG_INFO, "ota", "image written, rebooting");
-    return true;  // caller reboots
-}
 
 // Verify a PIN-bearing payload for the Supabase command channel (which has
 // no BLE response to send). Destructive commands (set_pin/factory_reset/
