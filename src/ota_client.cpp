@@ -10,7 +10,6 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <Preferences.h>
 #include <esp_ota_ops.h>
 #include <esp_task_wdt.h>
 #include <mbedtls/sha256.h>
