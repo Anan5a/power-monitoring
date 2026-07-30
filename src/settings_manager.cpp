@@ -1,5 +1,7 @@
 #include "settings_manager.h"
 #include "config.h"
+#include "battery_nvs.h"
+#include "data_logger.h"
 #include <Preferences.h>
 
 static Preferences prefs;
@@ -159,6 +161,16 @@ void settings_save_switch_rule(uint8_t idx, const SwitchRule* in) {
     prefs.putBytes(key, in, sizeof(SwitchRule));
 }
 
+bool settings_load_switch_auto_enabled() {
+    // Default false (safe): a device that has never been configured does not
+    // auto-energize relays. Once a user enables auto-trip, the choice is
+    // persisted and survives reboots (power loss, OTA, crash).
+    return prefs.getBool("sw_auto", false);
+}
+void settings_save_switch_auto_enabled(bool enabled) {
+    prefs.putBool("sw_auto", enabled);
+}
+
 bool settings_load_calibration(Calibration* out) {
     if (!prefs.isKey("cal")) return false;
     prefs.getBytes("cal", out, sizeof(Calibration));
@@ -195,8 +207,23 @@ bool settings_load_channel_calibration(ChannelCalibration* out) {
     }
     // Backward compat: legacy v1 blob (48 bytes, 3-element arrays, no invert_curr).
     if (len == kCalBlobV1Size) {
+        // Legacy layout is four float[3] arrays packed contiguously:
+        //   volt_offset[3], volt_gain[3], curr_offset[3], curr_gain[3].
+        // The v2 ChannelCalibration widens each array to MAX_LOGICAL_CHANNELS,
+        // so copying the 48-byte blob to the front of the struct (the old
+        // approach) put volt_gain/curr_offset/curr_gain inside
+        // volt_offset_mv[3..11] — corrupted calibration. Map field-by-field.
+        struct CalV1 { float vo[3]; float vg[3]; float co[3]; float cg[3]; };
+        static_assert(sizeof(CalV1) == kCalBlobV1Size, "v1 layout size mismatch");
+        CalV1 legacy = {};
+        prefs.getBytes("chan_cal", &legacy, len);
         memset(out, 0, sizeof(ChannelCalibration));
-        prefs.getBytes("chan_cal", out, len);
+        for (int i = 0; i < 3; i++) {
+            out->volt_offset_mv[i] = legacy.vo[i];
+            out->volt_gain[i]       = legacy.vg[i];
+            out->curr_offset_ma[i] = legacy.co[i];
+            out->curr_gain[i]       = legacy.cg[i];
+        }
         // Stamp the version byte so subsequent loads treat it as upgraded.
         prefs.putUChar(kCalBlobVersionKey, kCalBlobVersion);
         return true;
@@ -340,6 +367,32 @@ void settings_save_ble_pin(uint32_t pin) {
     prefs.putUInt("ble_pin", pin);
 }
 
+uint16_t settings_load_ble_fail_count() {
+    return prefs.getUShort("ble_fail", 0);
+}
+void settings_save_ble_fail_count(uint16_t count) {
+    prefs.putUShort("ble_fail", count);
+}
+
+uint32_t settings_load_ota_poll_interval() {
+    Preferences prefs;
+    if (!prefs.begin("pm-ota", true)) return OTA_POLL_INTERVAL_S;
+    uint32_t val = prefs.getUInt("poll_interval", OTA_POLL_INTERVAL_S);
+    prefs.end();
+    if (val < OTA_POLL_INTERVAL_MIN_S) val = OTA_POLL_INTERVAL_MIN_S;
+    if (val > OTA_POLL_INTERVAL_MAX_S) val = OTA_POLL_INTERVAL_MAX_S;
+    return val;
+}
+
+void settings_save_ota_poll_interval(uint32_t interval_s) {
+    if (interval_s < OTA_POLL_INTERVAL_MIN_S) interval_s = OTA_POLL_INTERVAL_MIN_S;
+    if (interval_s > OTA_POLL_INTERVAL_MAX_S) interval_s = OTA_POLL_INTERVAL_MAX_S;
+    Preferences prefs;
+    prefs.begin("pm-ota", false);
+    prefs.putUInt("poll_interval", interval_s);
+    prefs.end();
+}
+
 bool settings_load_virtual_channel(uint8_t ch, VirtualChannelConfig* out) {
     char key[16];
     snprintf(key, sizeof(key), "vc_%d", ch);
@@ -432,18 +485,65 @@ void settings_clear_discovered() {
     }
 }
 
+// ── Generic NVS helpers ──────────────────────────────────────────────
+bool settings_load_str(const char* key, char* out, size_t buf_len) {
+    if (!key || !out || buf_len == 0) return false;
+    String s = prefs.getString(key, "");
+    if (s.length() == 0) return false;
+    strncpy(out, s.c_str(), buf_len - 1);
+    out[buf_len - 1] = '\0';
+    return true;
+}
+
+void settings_save_str(const char* key, const char* val) {
+    if (!key || !val) return;
+    prefs.putString(key, val);
+}
+
+bool settings_load_u32(const char* key, uint32_t* out) {
+    if (!key || !out) return false;
+    if (!prefs.isKey(key)) return false;
+    *out = prefs.getUInt(key, 0);
+    return true;
+}
+
+void settings_save_u32(const char* key, uint32_t val) {
+    if (!key) return;
+    prefs.putUInt(key, val);
+}
+
+bool settings_load_bool(const char* key, bool* out) {
+    if (!key || !out) return false;
+    if (!prefs.isKey(key)) return false;
+    *out = prefs.getBool(key, false);
+    return true;
+}
+
+void settings_save_bool(const char* key, bool val) {
+    if (!key) return;
+    prefs.putBool(key, val);
+}
+
 void settings_factory_reset() {
-    // Wipe pm-settings (this is the only Preferences instance we own
-    // directly — the static `prefs` in this translation unit). Battery
-    // profiles and bindings live in the "pm-battery" namespace managed by
-    // battery_profile.cpp / battery_state.cpp. Open a fresh scoped handle
-    // and clear it here so factory reset covers both namespaces.
+    // Wipe every NVS namespace we own:
+    //   pm-settings          — this translation unit's static prefs (wifi,
+    //                           mqtt, supabase, calibration, switch rules, etc.)
+    //   pm-battery-state     — per-channel BatteryState blobs + binding table
+    //   pm-battery-profile   — chemistry profile registry
+    // The previous code opened "pm-battery", a namespace that is never used;
+    // its clear() was a no-op, so battery state/profiles survived factory reset.
     prefs.clear();
     {
         Preferences bat;
-        if (bat.begin("pm-battery", false)) {
-            bat.clear();
-            bat.end();
-        }
+        if (bat.begin(kBatteryStateNs, false)) { bat.clear(); bat.end(); }
+    }
+    {
+        Preferences bat;
+        if (bat.begin(kBatteryProfileNs, false)) { bat.clear(); bat.end(); }
+    }
+    // Drop the LittleFS overflow log too, so historical backlog doesn't
+    // survive a reset. The caller reboots immediately after this.
+    if (log_has_overflow_file()) {
+        log_close_overflow();
     }
 }

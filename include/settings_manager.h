@@ -108,6 +108,11 @@ void settings_save_switch(uint8_t idx, const SwitchChannel* in);
 bool settings_load_switch_rule(uint8_t idx, SwitchRule* out);
 void settings_save_switch_rule(uint8_t idx, const SwitchRule* in);
 
+// Whether rule-based auto trip/reset is enabled. Persisted so a reboot
+// (power loss, OTA, crash) does not silently disable all safety rules.
+bool settings_load_switch_auto_enabled();
+void settings_save_switch_auto_enabled(bool enabled);
+
 bool settings_load_calibration(Calibration* out);
 void settings_save_calibration(const Calibration* in);
 
@@ -146,6 +151,11 @@ void settings_save_resistors(uint8_t channel, float r_high, float r_low);
 uint32_t settings_load_ble_pin();
 void settings_save_ble_pin(uint32_t pin);
 
+// Persistent failed-PIN counter for BLE brute-force protection. Survives
+// reboots so an attacker who power-cycles cannot reset the backoff budget.
+uint16_t settings_load_ble_fail_count();
+void settings_save_ble_fail_count(uint16_t count);
+
 // Virtual channel: decouple physical sensor sources from logical channel mapping
 // src: 0=none, 1=ina3221_volt, 2=ina3221_curr, 3=ina226, 4=ads1115
 struct VirtualChannelConfig {
@@ -174,5 +184,17 @@ void settings_save_discovered_bl_count(uint8_t count);
 bool settings_load_discovered_bl_addr(uint8_t idx, uint8_t* addr);
 void settings_save_discovered_bl_addr(uint8_t idx, uint8_t addr);
 void settings_clear_discovered();  // wipe all discovery keys
+
+// Generic NVS helpers (used by device_identity and other modules)
+bool settings_load_str(const char* key, char* out, size_t buf_len);
+void settings_save_str(const char* key, const char* val);
+bool settings_load_u32(const char* key, uint32_t* out);
+void settings_save_u32(const char* key, uint32_t val);
+bool settings_load_bool(const char* key, bool* out);
+void settings_save_bool(const char* key, bool val);
+
+// OTA poll interval (seconds). Default OTA_POLL_INTERVAL_S if not set.
+uint32_t settings_load_ota_poll_interval();
+void settings_save_ota_poll_interval(uint32_t interval_s);
 
 #endif
