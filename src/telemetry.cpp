@@ -9,41 +9,14 @@
 #include "battery_profile.h"
 #include "battery_state.h"
 #include "cycle_counter.h"
-#include "capacity_test.h"
+#include "device_identity.h"
+#include "ota_client.h"
 #include "config.h"
 #include <WiFi.h>
 #include <Arduino.h>
 #include <time.h>
 
-// === Schema constants ========================================================
-
-// Capacity-test field: the most recent SoH reading published after a capacity
-// test completes. We hold it for a single publish so a watching client can
-// observe SoH without needing to poll. 0 = no test just completed.
-//
-// This is a one-shot side channel driven by capacity_test.cpp; once consumed
-// by telemetry_build() the flag is cleared. capacity_test_last_soh_pct() is
-// preferred for new readers, but this hold-window is preserved for back-compat
-// with the TelemetryBattery.capacity_test_soh_valid field.
-static float     g_last_capacity_test_soh = 0.0f;
-static bool      g_last_capacity_test_soh_valid = false;
-static uint32_t  g_last_capacity_test_ms = 0;
-#define CAPACITY_TEST_SOH_HOLD_MS 30000UL
-
 // === Helpers =================================================================
-
-static void format_mac_device_id(char* out, size_t out_len) {
-    // MAC string is 17 chars ("AA:BB:CC:DD:EE:FF"). Strip colons to fit 12 hex
-    // chars in 24-byte buffer; falls back to "unknown" if WiFi MAC isn't ready.
-    uint8_t mac[6] = {0};
-    if (WiFi.macAddress(mac) != 0 || (mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5]) != 0) {
-        snprintf(out, out_len, "%02X%02X%02X%02X%02X%02X",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    } else {
-        strncpy(out, "unknown", out_len);
-        out[out_len - 1] = '\0';
-    }
-}
 
 // === Public API ==============================================================
 
@@ -61,7 +34,8 @@ void telemetry_build(TelemetrySnapshot& out) {
     out.ts_ms = (uint16_t)(millis() % 1000);
 
     // --- Device metadata ------------------------------------------------------
-    format_mac_device_id(out.device.id, sizeof(out.device.id));
+    strncpy(out.device.id, get_device_serial(), sizeof(out.device.id) - 1);
+    out.device.id[sizeof(out.device.id) - 1] = '\0';
     strncpy(out.device.fw, TELEMETRY_FW_VERSION, sizeof(out.device.fw));
     out.device.fw[sizeof(out.device.fw) - 1] = '\0';
     out.device.uptime_ms = millis();
@@ -204,23 +178,8 @@ void telemetry_build(TelemetrySnapshot& out) {
         tb.cumulative_Ah_out   = st.cumulative_Ah_out;
         tb.equivalent_full_cycles = st.equivalent_full_cycles;
         (void)cycle_counter_get_last_update_ms;  // not exposed in TelemetryBattery
-        tb.capacity_test_active  = st.test.active;
-        tb.capacity_test_soh_pct = capacity_test_last_soh_pct(ch);
-        // capacity_test_soh_valid stays true if either the cycle_counter's
-        // pending result or the one-shot side channel set a recent value.
-        // The one-shot hold window is preserved for back-compat: callers that
-        // just want "did a test finish recently?" still see the legacy flag.
-        bool soh_pending = (tb.capacity_test_soh_pct >= 0.0f) ||
-            (g_last_capacity_test_soh_valid &&
-             (millis() - g_last_capacity_test_ms) < CAPACITY_TEST_SOH_HOLD_MS);
-        tb.capacity_test_soh_valid = soh_pending;
-        if (g_last_capacity_test_soh_valid &&
-            (millis() - g_last_capacity_test_ms) < CAPACITY_TEST_SOH_HOLD_MS) {
-            // One-shot: clear after the holding window so it only shows up
-            // in a single publish.
-            g_last_capacity_test_soh_valid = false;
-            g_last_capacity_test_soh = 0.0f;
-        }
+        tb.soh_pct     = st.soh_pct;
+        tb.soh_samples = st.soh_samples;
     }
     out.battery_count = bat_count;
 
@@ -231,14 +190,26 @@ void telemetry_build(TelemetrySnapshot& out) {
 
     // --- Heap -----------------------------------------------------------------
     out.heap_free = ESP.getFreeHeap();
+
+    // --- OTA status -------------------------------------------------------------
+    OtaState ota_st = ota_get_state();
+    out.ota.ota_in_progress = (ota_st == OTA_DOWNLOADING || ota_st == OTA_APPLYING);
+    const char* ver = ota_get_version();
+    if (ver) {
+        strncpy(out.ota.ota_version, ver, sizeof(out.ota.ota_version));
+        out.ota.ota_version[sizeof(out.ota.ota_version) - 1] = '\0';
+    }
+    out.ota.ota_progress_pct = ota_get_progress_pct();
+    const char* status_str = "";
+    switch (ota_st) {
+        case OTA_IDLE:        status_str = "idle";        break;
+        case OTA_CHECKING:    status_str = "checking";    break;
+        case OTA_DOWNLOADING: status_str = "downloading"; break;
+        case OTA_APPLYING:    status_str = "applying";    break;
+        case OTA_REBOOTING:   status_str = "rebooting";   break;
+        case OTA_FAILED:      status_str = "failed";      break;
+    }
+    strncpy(out.ota.ota_status, status_str, sizeof(out.ota.ota_status));
+    out.ota.ota_status[sizeof(out.ota.ota_status) - 1] = '\0';
 }
 
-// === Capacity-test side channel ==============================================
-// Called from the capacity test driver (or any test controller) when a test
-// completes. Surfaces the SoH value to the next telemetry publish and
-// expires it after the hold window so consumers don't have to.
-void telemetry_publish_capacity_test_soh(float soh_pct) {
-    g_last_capacity_test_soh = soh_pct;
-    g_last_capacity_test_soh_valid = true;
-    g_last_capacity_test_ms = millis();
-}
