@@ -27,7 +27,12 @@
 
 #define TELEMETRY_SCHEMA_VERSION 1
 #define TELEMETRY_PROFILE_STRING "telemetry_v1"
+// Firmware version. Override at build time with -D TELEMETRY_FW_VERSION="\"v2.0.0-git123\""
+// to track which exact build is running on each device. The fallback is a
+// human-readable tag; production builds should set a unique version string.
+#ifndef TELEMETRY_FW_VERSION
 #define TELEMETRY_FW_VERSION     "2.0.0"
+#endif
 
 struct TelemetryDevice {
     char     id[24];       // MAC-derived device id (e.g. "AABBCCDDEEFF")
@@ -75,14 +80,21 @@ struct TelemetryBattery {
     float   cumulative_Ah_in;    // positive coulomb accumulated
     float   cumulative_Ah_out;   // |negative| coulomb accumulated
     float   equivalent_full_cycles; // (Ah_in + Ah_out) / (2 * rated_Ah)
-    bool    capacity_test_active;
-    float   capacity_test_soh_pct;  // only meaningful right after a capacity test
-    bool    capacity_test_soh_valid; // true when the above was just reported
+    float   soh_pct;             // 0..100, EWMA from completed discharge legs
+    uint32_t soh_samples;        // number of legs contributing to soh_pct
 };
 
 struct TelemetryLogMeta {
     uint16_t entries;       // log_entries_count() clamped to uint16
     bool     overflow;      // log_has_overflow_file()
+};
+
+struct TelemetryOTA {
+    bool    ota_in_progress;    // true while downloading/applying
+    char    ota_version[16];    // version being applied
+    uint8_t ota_progress_pct;   // 0..100 during download
+    char    ota_status[16];     // "idle", "checking", "downloading",
+                                // "applying", "rebooting", "failed"
 };
 
 struct TelemetrySnapshot {
@@ -104,6 +116,7 @@ struct TelemetrySnapshot {
 
     TelemetryLogMeta log;
     uint32_t heap_free;
+    TelemetryOTA ota;
 };
 
 // Wire the build flag (MQTT_LEGACY_PAYLOAD) into a single source of truth so
@@ -126,7 +139,6 @@ void telemetry_build(TelemetrySnapshot& out);
 // battery[] entry (capacity_test_soh_valid=true) and the field auto-clears
 // after the next publish. Consumers that observe a non-zero SoH can treat
 // it as authoritative for that reading only.
-void telemetry_publish_capacity_test_soh(float soh_pct);
 
 // Size sanity check. Keep MAX_* honest: anything larger and the 2 KB
 // serialized budget is at risk.
