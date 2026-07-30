@@ -547,3 +547,21 @@ void settings_factory_reset() {
         log_close_overflow();
     }
 }
+
+bool settings_load_ota_backend_url(char* url, size_t buf_len) {
+    Preferences prefs;
+    if (!prefs.begin("pm-ota", true)) return false;
+    String s = prefs.getString("backend_url", "");
+    prefs.end();
+    if (s.length() == 0) return false;
+    strncpy(url, s.c_str(), buf_len - 1);
+    url[buf_len - 1] = '\0';
+    return true;
+}
+
+void settings_save_ota_backend_url(const char* url) {
+    Preferences prefs;
+    prefs.begin("pm-ota", false);
+    prefs.putString("backend_url", url);
+    prefs.end();
+}

@@ -197,4 +197,8 @@ void settings_save_bool(const char* key, bool val);
 uint32_t settings_load_ota_poll_interval();
 void settings_save_ota_poll_interval(uint32_t interval_s);
 
+// OTA backend base URL (e.g. "https://api.example.com")
+bool settings_load_ota_backend_url(char* url, size_t buf_len);
+void settings_save_ota_backend_url(const char* url);
+
 #endif
