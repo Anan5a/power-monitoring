@@ -25,6 +25,13 @@
 #define MQTT_TOPIC        "power-monitor/data"
 #define MQTT_LOG_TOPIC    "power-monitor/logbin"
 
+// Device type used in the MQTT telemetry topic `telemetry/{device_type}/{device_key}`
+// and matched against OTA releases in the backend. Override per product via
+// build_flags. The device_key segment is read from NVS (Supabase device_key).
+#ifndef DEVICE_TYPE
+#define DEVICE_TYPE "power_monitor_v2"
+#endif
+
 // Blynk IoT (Blynk 2.0 requires TEMPLATE_ID and TEMPLATE_NAME)
 #define BLYNK_TEMPLATE_ID   "TMPLxxxxxx"
 #define BLYNK_TEMPLATE_NAME "PowerMonitor"
@@ -38,7 +45,6 @@
 #ifndef HAS_DISPLAY
 #define HAS_DISPLAY           1   // SSD1306 OLED on I2C
 #endif
-
 // Debug Serial console. Set to 0 for builds that disable the USB-CDC console
 // (e.g. esp32c3_nodisplay with ARDUINO_USB_CDC_ON_BOOT=1) where `Serial` is
 // not declared in scope. When 0, every LOG_PRINT/LOG_PRINTLN call in
@@ -96,6 +102,14 @@
 
 #define ENABLE_BL0939        0   // set to 1 when a BL0939 UART meter is wired to BL0939_*_PIN
 
+// Protobuf encoding (nanopb). Default 0 = JSON. Set to 1 to encode telemetry
+// as protobuf and publish to telemetry/{type}/{key}/pb (MQTT topic suffix).
+// The backend does not yet consume the /pb topic — this is firmware-side
+// plumbing only. See docs/FIRMWARE_PLAN.md for the negotiation gap.
+#ifndef USE_PROTOBUF
+#define USE_PROTOBUF         0
+#endif
+
 // BLE settings
 #define BT_DEVICE_NAME          "PowerMonitor"
 #define BLE_SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -113,12 +127,35 @@
 // Bumped from the library default of 256 to 2048 so JSON telemetry payloads
 // (with metadata + 4 channel rows ≈ 1.4 KB) fit without truncation.
 #ifndef MQTT_MAX_PACKET_SIZE
-#define MQTT_MAX_PACKET_SIZE 2048
+#define MQTT_MAX_PACKET_SIZE 4096
 #endif
 
 // BLE command interface UUIDs
 #define BLE_CHAR_CMD_UUID       "c01afdfc-3cbe-4c26-a1e8-8c71a5f6f2a4"
 #define BLE_CHAR_RESP_UUID      "d8a7b56a-3f64-4fb6-a123-8d2e5c7a9b01"
 #define BLE_CHAR_STATUS_UUID    "e3c5a7f2-8b1d-4e6c-9a0f-2d4b6e8c1a35"
+
+// OTA update client
+#ifndef OTA_POLL_INTERVAL_S
+#define OTA_POLL_INTERVAL_S      300   // default poll interval (5 min)
+#endif
+#ifndef OTA_POLL_INTERVAL_MIN_S
+#define OTA_POLL_INTERVAL_MIN_S  60    // minimum poll interval (1 min)
+#endif
+#ifndef OTA_POLL_INTERVAL_MAX_S
+#define OTA_POLL_INTERVAL_MAX_S  86400 // maximum poll interval (24 h)
+#endif
+#ifndef OTA_HTTP_TIMEOUT_MS
+#define OTA_HTTP_TIMEOUT_MS      10000 // HTTP connect timeout (10 s)
+#endif
+#ifndef OTA_CHUNK_SIZE
+#define OTA_CHUNK_SIZE           1024  // bytes per download chunk
+#endif
+#ifndef OTA_DOWNLOAD_TIMEOUT_MS
+#define OTA_DOWNLOAD_TIMEOUT_MS  300000 // total download timeout (5 min)
+#endif
+#ifndef OTA_GRACE_SECONDS
+#define OTA_GRACE_SECONDS        60    // seconds after boot before mark_valid
+#endif
 
 #endif
