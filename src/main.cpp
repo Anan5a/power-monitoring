@@ -59,42 +59,45 @@ static void print_sensor_data(const SensorSnapshot& data) {
 }
 
 static void print_status() {
-    DeviceState st;
-    build_device_state(&st);
+    TelemetrySnapshot snap;
+    telemetry_build(snap);
     LOG_PRINT("── System ──────────────────────────────────────\n");
-    LOG_PRINT("Uptime: %lu s  Heap: %u/%u min  Reset: %u\n",
-        st.uptime_ms / 1000, st.free_heap, st.min_free_heap, st.reset_reason);
+    LOG_PRINT("Uptime: %lu s  Heap: %u/%u min  Reset: %u  Crashes: %u%s\n",
+        snap.device.uptime_ms / 1000, snap.heap_free, snap.min_free_heap,
+        snap.reset_reason, snap.crash_count, snap.safe_mode ? " SAFE MODE" : "");
+    LOG_PRINT("Device: %s rev %s fw %s\n", snap.device.id, snap.hw_rev, snap.device.fw);
     LOG_PRINT("── WiFi ────────────────────────────────────────\n");
     LOG_PRINT("Connected: %d  RSSI: %d dBm  IP: %s  NTP: %d\n",
-        st.wifi_connected, st.wifi_rssi,
-        st.wifi_connected ? st.wifi_ip : "-", st.ntp_synced);
+        snap.wifi.rssi != 0, snap.wifi.rssi,
+        snap.wifi.rssi != 0 ? snap.wifi.ip : "-", snap.ntp_synced);
     LOG_PRINT("── BLE ─────────────────────────────────────────\n");
-    LOG_PRINT("Active: %d  Connected: %d\n", st.ble_active, st.ble_connected);
+    LOG_PRINT("Active: %d  Connected: %d\n", snap.ble_active, snap.ble_connected);
     LOG_PRINT("── Services ────────────────────────────────────\n");
     LOG_PRINT("MQTT: %d  HTTP: %d  Supabase: %d  Offline: %d\n",
-        st.mqtt_connected, st.http_configured, st.supabase_configured, st.network_skipped);
+        snap.mqtt_connected, snap.http_configured, snap.supabase_configured, snap.network_skipped);
     LOG_PRINT("── Storage ─────────────────────────────────────\n");
     LOG_PRINT("SD: %d  Log: %u entries (%u%%)  Overflow: %d\n",
-        st.sd_present, (unsigned)st.log_entries, (unsigned)st.log_buffer_used_pct, st.log_overflow);
-    LOG_PRINT("── Sensors ─────────────────────────────────────\n");
+        snap.sd_present, (unsigned)snap.log.entries,
+        (unsigned)snap.log_buffer_used_pct, snap.log.overflow);
+    LOG_PRINT("── Sensors ────────────────────────────────────\n");
     LOG_PRINT("Channels: %u  Switches: %u  Calibrating: %d\n",
-        st.channel_count, st.switch_count, st.sensors_calibrating);
-    for (int ch = 0; ch < st.channel_count && ch < 4; ch++) {
-        float mAh = get_coulomb_mAh(ch);
-        float wh = get_energy_Wh(ch);
-        BatteryConfig bat;
-        float soc = -1;
-        if (settings_load_battery(ch, &bat) && bat.capacity_mAh > 0.001f) {
-            soc = bat.initial_soc_pct + (mAh / bat.capacity_mAh) * 100.0f;
-            if (soc < 0) soc = 0;
-            if (soc > 100) soc = 100;
-        }
-        if (soc >= 0) {
-            LOG_PRINT("Ch%d: %.1fmAh %.2fWh SoC:%.1f%%\n", ch, mAh, wh, soc);
-        } else {
-            LOG_PRINT("Ch%d: %.1fmAh %.2fWh\n", ch, mAh, wh);
-        }
+        snap.channel_count, snap.switch_count, snap.sensors_calibrating);
+    for (int ch = 0; ch < snap.channel_count && ch < 4; ch++) {
+        const TelemetryChannel& tc = snap.channels[ch];
+        LOG_PRINT("Ch%d: %.3fV %.3fA %.2fW  mAh:%.0f  Wh:%.2f\n",
+            ch, tc.V, tc.I, tc.P, tc.charge_mAh, tc.energy_Wh);
     }
+    LOG_PRINT("── Batteries ───────────────────────────────────\n");
+    for (int i = 0; i < snap.battery_count; i++) {
+        const TelemetryBattery& tb = snap.battery[i];
+        LOG_PRINT("Ch%d: SoC=%.1f%%  SoH=%.1f%%  cycles=%.2f  Ah_in=%.2f  Ah_out=%.2f\n",
+            tb.ch, tb.soc_pct, tb.soh_pct, tb.equivalent_full_cycles,
+            tb.cumulative_Ah_in, tb.cumulative_Ah_out);
+    }
+    LOG_PRINT("── OTA ────────────────────────────────────────\n");
+    LOG_PRINT("State: %s  Version: %s  Progress: %u%%  Error: %s\n",
+        snap.ota.ota_status, snap.ota.ota_version,
+        snap.ota.ota_progress_pct, snap.ota.ota_error);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
