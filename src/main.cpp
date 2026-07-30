@@ -19,8 +19,12 @@
 #include "battery_profile.h"
 #include "battery_state.h"
 #include "cycle_counter.h"
-#include "capacity_test.h"
 #include "log_serial.h"
+#include "telemetry.h"
+#include "device_state.h"
+#include "device_identity.h"
+#include "event_log.h"
+#include "ota_client.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Watchdog timer (TWDT) — one-time init with the longest possible panic
@@ -55,9 +59,27 @@ static void print_sensor_data(const SensorSnapshot& data) {
 }
 
 static void print_status() {
-    LOG_PRINT("MAC: %s | IP: %s | Entries: %lu/%uKB | Overflow: %d\n",
-                  WiFi.macAddress().c_str(), get_local_ip_str(), log_entries_count(), log_buffer_capacity()/1024, log_has_overflow_file());
-    for (int ch = 0; ch < 4; ch++) {
+    DeviceState st;
+    build_device_state(&st);
+    LOG_PRINT("── System ──────────────────────────────────────\n");
+    LOG_PRINT("Uptime: %lu s  Heap: %u/%u min  Reset: %u\n",
+        st.uptime_ms / 1000, st.free_heap, st.min_free_heap, st.reset_reason);
+    LOG_PRINT("── WiFi ────────────────────────────────────────\n");
+    LOG_PRINT("Connected: %d  RSSI: %d dBm  IP: %s  NTP: %d\n",
+        st.wifi_connected, st.wifi_rssi,
+        st.wifi_connected ? st.wifi_ip : "-", st.ntp_synced);
+    LOG_PRINT("── BLE ─────────────────────────────────────────\n");
+    LOG_PRINT("Active: %d  Connected: %d\n", st.ble_active, st.ble_connected);
+    LOG_PRINT("── Services ────────────────────────────────────\n");
+    LOG_PRINT("MQTT: %d  HTTP: %d  Supabase: %d  Offline: %d\n",
+        st.mqtt_connected, st.http_configured, st.supabase_configured, st.network_skipped);
+    LOG_PRINT("── Storage ─────────────────────────────────────\n");
+    LOG_PRINT("SD: %d  Log: %u entries (%u%%)  Overflow: %d\n",
+        st.sd_present, (unsigned)st.log_entries, (unsigned)st.log_buffer_used_pct, st.log_overflow);
+    LOG_PRINT("── Sensors ─────────────────────────────────────\n");
+    LOG_PRINT("Channels: %u  Switches: %u  Calibrating: %d\n",
+        st.channel_count, st.switch_count, st.sensors_calibrating);
+    for (int ch = 0; ch < st.channel_count && ch < 4; ch++) {
         float mAh = get_coulomb_mAh(ch);
         float wh = get_energy_Wh(ch);
         BatteryConfig bat;
@@ -98,6 +120,7 @@ static void networkTask(void* param) {
         esp_task_wdt_reset();
         loop_connectivity();
         loop_ble_provisioner();
+        loop_ota_client();
 
         // Feed UI with network/cloud status
         static bool last_wifi = false, last_cloud = false;
@@ -112,8 +135,14 @@ static void networkTask(void* param) {
         // Process at most 1 sensor reading per tick to avoid burst POSTs
         static unsigned long last_display_update = 0;
         if (xQueueReceive(g_sensor_queue, &data, 0) == pdTRUE) {
-            publish_data(data);
-            publish_data_supabase(data);
+            // Build the telemetry snapshot ONCE per cycle and share it with
+            // both transports. telemetry_build() clears the one-shot
+            // capacity-test SoH flag, so building twice (the old pattern)
+            // meant the second publish never carried capacity_test_soh_valid.
+            TelemetrySnapshot snap;
+            telemetry_build(snap);
+            publish_data(data, snap);
+            publish_data_supabase(data, snap);
 
             // Update OLED from network task so I2C display traffic doesn't delay
             // the 1-second sensor sampling loop.
@@ -174,16 +203,27 @@ static void sensorTask(void* param) {
 
     SensorSnapshot data;
     TickType_t last_wake = xTaskGetTickCount();
+    TickType_t last_sample = last_wake;  // for real-dt integration (see below)
 
     for (;;) {
         esp_task_wdt_reset();
+        // Measure the actual elapsed time since the last sample so the
+        // integrators (coulomb/energy/cycle/capacity) use real dt, not a
+        // hardcoded 1.0 s. If the task slips (slow I2C, WDT reset), integrating
+        // as if exactly 1 s caused systematic energy/mAh drift. A separate
+        // `last_sample` is used so vTaskDelayUntil's precise 1 s period is
+        // preserved.
+        TickType_t now_ticks = xTaskGetTickCount();
+        float dt_seconds = (float)(now_ticks - last_sample) / (float)configTICK_RATE_HZ;
+        last_sample = now_ticks;
+        if (dt_seconds <= 0.0f || dt_seconds > 10.0f) dt_seconds = 1.0f; // sanity clamp
+
         data = read_sensors();
         push_sensor_data(data);
         log_sample(data, millis());
-        update_coulomb_counter(data, 1.0f);
-        update_energy_counter(data, 1.0f);
-        update_cycle_counter(data, 1.0f);
-        update_capacity_test_monitor(data, 1.0f);
+        update_coulomb_counter(data, dt_seconds);
+        update_energy_counter(data, dt_seconds);
+        update_cycle_counter(data, dt_seconds);
         evaluate_switches(data);
 
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(1000));
@@ -487,6 +527,8 @@ static void handle_serial_cli() {
                 LOG_PRINT("Min free heap: %u bytes\n", ESP.getMinFreeHeap());
                 LOG_PRINT("CPU temperature: %.1f C\n", temperatureRead());
                 LOG_PRINT("PSRAM: %u bytes\n", ESP.getPsramSize());
+            } else if (strcmp(line, "log") == 0) {
+                dump_event_log_serial();
             } else if (strcmp(line, "sensors") == 0) {
                 SensorSnapshot data = read_sensors();
                 print_sensor_data(data);
@@ -575,10 +617,8 @@ static void handle_serial_cli() {
                         st.last_SoC_pct, st.last_V, st.last_I);
                     LOG_PRINT("  cum_Ah_in=%.2f  cum_Ah_out=%.2f  equiv_cycles=%.3f\n",
                         st.cumulative_Ah_in, st.cumulative_Ah_out, st.equivalent_full_cycles);
-                    if (st.test.active) {
-                        LOG_PRINT("  test ACTIVE: mode=%u  measured=%.2fAh\n",
-                            (unsigned)st.test.mode, st.test.measured_Ah);
-                    }
+                    LOG_PRINT("  SoH=%.1f%% (%u samples)\n",
+                        st.soh_pct, (unsigned)st.soh_samples);
                 } else {
                     LOG_PRINTLN("Usage: battery show <ch>");
                 }
@@ -686,36 +726,6 @@ static void handle_serial_cli() {
                 } else {
                     LOG_PRINTLN("Usage: cycle show <ch>");
                 }
-            } else if (strncmp(line, "capacity_test ", 14) == 0) {
-                char action[16];
-                int ch;
-                if (sscanf(line, "capacity_test %15s %d", action, &ch) == 2 &&
-                    ch >= 0 && ch < (int)MAX_LOGICAL_CHANNELS) {
-                    if (strcmp(action, "start") == 0) {
-                        // mode 0=MANUAL, no load switch / cutoff
-                        if (capacity_test_start((uint8_t)ch, CAP_TEST_MANUAL, -1, 0.0f)) {
-                            LOG_PRINT("CH%u manual test started\n", (unsigned)ch);
-                        } else {
-                            LOG_PRINTLN("start failed (no profile, or already running?)");
-                        }
-                    } else if (strcmp(action, "stop") == 0) {
-                        CapacityTestResult r = capacity_test_stop((uint8_t)ch);
-                        if (r.valid) {
-                            LOG_PRINT("CH%u test done: measured=%.3fAh rated=%.3fAh SoH=%.1f%% (%u s, %u samples)\n",
-                                r.channel, r.measured_Ah, r.rated_Ah, r.soh_pct,
-                                (unsigned)r.duration_s, (unsigned)r.samples);
-                        } else {
-                            LOG_PRINTLN("not running");
-                        }
-                    } else if (strcmp(action, "status") == 0) {
-                        bool active = capacity_test_is_active((uint8_t)ch);
-                        LOG_PRINT("CH%u: %s\n", (unsigned)ch, active ? "TEST ACTIVE" : "idle");
-                    } else {
-                        LOG_PRINTLN("Usage: capacity_test start|stop|status <ch>");
-                    }
-                } else {
-                    LOG_PRINTLN("Usage: capacity_test start|stop|status <ch>");
-                }
             } else if (strcmp(line, "flush log") == 0) {
                 size_t flushed = 0;
                 uint8_t batch[512];
@@ -743,7 +753,13 @@ static void handle_serial_cli() {
                     SwitchChannel ch;
                     if (settings_load_switch(i, &ch)) {
                         LOG_PRINT("Switch %d (GPIO %d)...\n", i, ch.gpio_pin);
+                        // switch_pulse is non-blocking, so wait for this
+                        // switch's pulse to finish before starting the next
+                        // to keep the test sequential.
                         switch_pulse((uint8_t)i, 1000);
+                        while (switch_pulse_active((uint8_t)i)) {
+                            vTaskDelay(pdMS_TO_TICKS(50));
+                        }
                         vTaskDelay(pdMS_TO_TICKS(500));
                     }
                 }
@@ -774,6 +790,7 @@ static void handle_serial_cli() {
                 LOG_PRINTLN("Wiping NVS and rebooting...");
                 vTaskDelay(pdMS_TO_TICKS(500));
                 settings_factory_reset();
+                mark_clean_shutdown();
                 ESP.restart();
             } else if (strcmp(line, "calibrate_baseline") == 0) {
                 sensor_calibrate_baseline();
@@ -820,6 +837,7 @@ static void handle_serial_cli() {
             } else if (strcmp(line, "reboot") == 0) {
                 LOG_PRINTLN("Rebooting...");
                 vTaskDelay(pdMS_TO_TICKS(100));
+                mark_clean_shutdown();
                 ESP.restart();
             } else if (strcmp(line, "serial1peek") == 0) {
 #if ENABLE_SERIAL1
@@ -864,7 +882,6 @@ static void handle_serial_cli() {
                 LOG_PRINTLN("  battery profile delete id — delete custom profile (id 4..15)");
                 LOG_PRINTLN("  battery reset N     — reset cycle counter for CH N");
                 LOG_PRINTLN("  cycle show N        — show cycle counter for CH N");
-                LOG_PRINTLN("  capacity_test start|stop|status N  — run/inspect manual capacity test");
                 LOG_PRINTLN("  flush log           — flush RAM log buffer");
                 LOG_PRINTLN("  i2c_scan            — scan I2C bus for devices");
                 LOG_PRINTLN("  discover_sensors    — auto-detect INA226/BL0939 sensors");
@@ -911,6 +928,31 @@ void setup() {
     LOG_PRINTLN("Power Monitor v2 starting...");
 
     init_settings();
+    init_event_log();
+    init_device_identity();
+    LOG_PRINT("Device: %s rev %s (crashes: %u)\n",
+        get_device_serial(), get_device_hw_rev(), (unsigned)get_crash_count());
+
+    // Safe mode: if the device has crashed 5+ times, skip WiFi/BLE init
+    // to avoid re-triggering the fault loop. The user must factory-reset
+    // or flash new firmware to recover.
+    if (get_crash_count() >= 5) {
+        LOG_PRINTLN("*** SAFE MODE — crash count >= 5, skipping network init ***");
+        LOG_PRINTLN("Factory reset or reflash to recover.");
+        // Still init sensors and logger so the serial console works
+        init_sensors();
+        init_data_logger();
+        init_switches();
+        init_ui();
+        ui_set_heartbeat(true);
+        init_core_shared();
+        wdt_init();
+        // Create only the sensor task (no network/BLE)
+        xTaskCreatePinnedToCore(sensorTask, "sensorTask", 4096, NULL, 5, NULL, 1);
+        vTaskDelete(NULL);  // delete setup task, sensorTask runs
+        return;
+    }
+
     init_sensors();
     init_display();
     log_set_epoch(get_epoch_time());
@@ -921,11 +963,12 @@ void setup() {
     init_battery_bindings();
     init_battery_states();
     init_cycle_counter();
-    init_capacity_test();
     init_switches();
     init_ui();
     ui_set_heartbeat(true);
     init_core_shared();
+    init_ota_client();
+    ota_confirm_valid();
 
     LOG_PRINT("Free heap before BLE: %u bytes\n", ESP.getFreeHeap());
     LOG_PRINT("Min free heap: %u bytes\n", ESP.getMinFreeHeap());
