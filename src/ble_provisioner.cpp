@@ -18,6 +18,7 @@
 #include "battery_state.h"
 #include "cycle_counter.h"
 #include "ota_client.h"
+#include "telemetry.h"
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <ArduinoJson.h>
@@ -96,6 +97,13 @@ class CmdCallbacks : public NimBLECharacteristicCallbacks {
 static void send_response(const char* msg) {
     if (!bleClientConnected || !pRespChar) { LOG_PRINTLN(F("[BLE] send_response: not connected or pRespChar is null")); return; }
     size_t len = strlen(msg);
+    pRespChar->notify((const uint8_t*)msg, len);
+    LOG_PRINT("[BLE] sent resp: %s\n", msg);
+}
+
+// Overload that accepts an explicit length (avoids strlen on large payloads).
+static void send_response(const char* msg, size_t len) {
+    if (!bleClientConnected || !pRespChar) { LOG_PRINTLN(F("[BLE] send_response: not connected or pRespChar is null")); return; }
     pRespChar->notify((const uint8_t*)msg, len);
     LOG_PRINT("[BLE] sent resp: %s\n", msg);
 }
@@ -447,35 +455,48 @@ static void handle_command(const char* json) {
         sync_ble_pin_to_supabase();
         send_response("{\"ok\":true,\"msg\":\"pin_updated\"}");
     } else if (strcmp(cmd, "get_status") == 0) {
-        if (!check_pin(doc)) return;
-        DeviceState st;
-        build_device_state(&st);
-        JsonDocument resp;
+        if (!check_pin(doc)) {
+            send_error(cmd, "pin required");
+            return;
+        }
+        TelemetrySnapshot snap;
+        telemetry_build(snap);
+        StaticJsonDocument<2048> resp;
         resp["ok"] = true;
-        resp["uptime_ms"] = st.uptime_ms;
-        resp["free_heap"] = st.free_heap;
-        resp["min_free_heap"] = st.min_free_heap;
-        resp["reset_reason"] = st.reset_reason;
-        resp["wifi"] = st.wifi_connected;
-        resp["rssi"] = st.wifi_rssi;
-        if (st.wifi_connected) resp["ip"] = st.wifi_ip;
-        resp["ntp"] = st.ntp_synced;
-        resp["ble"] = st.ble_active;
-        resp["ble_conn"] = st.ble_connected;
-        resp["mqtt"] = st.mqtt_connected;
-        resp["http"] = st.http_configured;
-        resp["supabase"] = st.supabase_configured;
-        resp["offline"] = st.network_skipped;
-        resp["sd"] = st.sd_present;
-        resp["entries"] = (uint32_t)st.log_entries;
-        resp["buf_pct"] = (uint32_t)st.log_buffer_used_pct;
-        resp["overflow"] = st.log_overflow;
-        resp["channels"] = st.channel_count;
-        resp["switches"] = st.switch_count;
-        resp["calibrating"] = st.sensors_calibrating;
-        char buf[512];
-        serializeJson(resp, buf);
-        send_response(buf);
+        resp["cmd"] = cmd;
+        resp["uptime_ms"] = snap.device.uptime_ms;
+        resp["free_heap"] = snap.heap_free;
+        resp["min_free_heap"] = snap.min_free_heap;
+        resp["reset_reason"] = snap.reset_reason;
+        resp["serial"] = snap.device.id;
+        resp["hw_rev"] = snap.hw_rev;
+        resp["fw"] = snap.device.fw;
+        resp["crash_count"] = snap.crash_count;
+        resp["safe_mode"] = snap.safe_mode;
+        resp["wifi"] = snap.wifi.rssi != 0;
+        resp["rssi"] = snap.wifi.rssi;
+        resp["ip"] = snap.wifi.ip;
+        resp["ntp"] = snap.ntp_synced;
+        resp["ble"] = snap.ble_active;
+        resp["ble_conn"] = snap.ble_connected;
+        resp["mqtt"] = snap.mqtt_connected;
+        resp["http"] = snap.http_configured;
+        resp["supabase"] = snap.supabase_configured;
+        resp["offline"] = snap.network_skipped;
+        resp["sd"] = snap.sd_present;
+        resp["entries"] = snap.log.entries;
+        resp["buf_pct"] = snap.log_buffer_used_pct;
+        resp["overflow"] = snap.log.overflow;
+        resp["channels"] = snap.channel_count;
+        resp["switches"] = snap.switch_count;
+        resp["calibrating"] = snap.sensors_calibrating;
+        resp["ota_state"] = snap.ota.ota_status;
+        resp["ota_version"] = snap.ota.ota_version;
+        resp["ota_progress"] = snap.ota.ota_progress_pct;
+        resp["ota_error"] = snap.ota.ota_error;
+        char buf[2048];
+        size_t n = serializeJson(resp, buf, sizeof(buf));
+        send_response(buf, n);
     } else if (strcmp(cmd, "reset_coulomb") == 0) {
         if (!check_pin(doc)) return;
         uint8_t ch = doc["channel"] | 0;
