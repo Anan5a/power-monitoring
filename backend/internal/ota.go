@@ -32,6 +32,7 @@ type OTACheckResponse struct {
 	BinaryURL       string `json:"binary_url,omitempty"`
 	SHA256          string `json:"sha256,omitempty"`
 	BinarySize      int    `json:"binary_size,omitempty"`
+		PollIntervalSeconds int `json:"poll_interval_seconds,omitempty"`
 }
 
 // NewOTAHandler constructs an OTAHandler backed by the given pool, the
@@ -41,6 +42,8 @@ func NewOTAHandler(pg *pgxpool.Pool, publicMinIO, bucket string) *OTAHandler {
 }
 
 // CheckOTA is polled by ESP32 devices to check for firmware updates
+const defaultPollInterval = 300
+
 // @Summary      Check for OTA update
 // @Tags         OTA
 // @Produce      json
@@ -85,7 +88,7 @@ func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// No release exists yet for this device type — not an error from the
 		// device's perspective, just "no update available".
-		writeJSON(w, http.StatusOK, OTACheckResponse{UpdateAvailable: false})
+		writeJSON(w, http.StatusOK, OTACheckResponse{UpdateAvailable: false, PollIntervalSeconds: defaultPollInterval})
 		return
 	}
 
@@ -93,7 +96,7 @@ func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 	// the device's current version. A missing current_ver means "always offer".
 	// semverGreater compares major.minor.patch numerically.
 	if currentVer != "" && !semverGreater(release.Version, currentVer) {
-		writeJSON(w, http.StatusOK, OTACheckResponse{UpdateAvailable: false})
+		writeJSON(w, http.StatusOK, OTACheckResponse{UpdateAvailable: false, PollIntervalSeconds: defaultPollInterval})
 		return
 	}
 
@@ -106,6 +109,7 @@ func (h *OTAHandler) CheckOTA(w http.ResponseWriter, r *http.Request) {
 		BinaryURL:  strings.TrimRight(h.publicMinIO, "/") + "/" + h.bucket + "/" + release.BinaryPath,
 		SHA256:     release.SHA256,
 		BinarySize: release.BinarySize,
+			PollIntervalSeconds:  defaultPollInterval,
 	})
 }
 
