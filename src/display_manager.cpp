@@ -7,6 +7,7 @@
 #include "data_logger.h"
 #include "settings_manager.h"
 #include "connectivity_manager.h"
+#include "ui_manager.h"
 
 #if HAS_DISPLAY
 #include <Wire.h>
@@ -68,47 +69,17 @@ static void draw_status_page(const char* ip_str, float total_power, float temp_c
 
 // ─── Channel page ───────────────────────────────────────────────
 
-static void draw_channel_page(uint8_t ch, const SensorSnapshot& data) {
-    (void)data;
-    float v = 0.0f, i = 0.0f, p = 0.0f;
-
+static void draw_channel_page(uint8_t ch, float v, float i, float p, float charge_mAh) {
     // Moved to static allocation to protect the FreeRTOS stack from overflow
     static char name[24];
-    static VirtualChannelConfig vc;
     static BatteryConfig bat;
 
     name[0] = '\0';
-    bool has_vc = settings_load_virtual_channel(ch, &vc);
-
-    if (has_vc && (vc.voltage_src > 0 || vc.current_src > 0)) {
-        // Use virtual channel sources
-        v = (vc.voltage_src > 0) ? get_sensor_voltage(vc.voltage_src, vc.voltage_idx, data) : 0.0f;
-        i = (vc.current_src > 0) ? get_sensor_current(vc.current_src, vc.current_idx, data) : 0.0f;
-        if (vc.current_src == 3) {
-            p = get_sensor_power(vc.current_src, vc.current_idx, data);  // INA226 has built-in power
-        } else if (vc.voltage_src > 0 && vc.current_src > 0) {
-            p = v * i;
-        } else {
-            p = 0.0f;
-        }
-        settings_load_channel_name(ch, name, sizeof(name));
-        if (!name[0]) {
-            snprintf(name, sizeof(name), "CH%d", ch);
-        }
-    } else if (ch < 3) {
-        // Default: logical channel mapping for backward compat
-        v = get_channel_voltage(ch);
-        i = get_channel_current(ch);
-        p = v * i;
-        settings_load_channel_name(ch, name, sizeof(name));
-        if (!name[0]) {
-            if (ch == 0) strlcpy(name, "Battery", sizeof(name));
-            else if (ch == 1) strlcpy(name, "Solar", sizeof(name));
-            else strlcpy(name, "Output", sizeof(name));
-        }
-    } else {
-        v = get_channel_voltage(3); i = get_channel_current(3); p = get_channel_power(3);
-        strlcpy(name, "INA226", sizeof(name));
+    settings_load_channel_name(ch, name, sizeof(name));
+    if (!name[0]) {
+        if (ch == 0) strlcpy(name, "Battery", sizeof(name));
+        else if (ch == 1) strlcpy(name, "Solar", sizeof(name));
+        else strlcpy(name, "Output", sizeof(name));
     }
 
     // Channel name in yellow band (y=2) + page number
@@ -153,9 +124,8 @@ static void draw_channel_page(uint8_t ch, const SensorSnapshot& data) {
     display->setTextSize(1);
 
     // Bottom: SoC or mAh/Ah at y=50
-    float mAh = get_coulomb_mAh(ch);
     if (settings_load_battery(ch, &bat) && bat.capacity_mAh > 0.001f) {
-        float soc = bat.initial_soc_pct + (mAh / bat.capacity_mAh) * 100.0f;
+        float soc = bat.initial_soc_pct + (charge_mAh / bat.capacity_mAh) * 100.0f;
         if (soc < 0) soc = 0;
         if (soc > 100) soc = 100;
         display->setTextSize(1);
@@ -168,35 +138,47 @@ static void draw_channel_page(uint8_t ch, const SensorSnapshot& data) {
         display->setTextSize(1);
         display->setCursor(0, 56);
         display->print("mAh:");
-        if (fabsf(mAh) < 1000.0f) {
-            display->print(mAh, 0);
+        if (fabsf(charge_mAh) < 1000.0f) {
+            display->print(charge_mAh, 0);
         } else {
-            display->print(mAh / 1000.0f, 2);
+            display->print(charge_mAh / 1000.0f, 2);
         }
     }
 }
 
 // ─── Main display loop ───────────────────────────────────────────
 
-void update_display(const SensorSnapshot& data, const char* ip_str, float total_power) {
+void update_display(const TelemetrySnapshot& snap) {
     if (!display) return; // Guard clause against unallocated pointer references
-    
+
     unsigned long now = millis();
+    // A short press on Button 0 requests a page advance (ui_next_display_page
+    // latches it). Honor it immediately and reset the auto-advance timer so the
+    // user-chosen page stays visible for a full 3 s before cycling resumes.
+    if (ui_next_display_page()) {
+        current_page = (current_page + 1) % 5;
+        last_page_switch = now;
+    }
     if (now - last_page_switch >= 3000) {
         current_page = (current_page + 1) % 5;
         last_page_switch = now;
     }
     display->clearDisplay();
-    display->setTextSize(1);
-    display->setTextColor(SSD1306_WHITE);
 
     if (current_page == 0) {
-        draw_status_page(ip_str, total_power, temperatureRead());
+        // Status page
+        float total_power = 0;
+        for (int ch = 0; ch < snap.channel_count && ch < 4; ch++) {
+            total_power += snap.channels[ch].P;
+        }
+        draw_status_page(snap.wifi.ip, total_power, temperatureRead());
     } else {
-        // Pages 1..4 map to logical channels 0..3.
-        draw_channel_page(current_page - 1, data);
+        uint8_t ch = current_page - 1;
+        if (ch < snap.channel_count) {
+            draw_channel_page(ch, snap.channels[ch].V, snap.channels[ch].I,
+                             snap.channels[ch].P, snap.channels[ch].charge_mAh);
+        }
     }
-
     display->display();
 }
 
@@ -245,5 +227,5 @@ void init_display() {
 
 #else
 void init_display() {}
-void update_display(const SensorSnapshot&, const char*, float) {}
+void update_display(const TelemetrySnapshot&) {}
 #endif

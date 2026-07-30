@@ -151,11 +151,7 @@ static void networkTask(void* param) {
             // the 1-second sensor sampling loop.
             if (millis() - last_display_update >= 5000) {
                 last_display_update = millis();
-                float total_power = 0;
-                for (int ch = 0; ch < 4 && ch < (int)data.total_logical_channels; ch++) {
-                    total_power += get_channel_power(data, ch);
-                }
-                update_display(data, get_local_ip_str(), total_power);
+                update_display(snap);
             }
         }
 
@@ -783,10 +779,11 @@ static void handle_serial_cli() {
             } else if (strcmp(line, "test display") == 0) {
                 LOG_PRINTLN("Display test: OLED should show cycling pages");
                 extern void init_display();
-                extern void update_display(const SensorSnapshot&, const char*, float);
-                SensorSnapshot d = read_sensors();
+                extern void update_display(const TelemetrySnapshot&);
+                TelemetrySnapshot snap;
+                telemetry_build(snap);
                 for (int i = 0; i < 5; i++) {
-                    update_display(d, "192.168.1.1", 123.4f);
+                    update_display(snap);
                     vTaskDelay(pdMS_TO_TICKS(1000));
                 }
                 LOG_PRINTLN("Display test done.");
