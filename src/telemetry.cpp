@@ -12,9 +12,11 @@
 #include "device_identity.h"
 #include "ota_client.h"
 #include "config.h"
+#include "ble_provisioner.h"
 #include <WiFi.h>
 #include <Arduino.h>
 #include <time.h>
+#include <esp_system.h>
 
 // === Helpers =================================================================
 
@@ -211,5 +213,46 @@ void telemetry_build(TelemetrySnapshot& out) {
     }
     strncpy(out.ota.ota_status, status_str, sizeof(out.ota.ota_status));
     out.ota.ota_status[sizeof(out.ota.ota_status) - 1] = '\0';
+
+    // --- System health (from DeviceState) ----------------------------------------
+    out.min_free_heap = ESP.getMinFreeHeap();
+    out.reset_reason = (uint8_t)esp_reset_reason();
+    strncpy(out.hw_rev, get_device_hw_rev(), sizeof(out.hw_rev));
+    out.hw_rev[sizeof(out.hw_rev) - 1] = '\0';
+    out.crash_count = get_crash_count();
+    out.safe_mode = (get_crash_count() >= 5);
+
+    // --- WiFi / NTP ----------------------------------------------------------------
+    out.ntp_synced = ntp_is_synced();
+
+    // --- BLE -----------------------------------------------------------------------
+    out.ble_active = ble_is_active();
+    out.ble_connected = ble_is_connected();
+
+    // --- Network services ----------------------------------------------------------
+    out.mqtt_connected = mqtt_is_connected();
+    {
+        char url[128] = "";
+        out.http_configured = settings_load_http_endpoint(url, nullptr, 0);
+    }
+    {
+        char url[128] = "";
+        out.supabase_configured = settings_load_supabase_url(url, sizeof(url));
+    }
+    out.network_skipped = network_is_skipped();
+
+    // --- Storage --------------------------------------------------------------------
+    out.sd_present = sd_is_present();
+    out.log_buffer_used_pct = (uint8_t)log_buffer_used_pct();
+
+    // --- Sensors --------------------------------------------------------------------
+    out.sensors_calibrating = sensor_is_calibrating();
+
+    // --- OTA error ------------------------------------------------------------------
+    const char* ota_err = ota_get_last_error();
+    if (ota_err) {
+        strncpy(out.ota.ota_error, ota_err, sizeof(out.ota.ota_error));
+        out.ota.ota_error[sizeof(out.ota.ota_error) - 1] = '\0';
+    }
 }
 
