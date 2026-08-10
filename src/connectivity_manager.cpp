@@ -253,6 +253,65 @@ static int supabase_get(const char* url_path, const char* supabase_url, const ch
     return rc;
 }
 
+// ── New backend (Go API) command-queue HTTP helpers ────────────────────────
+// The new backend authenticates firmware requests with X-Device-Key /
+// X-Api-Key headers (see backend/internal/middleware.go DeviceAuthMiddleware),
+// not the Supabase apikey/Authorization pair. Reuses the g_supa_http /
+// g_supa_client connection-teardown machinery above (already the right
+// pattern for low-frequency polls) with a different header set.
+static bool backend_http_prepare(const char* full_url, const char* device_key, const char* api_key) {
+    if (WiFi.status() != WL_CONNECTED) return false;
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_LOWFREQ) return false;
+    if (g_supa_http_ready) {
+        supabase_http_reset();
+    }
+    static bool g_supa_client_configured = false;
+    if (!g_supa_client_configured) {
+        g_supa_client.setInsecure();
+        g_supa_client.setHandshakeTimeout(10);
+        g_supa_client_configured = true;
+    }
+    g_supa_http.setReuse(false);
+    g_supa_http.setTimeout(4000);
+    if (!g_supa_http.begin(g_supa_client, full_url)) {
+        LOG_PRINT("[BACKEND_HTTP] begin failed: %s\n", full_url);
+        supabase_http_reset();
+        return false;
+    }
+    g_supa_http.addHeader("Content-Type", "application/json");
+    g_supa_http.addHeader("X-Device-Key", device_key);
+    g_supa_http.addHeader("X-Api-Key", api_key);
+    g_supa_http_ready = true;
+    return true;
+}
+
+static int backend_get(const char* url_path, const char* backend_url,
+                        const char* device_key, const char* api_key) {
+    char full_url[256];
+    snprintf(full_url, sizeof(full_url), "%s%s", backend_url, url_path);
+    if (!backend_http_prepare(full_url, device_key, api_key)) return -1;
+    int rc = g_supa_http.GET();
+    if (rc < 0) supabase_http_reset();
+    return rc;
+}
+
+static int backend_post(const char* url_path, const char* payload, size_t len,
+                         const char* backend_url, const char* device_key, const char* api_key) {
+    char full_url[256];
+    snprintf(full_url, sizeof(full_url), "%s%s", backend_url, url_path);
+    if (!backend_http_prepare(full_url, device_key, api_key)) return -1;
+    int rc = g_supa_http.POST((uint8_t*)payload, len);
+    if (rc < 0) {
+        supabase_http_reset();
+        delay(50);
+        if (!backend_http_prepare(full_url, device_key, api_key)) return -1;
+        rc = g_supa_http.POST((uint8_t*)payload, len);
+    }
+    drain_response();
+    supabase_http_reset();
+    return rc;
+}
+
 // src: 0=none, 1=ina3221_volt(0x42), 2=ina3221_curr(0x40), 3=ina226, 4=ads1115
 // These legacy source IDs are mapped onto the new flat logical-channel view.
 float get_sensor_voltage(uint8_t src, uint8_t idx, const SensorSnapshot& data) {
