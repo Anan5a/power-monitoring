@@ -2,11 +2,24 @@ import { memo } from 'react'
 import { useAtomValue } from 'jotai'
 import { Battery0Icon } from '@heroicons/react/24/outline'
 import { batteryDataAtom, batteryLoadingAtom, selectedDeviceAtom } from '../state/atoms'
+import { batteryPowerAtom } from '../state/derived'
+
+const IDLE_DEADBAND_W = 5
+
+function formatDuration(hours: number): string {
+  if (hours >= 99) return '>99h'
+  const totalMinutes = Math.round(hours * 60)
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  if (h === 0) return `${m}m`
+  return `${h}h ${m}m`
+}
 
 function BatteryWidget() {
   const data = useAtomValue(batteryDataAtom)
   const loading = useAtomValue(batteryLoadingAtom)
   const device = useAtomValue(selectedDeviceAtom)
+  const batteryPower = useAtomValue(batteryPowerAtom)
 
   if (!device) {
     return (
@@ -20,6 +33,16 @@ function BatteryWidget() {
   const capacityWh = data?.capacityWh ?? 0
   const displayPct = capacityWh > 0 ? (chargeWh / capacityWh) * 100 : 0
   const barColor = displayPct > 50 ? 'bg-emerald-500' : displayPct > 20 ? 'bg-amber-400' : 'bg-red-500'
+
+  let etaLabel: string | null = null
+  if (capacityWh > 0) {
+    if (batteryPower > IDLE_DEADBAND_W) {
+      const remainingWh = capacityWh - chargeWh
+      if (remainingWh > 0) etaLabel = `${formatDuration(remainingWh / batteryPower)} to full`
+    } else if (batteryPower < -IDLE_DEADBAND_W) {
+      if (chargeWh > 0) etaLabel = `${formatDuration(chargeWh / -batteryPower)} remaining`
+    }
+  }
 
   return (
     <div className="h-full w-full bg-gradient-to-br from-emerald-50/50 to-white bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
@@ -53,6 +76,9 @@ function BatteryWidget() {
               +{(data?.energyIn24h ?? 0).toFixed(1)} / -{(data?.energyOut24h ?? 0).toFixed(1)} Wh (24h)
             </span>
           </div>
+          {etaLabel && (
+            <div className="mt-1 text-[10px] text-slate-400 text-right">{etaLabel}</div>
+          )}
         </div>
       )}
     </div>

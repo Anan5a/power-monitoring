@@ -1,0 +1,486 @@
+:root {
+  /* ============================================================
+     Color primitives — shared across themes
+     ============================================================ */
+  --pm-blue:    #3987e5;
+  --pm-teal:    #199e70;
+  --pm-amber:   #c98500;
+  --pm-green:   #008300;
+  --pm-violet:  #9085e9;
+  --pm-red:     #e66767;
+  --pm-magenta: #d55181;
+  --pm-orange:  #d95926;
+
+  --pm-status-good:     #0ca30c;
+  --pm-status-warning:  #fab219;
+  --pm-status-serious:  #ec835a;
+  --pm-status-critical: #d03b3b;
+
+  /* ============================================================
+     Default dark theme tokens
+     ============================================================ */
+  --surface-page:    #0d0d0d;
+  --surface-card:    #1a1a19;
+  --surface-elevated:#222221;
+  --surface-hover:   rgba(255,255,255,0.04);
+  --surface-active:  rgba(57,135,229,0.10);
+
+  --text-primary:    #ffffff;
+  --text-secondary:  #c3c2b7;
+  --text-muted:      #898781;
+
+  --border:          rgba(255,255,255,0.10);
+  --gridline:        #2c2c2a;
+  --baseline:        #383835;
+
+  --series-1: var(--pm-blue);
+  --series-2: var(--pm-teal);
+  --series-3: var(--pm-amber);
+  --series-4: var(--pm-green);
+  --series-5: var(--pm-violet);
+  --series-6: var(--pm-red);
+  --series-7: var(--pm-magenta);
+  --series-8: var(--pm-orange);
+
+  --status-good:     var(--pm-status-good);
+  --status-warning:  var(--pm-status-warning);
+  --status-serious:  var(--pm-status-serious);
+  --status-critical: var(--pm-status-critical);
+
+  --delta-up:        var(--pm-status-good);
+  --delta-down:      var(--pm-status-critical);
+
+  --primary:         var(--pm-blue);
+  --primary-hover:   #4a93e8;
+  --primary-soft:    rgba(57,135,229,0.12);
+  --good-soft:       rgba(12,163,12,0.12);
+  --warning-soft:    rgba(250,178,25,0.12);
+  --critical-soft:    rgba(208,59,59,0.12);
+  --muted-soft:      rgba(255,255,255,0.06);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.20);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.30);
+}
+
+/* ============================================================
+   Light theme override
+   ============================================================ */
+html[data-theme="light"] {
+  --surface-page:    #f8f9fa;
+  --surface-card:    #ffffff;
+  --surface-elevated:#f1f3f5;
+  --surface-hover:   rgba(0,0,0,0.04);
+  --surface-active:  rgba(57,135,229,0.10);
+
+  --text-primary:    #111827;
+  --text-secondary:  #4b5563;
+  --text-muted:      #6b7280;
+
+  --border:          rgba(0,0,0,0.08);
+  --gridline:        #e5e7eb;
+  --baseline:        #d1d5db;
+
+  --primary-soft:    rgba(57,135,229,0.12);
+  --good-soft:       rgba(12,163,12,0.10);
+  --warning-soft:    rgba(250,178,25,0.12);
+  --critical-soft:   rgba(208,59,59,0.08);
+  --muted-soft:      rgba(0,0,0,0.04);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+}
+
+/* ============================================================
+   Accent / brand theming — applied on top of mode
+   ============================================================ */
+html[data-accent="teal"]   { --primary: var(--pm-teal);   --primary-hover: #1faf7f; --primary-soft: rgba(25,158,112,0.12); }
+html[data-accent="amber"]  { --primary: var(--pm-amber);  --primary-hover: #d9990f; --primary-soft: rgba(201,133,0,0.12); }
+html[data-accent="green"]  { --primary: var(--pm-green);  --primary-hover: #0a9c0a; --primary-soft: rgba(0,131,0,0.12); }
+html[data-accent="violet"] { --primary: var(--pm-violet); --primary-hover: #a094ed; --primary-soft: rgba(144,133,233,0.12); }
+html[data-accent="red"]    { --primary: var(--pm-red);    --primary-hover: #ec7a7a; --primary-soft: rgba(230,103,103,0.12); }
+
+/* ============================================================
+   Base
+   ============================================================ */
+body {
+  background: var(--surface-page);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================
+   Theme toggle
+   ============================================================ */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.theme-toggle:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+.theme-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ============================================================
+   Accent chips
+   ============================================================ */
+.accent-picker {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+}
+.accent-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: transform 0.1s;
+}
+.accent-dot:hover { transform: scale(1.1); }
+.accent-dot.active { border-color: var(--text-primary); }
+
+/* ============================================================
+   Cards
+   ============================================================ */
+.card {
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+.card-elevated {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ============================================================
+   Stat tile — hero number
+   ============================================================ */
+.stat-value {
+  font-size: 2rem;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+.stat-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.stat-delta {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+/* ============================================================
+   Channel gauge — thin bar
+   ============================================================ */
+.gauge-track {
+  background: var(--gridline);
+  border-radius: 2px;
+  height: 4px;
+  overflow: hidden;
+}
+.gauge-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.6s ease;
+}
+
+/* ============================================================
+   Status badge
+   ============================================================ */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   Relay chip
+   ============================================================ */
+.relay-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--surface-card);
+  transition: all 0.2s;
+}
+.relay-chip.on {
+  background: var(--good-soft);
+  border-color: var(--status-good);
+  color: var(--status-good);
+}
+.relay-chip.off { color: var(--text-muted); }
+
+/* ============================================================
+   Table
+   ============================================================ */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+.data-table th {
+  text-align: left;
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border);
+}
+.data-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td { color: var(--text-primary); }
+
+/* ============================================================
+   Connectivity bar
+   ============================================================ */
+.conn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: 1px solid var(--border);
+}
+
+/* ============================================================
+   Sidebar nav
+   ============================================================ */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  transition: all 0.15s;
+  text-decoration: none;
+}
+.nav-item:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+.nav-item.active {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+/* ============================================================
+   Mini sparkline placeholder
+   ============================================================ */
+.sparkline {
+  height: 32px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+.sparkline .bar {
+  width: 4px;
+  border-radius: 1px 1px 0 0;
+  background: var(--primary);
+  opacity: 0.6;
+}
+.sparkline .bar:nth-child(odd) { opacity: 0.4; }
+
+/* ============================================================
+   Buttons
+   ============================================================ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  transition: all 0.15s;
+  cursor: pointer;
+  border: 1px solid transparent;
+  text-decoration: none;
+}
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-secondary {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.btn-secondary:hover { background: var(--surface-hover); }
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+.btn-ghost:hover { background: var(--surface-hover); color: var(--text-primary); }
+
+/* ============================================================
+   Inputs
+   ============================================================ */
+.input {
+  width: 100%;
+  background: var(--surface-page);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.input:focus { border-color: var(--primary); }
+.input::placeholder { color: var(--text-muted); }
+
+/* ============================================================
+   Badges
+   ============================================================ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.badge-green { background: var(--good-soft); color: var(--status-good); }
+.badge-amber { background: var(--warning-soft); color: var(--status-warning); }
+.badge-red { background: var(--critical-soft); color: var(--status-critical); }
+.badge-gray { background: var(--muted-soft); color: var(--text-muted); }
+
+/* ============================================================
+   Typography helpers
+   ============================================================ */
+.page-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.page-subtitle {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.form-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+/* ============================================================
+   Toggle checkbox
+   ============================================================ */
+.toggle {
+  appearance: none;
+  width: 36px;
+  height: 20px;
+  background: var(--gridline);
+  border-radius: 20px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+.toggle:checked { background: var(--primary); }
+.toggle:checked::after { transform: translateX(16px); }
+
+/* ============================================================
+   Tabs
+   ============================================================ */
+.tab {
+  padding: 8px 14px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.tab.active {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+/* ============================================================
+   Pricing cards
+   ============================================================ */
+.plan-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+}
+.plan-card.popular {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+/* ============================================================
+   Scrollbar
+   ============================================================ */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--gridline); border-radius: 3px; }
+
+/* ============================================================
+   Responsive tweaks
+   ============================================================ */
+@media (max-width: 768px) {
+  .stat-value { font-size: 1.5rem; }
+}
