@@ -75,7 +75,7 @@ static bool     g_deferred_relay_state = false;
 // operations (low frequency) can use a slightly lower threshold. Centralised
 // so a single tuning change covers every site.
 static const uint32_t MIN_FREE_HEAP_FOR_PUBLISH   = 13000;  // full HTTP POST + JSON serialize
-static const uint32_t MIN_FREE_HEAP_FOR_LOWFREQ   = 8192;   // sync_device_channels / publish_log_batch_supabase
+static const uint32_t MIN_FREE_HEAP_FOR_LOWFREQ   = 8192;   // sync_device_channels / backend command poll
 static const uint32_t MIN_FREE_HEAP_FOR_SYNC_OPS  = 4096;   // sync_calibration / sync_ble_pin / calibration_status
 static const uint32_t MIN_FREE_HEAP_FOR_SWITCH    = 3072;   // publish_switch_state (small payload)
 
