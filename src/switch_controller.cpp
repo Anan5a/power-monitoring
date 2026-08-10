@@ -13,6 +13,7 @@
 #include "settings_manager.h"
 #include "coulomb_counter.h"
 #include "config.h"
+#include "pcf8574at.h"
 #include <cstring>
 #include "log_serial.h"
 #include "connectivity_manager.h"
@@ -114,6 +115,27 @@ bool switch_gpio_allowed(int8_t pin) {
 }
 
 static void set_switch_pin(const SwitchChannel& ch, bool energized) {
+    // I2C I/O expander path (PCF8574AT): gpio_pin stores the expander bit 0-7
+    if (ch.type == SW_EXPANDER) {
+        if (ch.gpio_pin > 7) {
+            LOG_PRINT("[SWITCH] PCF8574AT pin %d out of range (0-7)\n", (int)ch.gpio_pin);
+            return;
+        }
+        bool pin_high = ch.active_high ? energized : !energized;
+        if (!pcf8574at_set_pin(ch.gpio_pin, pin_high)) {
+            // One-shot-per-failure log so a stuck I2C bus doesn't drown the
+            // serial console — matches the out-of-range-GPIO logging
+            // convention used in the direct-GPIO path below. The commanded
+            // switch_states[] entry still flips even though the physical
+            // write failed; this log is the operator's only signal that the
+            // relay may not actually be in the reported state.
+            LOG_PRINT("[SWITCH] PCF8574AT write failed for pin %d (idx=%u) — relay state may not match commanded state\n",
+                      (int)ch.gpio_pin, (unsigned)ch.idx);
+        }
+        return;
+    }
+
+    // Direct GPIO path
     if (!gpio_in_range(ch.gpio_pin)) {
         // One-shot log so a stuck switch doesn't drown the serial console.
         static bool logged = false;
@@ -337,7 +359,26 @@ void init_switches() {
                       (unsigned)sizeof(SwitchCondition), (unsigned)sizeof(SwitchRule));
         logged = true;
     }
+
+    // Initialize PCF8574AT I2C expander if any switch uses SW_EXPANDER type.
+    // We scan the persisted config first; if none found, skip init.
+    bool has_expander = false;
     uint8_t count = settings_load_switch_count();
+    for (uint8_t i = 0; i < count && i < MAX_SWITCHES; i++) {
+        SwitchChannel chk;
+        if (settings_load_switch(i, &chk) && chk.type == SW_EXPANDER) {
+            has_expander = true;
+            break;
+        }
+    }
+    if (has_expander) {
+        if (pcf8574at_init(PCF8574AT_ADDR)) {
+            LOG_PRINT("[SWITCH] PCF8574AT initialized at 0x%02X\n", PCF8574AT_ADDR);
+        } else {
+            LOG_PRINT("[SWITCH] PCF8574AT init FAILED at 0x%02X — expander-type switches will not respond until next boot\n",
+                      PCF8574AT_ADDR);
+        }
+    }
 
     if (count == 0) {
         for (uint8_t i = 0; i < 4; i++) {
@@ -375,7 +416,18 @@ void init_switches() {
                     ch.gpio_pin = default_pins[i];
                     settings_save_switch(i, &ch);
                 }
-                if (!gpio_in_range(ch.gpio_pin)) {
+
+                if (ch.type == SW_EXPANDER) {
+                    // I2C expander path: no pinMode/digitalWrite needed.
+                    // PCF8574AT was initialized above. Drive all expander
+                    // outputs OFF on boot (safe state).
+                    if (ch.gpio_pin <= 7) {
+                        if (!pcf8574at_set_pin(ch.gpio_pin, ch.active_high ? false : true)) {
+                            LOG_PRINT("[SWITCH] PCF8574AT boot safe-state write failed for pin %d (idx=%u)\n",
+                                      (int)ch.gpio_pin, (unsigned)i);
+                        }
+                    }
+                } else if (!gpio_in_range(ch.gpio_pin)) {
                     LOG_PRINT("[SWITCH] init: GPIO %d for switch %u out of range — skipping pinMode\n",
                                   (int)ch.gpio_pin, (unsigned)i);
                 } else {
