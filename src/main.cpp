@@ -101,7 +101,7 @@ static void print_status() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Core 0 — Network Task
-// Handles: MQTT loop, HTTP publish, Supabase telemetry + settings poll + OLED display
+// Handles: MQTT telemetry publish, backend command poll, OLED display
 // ─────────────────────────────────────────────────────────────────────────────
 static void networkTask(void* param) {
     (void)param;
@@ -144,7 +144,6 @@ static void networkTask(void* param) {
             TelemetrySnapshot snap;
             telemetry_build(snap);
             publish_data(data, snap);
-            publish_data_supabase(data, snap);
 
             // Update OLED from network task so I2C display traffic doesn't delay
             // the 1-second sensor sampling loop.
@@ -154,15 +153,9 @@ static void networkTask(void* param) {
             }
         }
 
-        // Flush log batch to Supabase (RAM + LittleFS overflow)
-        publish_log_batch_supabase();
-
-        // Poll Supabase for pending settings commands
-        static unsigned long last_settings_check = 0;
-        if (millis() - last_settings_check >= 5000) {
-            last_settings_check = millis();
-            check_settings_commands();
-        }
+        // Poll the backend for pending settings commands (rate-limited to
+        // 5s internally).
+        check_settings_commands();
 
         // Retry NTP sync every 60s if not yet synced (SNTP runs in background)
         static unsigned long last_ntp_retry = 0;
