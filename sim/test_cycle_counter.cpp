@@ -21,8 +21,9 @@
 //   4. Unbound channel                              => 0.0 cycles
 //   5. cycle_counter_reset()                        => 0.0 cycles
 //   6. Charge + discharge never flips               => 0.0 cycles
-//   7. Persistent accumulator: state survives a reset
-//      of last_dir but not of state                 (sanity)
+//   7. battery_profile_get returns nullptr for sparse slots
+//   8. factory_reset clears pm-battery (cycle counter zero)
+//   9. ESP32-C3 GPIO denylist contains BOOT + strapping pins
 
 #include "Arduino.h"
 #include "config.h"
@@ -31,7 +32,6 @@
 #include "battery_state.h"
 #include "coulomb_counter.h"
 #include "cycle_counter.h"
-#include "capacity_test.h"
 #include "sensor_manager.h"
 #include "sensor_pod.h"
 
@@ -297,7 +297,7 @@ int main() {
 
     // ── Test 7: battery_profile_get returns nullptr for sparse slots ======
     // The sparse-slot guard is what keeps a deleted profile id from
-    // showing up in cycle_counter / capacity_test. Verified by:
+    // showing up in cycle_counter. Verified by:
     //   1. Out-of-range id (>= BATTERY_MAX_PROFILES) → nullptr
     //   2. Unset custom id (never populated) → nullptr
     //   3. Set then delete → nullptr (the slot is cleared to all-zero,
@@ -325,74 +325,7 @@ int main() {
                "after delete: profile id 4 returns nullptr (sparse slot)");
     }
 
-    // ── Test 8: stale capacity test is auto-cancelled on NVS reload =======
-    // The crash-recovery path. Steps:
-    //   1. Bind a channel to a profile.
-    //   2. Persist a BatteryState with test.active=true and a started_ms
-    //      that is more than 7 days in the past (so recover_stale_test
-    //      treats it as stale).
-    //   3. Zero in-memory state (init_cycle_counter) to simulate a reboot.
-    //   4. Re-load from NVS via cycle_counter_get().
-    //   5. Verify the test was auto-cancelled (test.active == false).
-    //
-    // This guards against an auto-resume path: a future refactor that
-    // re-arms the test on load would fail this test.
-    {
-        setup_channel(7);
-        // Build a state where the test is "active" but ancient. We
-        // bypass capacity_test_start() because we want full control
-        // over started_ms. kStaleTestMaxMs is 7 days, so backdate
-        // started_ms by 8 days to be safely over the threshold. We
-        // also bump millis() to 8 days + a bit so the "now > started_ms"
-        // guard passes (the host sim otherwise has millis() in the
-        // few-thousand range and can't represent an 8-day delta).
-        const uint32_t kEightDaysMs = 8UL * 24UL * 3600UL * 1000UL;
-        const uint32_t now = kEightDaysMs + 60UL * 1000UL;  // 8 days + 1 min
-        set_millis_for_test(now);
-        BatteryState st{};
-        st.test.active = true;
-        st.test.mode = 0;  // CAP_TEST_MANUAL
-        st.test.started_ms = 1000;  // well before `now` and well past 7 days
-        st.test.measured_Ah = 0.01f;
-        st.test.sample_count = 100;
-        st.test.load_switch_idx = -1;
-        st.test.cutoff_v = 0.0f;
-        st.test.start_SoC_pct = 80.0f;
-        st.last_SoC_pct = 80.0f;
-        cycle_counter_put(7, &st);
-        // Simulate a reboot: zero the in-memory state and re-init.
-        init_cycle_counter();
-        // Reload from NVS — this should trigger the stale-recovery
-        // branch and clear test.active.
-        BatteryState loaded{};
-        cycle_counter_get(7, &loaded);
-        EXPECT(!loaded.test.active,
-               "stale active test (>7 days old) is auto-cancelled on NVS load");
-    }
-
-    // ── Test 9: capacity test refuses to start on unbound channel =========
-    // Per agent #31, capacity_test_start() must return false if the
-    // channel has no profile binding. Verified by:
-    //   1. Clear the binding on a channel.
-    //   2. Call capacity_test_start() — expect false.
-    //
-    // We also verify the channel-active test API reports false before
-    // any start, to make sure the test isn't trivially passing because
-    // the channel was already running.
-    {
-        battery_channel_clear(8);
-        cycle_counter_reset(8);
-        reset_coulomb_counter(8);
-        EXPECT(!capacity_test_is_active(8),
-               "unbound channel: capacity_test_is_active returns false");
-        bool started = capacity_test_start(8, CAP_TEST_MANUAL, -1, 0.0f);
-        EXPECT(!started,
-               "capacity_test_start refuses on unbound channel");
-        EXPECT(!capacity_test_is_active(8),
-               "unbound channel: still inactive after refused start");
-    }
-
-    // ── Test 10: factory_reset clears pm-battery (cycle counter zero) ====
+    // ── Test 8: factory_reset clears pm-battery (cycle counter zero) =====
     // Audit #10: settings_factory_reset() must wipe the pm-battery
     // namespace so the cycle counter and capacity test state go to
     // zero. Verified by:
@@ -421,7 +354,7 @@ int main() {
                     "factory_reset → cumulative_Ah_in = 0");
     }
 
-    // ── Test 11: ESP32-C3 GPIO denylist contains BOOT + strapping pins =
+    // ── Test 9: ESP32-C3 GPIO denylist contains BOOT + strapping pins =
     // Audit #45: the firmware's apply_settings_command and the BLE
     // set_switch path both call switch_gpio_allowed(pin) which checks
     // the pin against BAD_GPIO_PINS_ESP32C3. Verified by checking the

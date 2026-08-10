@@ -21,3 +21,7 @@ bool get_switch_state(uint8_t /*idx*/) { return false; }
 bool switch_gpio_allowed(int8_t /*pin*/) { return true; }
 
 void telemetry_publish_capacity_test_soh(float /*soh_pct*/) {}
+
+// data_logger stubs for settings_manager.cpp factory_reset path
+bool log_has_overflow_file() { return false; }
+void log_close_overflow() {}

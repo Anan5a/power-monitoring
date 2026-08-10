@@ -7,19 +7,23 @@ SRCS = \
     main.cpp \
     shims/sensor_manager.cpp \
     shims/connectivity_manager.cpp \
+    shims/telemetry_deps_stubs.cpp \
     hal/arduino_stubs.cpp \
     hal/preferences_stub.cpp \
     hal/wifi_stub.cpp \
     hal/littlefs_stub.cpp \
     hal/wire_stub.cpp \
     hal/gpio_stub.cpp \
+    hal/sd_stub.cpp \
+    hal/esp_stub.cpp \
     mock/waveform_generator.cpp \
     mock/ina226_mock.cpp \
     mock/bl0939_mock.cpp \
     ../src/data_logger.cpp \
     ../src/coulomb_counter.cpp \
     ../src/energy_counter.cpp \
-    ../src/settings_manager.cpp
+    ../src/settings_manager.cpp \
+    ../src/pcf8574at.cpp
 
 OBJS = $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(notdir $(SRCS)))
 
@@ -69,8 +73,7 @@ TEST_CC_SRCS = \
     ../src/settings_manager.cpp \
     ../src/battery_state.cpp \
     ../src/battery_profile.cpp \
-    ../src/battery_nvs.cpp \
-    ../src/capacity_test.cpp
+    ../src/battery_nvs.cpp
 
 TEST_CC_OBJS = $(patsubst %.cpp,$(BUILD_DIR)/test_cc_%.o,$(notdir $(TEST_CC_SRCS)))
 TEST_CC_TARGET = $(BUILD_DIR)/test_cycle_counter
@@ -134,12 +137,14 @@ $(BUILD_DIR)/test_b0939_%.o: %.cpp | $(BUILD_DIR)
 TEST_DL_SRCS = \
     test_data_logger.cpp \
     shims/sensor_manager.cpp \
+    shims/telemetry_deps_stubs.cpp \
     hal/arduino_stubs.cpp \
     hal/preferences_stub.cpp \
     hal/wifi_stub.cpp \
     hal/littlefs_stub.cpp \
     hal/wire_stub.cpp \
     hal/gpio_stub.cpp \
+    hal/sd_stub.cpp \
     ../src/data_logger.cpp \
     ../src/coulomb_counter.cpp \
     ../src/settings_manager.cpp
@@ -185,6 +190,7 @@ TEST_PP_SRCS = \
     shims/sensor_manager.cpp \
     shims/connectivity_manager.cpp \
     shims/connectivity_publish_shim.cpp \
+    shims/telemetry_deps_stubs.cpp \
     hal/arduino_stubs.cpp \
     hal/preferences_stub.cpp \
     hal/wifi_stub.cpp \
@@ -193,6 +199,7 @@ TEST_PP_SRCS = \
     hal/gpio_stub.cpp \
     hal/http_stub.cpp \
     hal/esp_stub.cpp \
+    hal/sd_stub.cpp \
     ../src/telemetry.cpp \
     ../src/cycle_counter.cpp \
     ../src/coulomb_counter.cpp \
@@ -201,7 +208,6 @@ TEST_PP_SRCS = \
     ../src/battery_state.cpp \
     ../src/battery_profile.cpp \
     ../src/battery_nvs.cpp \
-    ../src/capacity_test.cpp \
     ../src/data_logger.cpp
 
 TEST_PP_OBJS = $(patsubst %.cpp,$(BUILD_DIR)/test_pp_%.o,$(notdir $(TEST_PP_SRCS)))

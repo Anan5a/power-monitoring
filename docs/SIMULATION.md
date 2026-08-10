@@ -26,21 +26,28 @@ sim/
 │   ├── Wire.h / wire_stub.cpp        # I2C mock
 │   ├── Preferences.h / preferences_stub.cpp  # In-memory key/value store
 │   ├── FS.h / LittleFS.h / littlefs_stub.cpp
-│   └── gpio_stub.h / gpio_stub.cpp   # GPIO state tracking
+│   ├── gpio_stub.h / gpio_stub.cpp   # GPIO state tracking
+│   ├── SD.h / sd_stub.cpp            # SD card stub (no-op, for data_logger)
+│   ├── SPI.h                         # SPI stub (no-op, for data_logger)
+│   ├── ESP.h / esp_stub.cpp          # ESP.getFreeHeap(), getMinFreeHeap()
+│   └── esp_system.h                  # esp_reset_reason() stub
 ├── mock/                 # Mock sensor data generators
 │   ├── waveform_generator.h / .cpp   # Sine, ramp, step, noise waveforms
 │   ├── ina226_mock.h / .cpp          # INA226 mock (registers as POD_INA226)
 │   └── bl0939_mock.h / .cpp          # BL0939 mock (registers as POD_BL0939)
 └── shims/                # Shim implementations for firmware modules
     ├── sensor_manager.h / .cpp        # Mock sensor manager with pod registration
-    └── connectivity_manager.h / .cpp  # Stub that prints JSON to stdout
+    ├── connectivity_manager.h / .cpp  # Stub that prints JSON to stdout
+    ├── connectivity_publish_shim.h / .cpp  # Slim shim for telemetry_build() deps
+    └── telemetry_deps_stubs.cpp       # Stubs for device_identity, ble_provisioner,
+                                       # ota_client, connectivity, event_log
 ```
 
 ## What the Sim Exercises
 
 The simulator compiles and runs the **real firmware modules** from `../src/`:
 
-- `data_logger.cpp` — delta-compressed ring buffer
+- `data_logger.cpp` — delta-compressed ring buffer (with SD card stubs)
 - `coulomb_counter.cpp` — mAh integration
 - `energy_counter.cpp` — Wh integration
 - `settings_manager.cpp` — NVS-backed settings (in-memory stub)
@@ -49,6 +56,10 @@ It uses **shim versions** of hardware-dependent modules:
 
 - `sensor_manager.cpp` — registers mock INA226 and BL0939 pods that return synthetic waveforms
 - `connectivity_manager.cpp` — prints telemetry JSON to stdout instead of sending over the network
+
+The **test_publish_path** test additionally compiles `telemetry.cpp` against stubs for
+`device_identity`, `ble_provisioner`, `ota_client`, and `connectivity_manager` to
+validate the TelemetrySnapshot JSON shape end-to-end.
 
 ## Adding a New Mock Pod
 

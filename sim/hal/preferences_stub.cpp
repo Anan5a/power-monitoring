@@ -1,4 +1,5 @@
 #include "Preferences.h"
+#include "Arduino.h"
 #include <map>
 #include <string>
 #include <cstring>
@@ -78,6 +79,15 @@ size_t Preferences::getString(const char* key, char* buf, size_t maxLen) {
     std::memcpy(buf, kv->second.data(), n);
     buf[n] = '\0';
     return n;
+}
+
+String Preferences::getString(const char* key, const char* defaultVal) {
+    const std::string& ns = active_ns();
+    auto it = g_store.find(ns);
+    if (it == g_store.end()) return String(defaultVal);
+    auto kv = it->second.find(key);
+    if (kv == it->second.end()) return String(defaultVal);
+    return String(kv->second.c_str());
 }
 
 size_t Preferences::putString(const char* key, const char* value) {

@@ -9,6 +9,7 @@
 class ESPClass {
 public:
     uint32_t getFreeHeap();
+    uint32_t getMinFreeHeap();
 };
 
 extern ESPClass ESP;

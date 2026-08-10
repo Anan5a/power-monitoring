@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "Arduino.h"  // for String class
 
 class Preferences {
 public:
@@ -17,6 +18,10 @@ public:
     size_t putBytes(const char* key, const void* buf, size_t len);
 
     size_t getString(const char* key, char* buf, size_t maxLen);
+    // String-returning overload (Arduino API). The firmware's settings_manager.cpp
+    // calls prefs.getString(key, defaultVal) which returns a String object.
+    // The sim's Arduino.h provides a minimal String class for this.
+    String getString(const char* key, const char* defaultVal);
     size_t putString(const char* key, const char* value);
 
     uint16_t getUShort(const char* key, uint16_t defaultValue);

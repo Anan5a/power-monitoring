@@ -27,6 +27,7 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger"
 	_ "go.uber.org/automaxprocs"
 
+	_ "github.com/Anan5a/iot-platform/docs/api"
 	"github.com/Anan5a/iot-platform/internal"
 )
 

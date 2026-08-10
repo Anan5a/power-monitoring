@@ -83,6 +83,7 @@
 #define INA226_ADDR     0x41
 #define ADS1115_ADDR    0x48
 #define OLED_ADDR       0x3C
+#define PCF8574AT_ADDR  0x3F   // I2C I/O expander for relay outputs
 
 // Sampling and display timing
 // LEGACY — superseded by FreeRTOS task timing in src/main.cpp. These
