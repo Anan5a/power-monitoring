@@ -77,7 +77,7 @@ function BatteryWidget() {
             </span>
           </div>
           {etaLabel && (
-            <div className="mt-1 text-[10px] text-slate-400 text-right">{etaLabel}</div>
+            <div className="mt-1 text-sm text-slate-400 text-right">{etaLabel}</div>
           )}
         </div>
       )}
