@@ -1648,183 +1648,118 @@ bool get_ble_pin_from_supabase(char* pin_str, size_t len) {
 void check_settings_commands() {
     if (skip_network) return;
     if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_PUBLISH) return;
-    telemetry_http_reset();
-    vTaskDelay(pdMS_TO_TICKS(50));
-
-    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
-    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
-    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
-    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
-    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
 
     static unsigned long last_check = 0;
     if (millis() - last_check < 5000) return;  // poll every 5s
     last_check = millis();
 
-    // Local doc for the claim body — small, no need to share.
-    StaticJsonDocument<256> claim_doc;
-    claim_doc["p_device_key"] = device_key;
-    static char buffer[256];
-    size_t len = serializeJson(claim_doc, buffer);
+    char backend_url[128], device_key[64], api_key[64];
+    if (!settings_load_ota_backend_url(backend_url, sizeof(backend_url))) return;
+    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
+    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
 
-    char full_url[256];
-    snprintf(full_url, sizeof(full_url), "%s/rest/v1/rpc/claim_settings_command", supabase_url);
-    // LOG_PRINT("[SETTINGS] claim URL: %s\n", full_url);
-    // LOG_PRINT("[SETTINGS] claim body: %.*s\n", (int)len, buffer);
-    // LOG_PRINT("[SETTINGS] claim header apikey: %s\n", anon_key);
-    // LOG_PRINT("[SETTINGS] claim header Authorization: Bearer %s\n", anon_key);
-    if (!supabase_http_prepare(full_url, anon_key)) return;
-    int rc = g_supa_http.POST((uint8_t*)buffer, len);
-    // Retry once on rc=-1 (TLS handshake failure after WiFi reconnect)
-    if (rc < 0) {
-        // LOG_PRINTLN("[SETTINGS] claim rc=-1, retrying...");
+    char path[128];
+    snprintf(path, sizeof(path), "/commands/%s/pending", device_key);
+    int rc = backend_get(path, backend_url, device_key, api_key);
+    if (rc != 200) {
+        if (rc > 0) {
+            LOG_PRINT("[CMD] pending-poll failed: HTTP %d\n", rc);
+        }
         supabase_http_reset();
-        delay(100);
-        if (!supabase_http_prepare(full_url, anon_key)) return;
-        rc = g_supa_http.POST((uint8_t*)buffer, len);
+        return;
     }
-    // LOG_PRINT("[SETTINGS] claim HTTP rc=%d\n", rc);
-    if (rc == 200 || rc == 201 || rc == 204) {
-        // Heap-allocate the body buffer so this function's stack frame stays
-        // under ~1 KB even on a 4 KB-stack task. 1.5 KB was the worst case.
-        const size_t BODY_CAP = 2048;
-        char* body = (char*)malloc(BODY_CAP);
-        if (!body) { supabase_http_reset(); return; }
-        size_t body_len = 0;
-        Stream& stream = g_supa_http.getStream();
-        unsigned long t0 = millis();
-        while (stream.available() && body_len < BODY_CAP-1 && millis()-t0 < 2000) {
-            int c = stream.read();
-            if (c >= 0) body[body_len++] = (char)c;
-        }
-        body[body_len] = '\0';
-        drain_response();
 
-        // LOG_PRINT("[SETTINGS] claim body_len=%d body: %.*s\n", body_len, (int)body_len, body);
-        if (body_len == 0) { supabase_http_reset(); free(body); return; }
-        // Skip HTTP chunked encoding size prefix if present (e.g. "f2\r\n...")
-        const char* json_start = body;
-        if (body_len > 2 && body[0] != '{') {
-            const char* newline = strstr(body, "\r\n");
-            if (newline) {
-                json_start = newline + 2;
-                // LOG_PRINT("[SETTINGS] chunked prefix skipped, json_start at offset %d\n", json_start - body);
-            }
-        }
-        LOG_PRINT("[SETTINGS] raw response: %.256s\n", body);
-        if (json_start[0] == '\0' || strncmp(json_start, "null", 4) == 0) {
-            supabase_http_reset();
-            free(body);
-            return;
-        }
+    // Heap-allocate the response body — keeps this function's stack frame
+    // small on the 4 KB network-task stack (same reasoning as the old
+    // Supabase claim path this replaces).
+    const size_t BODY_CAP = 2048;
+    char* body = (char*)malloc(BODY_CAP);
+    if (!body) { supabase_http_reset(); return; }
+    size_t body_len = 0;
+    Stream& stream = g_supa_http.getStream();
+    unsigned long t0 = millis();
+    while (stream.available() && body_len < BODY_CAP - 1 && millis() - t0 < 2000) {
+        int c = stream.read();
+        if (c >= 0) body[body_len++] = (char)c;
+    }
+    body[body_len] = '\0';
+    supabase_http_reset();
 
-        // Heap-allocate the JSON parse buffer too — same reason. 2 KB is more
-        // than enough for any reasonable claim_settings_command payload.
-        const size_t RESP_CAP = 2048;
-        char* resp_buf = (char*)malloc(RESP_CAP);
-        if (!resp_buf) { supabase_http_reset(); free(body); return; }
-        size_t json_offset = json_start - body;
-        size_t json_len = body_len - json_offset;
-        if (json_len > RESP_CAP - 1) json_len = RESP_CAP - 1;
-        memcpy(resp_buf, json_start, json_len);
-        resp_buf[json_len] = '\0';
-        // LOG_PRINT("[SETTINGS] parse attempt: %.128s\n", resp_buf);
+    if (body_len == 0) { free(body); return; }
 
-        // Local doc for the parsed response — this branch uses cmd_type +
-        // payload only, and never re-enters the network task, so a stack-
-        // allocated StaticJsonDocument is the right scope.
-        StaticJsonDocument<1024> resp_doc;
-        DeserializationError err = deserializeJson(resp_doc, resp_buf);
-        if (err) {
-            // LOG_PRINT("[SETTINGS] parse error: %s | body: %.200s\n", err.c_str(), resp_buf);
-            supabase_http_reset();
-            free(body);
-            free(resp_buf);
-            return;
-        }
+    StaticJsonDocument<2048> doc;
+    DeserializationError err = deserializeJson(doc, body);
+    free(body);
+    if (err) {
+        LOG_PRINT("[CMD] pending-poll JSON parse error: %s\n", err.c_str());
+        return;
+    }
 
-        const char* cmd_type = resp_doc["cmd_type"] | "";
-        if (strlen(cmd_type) == 0) {
-            supabase_http_reset();
-            free(body);
-            free(resp_buf);
-            return;
-        }
+    JsonArray commands = doc.as<JsonArray>();
+    if (commands.isNull()) return;
 
-        // payload_buf was 1 KB on the stack — heap it. 1 KB still plenty.
+    // Bound the work done per poll tick — a burst of queued commands should
+    // drain over a few ticks rather than blocking the network task for one
+    // long tick (mirrors the 5-entries-per-call pattern used elsewhere in
+    // this file for log draining).
+    uint8_t processed = 0;
+    for (JsonObject cmd : commands) {
+        if (++processed > 4) break;
+
+        long long cmd_id = cmd["id"] | 0LL;
+        const char* cmd_type = cmd["cmd_type"] | "";
+        if (cmd_id == 0 || strlen(cmd_type) == 0) continue;
+
         const size_t PAY_CAP = 1024;
         char* payload_buf = (char*)malloc(PAY_CAP);
-        if (!payload_buf) {
-            supabase_http_reset();
-            free(body);
-            free(resp_buf);
-            return;
-        }
-        JsonVariant payload_var = resp_doc["payload"];
+        if (!payload_buf) continue;
+        JsonVariant payload_var = cmd["payload"];
         if (payload_var.is<const char*>()) {
             strlcpy(payload_buf, payload_var.as<const char*>(), PAY_CAP);
         } else {
             serializeJson(payload_var, payload_buf, PAY_CAP);
         }
-        // TODO: Supabase auth is the trust boundary; device_api_key verification
-        // is a schema-side concern. The schema-fix agent will add a
-        // device_api_key column and validation on claim_settings_command.
-        if (apply_settings_command(cmd_type, payload_buf)) {
+
+        bool applied = apply_settings_command(cmd_type, payload_buf);
+        if (applied) {
             apply_settings_posthook(cmd_type);
-        } else {
-            LOG_PRINT("[CMD] apply failed for %s — skipping posthook\n", cmd_type);
-            free(payload_buf);
-            supabase_http_reset();
-            free(body);
-            free(resp_buf);
-            return;
-        }
-        g_deferred_requests |= 1;  // sync_device_channels
-        if (strcmp(cmd_type, "set_relay") == 0) {
-            uint8_t idx = 0;
-            bool energize = false;
-            if (JsonObject obj = resp_doc["payload"]) {
-                idx = obj["idx"] | 0;
-                LOG_PRINT("[SETTINGS] set_relay idx=%d has_is_energized=%d val=%d\n",
-                    idx, !obj["is_energized"].isNull(), obj["is_energized"].as<int>());
-                if (!obj["is_energized"].isNull()) {
-                    energize = obj["is_energized"].as<bool>();
-                    switch_set(idx, energize);  // toggles GPIO + publishes to Supabase
-                    g_deferred_requests &= ~4; // skip deferred sync (switch_set already published)
-                } else {
-                    g_deferred_relay_idx = idx;
-                    g_deferred_relay_state = get_switch_state(idx);
-                    g_deferred_requests |= 4;  // sync switch state via deferred path
+            g_deferred_requests |= 1;  // sync_device_channels
+
+            // Immediate relay energize/de-energize: set_relay carries
+            // is_energized directly (distinct from the rule-config fields
+            // apply_settings_command already persisted above).
+            if (strcmp(cmd_type, "set_relay") == 0) {
+                if (JsonObject obj = payload_var.as<JsonObject>()) {
+                    uint8_t idx = obj["idx"] | 0;
+                    if (!obj["is_energized"].isNull()) {
+                        bool energize = obj["is_energized"].as<bool>();
+                        switch_set(idx, energize);  // toggles GPIO + publishes state
+                        g_deferred_requests &= ~4;  // switch_set already published
+                    } else {
+                        g_deferred_relay_idx = idx;
+                        g_deferred_relay_state = get_switch_state(idx);
+                        g_deferred_requests |= 4;  // sync switch state via deferred path
+                    }
                 }
             }
+        } else {
+            LOG_PRINT("[CMD] apply failed for %s\n", cmd_type);
         }
-        // Done with the heap-allocated read buffers — release before next tick.
-        supabase_http_reset();
-        free(body);
-        free(resp_buf);
         free(payload_buf);
-    } else {
-        // Read any error body before resetting — stale response data corrupts subsequent requests.
-        // Heap-allocate the 256 B so it doesn't compound with the 1.5 KB+ in the success path.
-        char* err_body = (char*)malloc(256);
-        if (err_body) {
-            size_t err_len = 0;
-            Stream& err_stream = g_supa_http.getStream();
-            unsigned long t0 = millis();
-            while (err_stream.available() && err_len < 255 && millis()-t0 < 1000) {
-                int c = err_stream.read();
-                if (c >= 0) err_body[err_len++] = (char)c;
-            }
-            err_body[err_len] = '\0';
-            free(err_body);
-        }
-        drain_response();
-        supabase_http_reset();
-        static int settings_fail_count = 0;
-        // LOG_PRINT("[SETTINGS] claim failed rc=%d fail_count=%d err_body(%d): %.*s\n", ...);
-        // LOG_PRINT("[SETTINGS] claim failed rc=%d fail_count=%d err_body: (empty)\n", ...);
-        if (++settings_fail_count >= 3) {
-            settings_fail_count = 0;
+
+        // Report the outcome back to the backend so the web UI's command
+        // history reflects reality (the old Supabase path never reported
+        // results — this is new, backend-required behavior).
+        StaticJsonDocument<256> result_doc;
+        result_doc["status"] = applied ? "applied" : "failed";
+        if (!applied) result_doc["error"] = "apply_settings_command failed";
+        char result_buf[256];
+        size_t result_len = serializeJson(result_doc, result_buf);
+        char result_path[64];
+        snprintf(result_path, sizeof(result_path), "/commands/%lld/result", cmd_id);
+        int result_rc = backend_post(result_path, result_buf, result_len, backend_url, device_key, api_key);
+        if (result_rc < 200 || result_rc >= 300) {
+            LOG_PRINT("[CMD] result report failed for id=%lld: HTTP %d\n", cmd_id, result_rc);
         }
     }
 }
