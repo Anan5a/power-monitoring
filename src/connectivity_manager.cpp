@@ -830,77 +830,101 @@ static void write_float(JsonObject obj, const char* key, float v) {
 }
 
 static void serialize_telemetry_core(const TelemetrySnapshot& s, JsonObject root) {
-    root["v"] = s.schema_version;          // schema version (uint8)
-    root["schema"] = s.schema;             // "telemetry_v1"
-
-    // ts: 0 when NTP has never synced, otherwise the epoch seconds from
-    // telemetry_build(). The dashboard distinguishes the two via the
-    // time_source field below; the contract is documented in
-    // docs/API.md and the server treats ts=0 as "data is real but the
-    // wall-clock is not yet trustworthy."
+    // Flat format matching backend ingest.go:
+    //   ts, ts_ms, schema, fw, uptime_ms, rssi, heap_free at top level
+    //   data: map[string]float64 with all channel/switch/battery/log/health values
     root["ts"] = s.ts;
     root["ts_ms"] = s.ts_ms;
+    root["schema"] = s.schema;
+    root["fw"] = s.device.fw;
+    root["uptime_ms"] = s.device.uptime_ms;
+    root["rssi"] = s.wifi.rssi;
+    root["heap_free"] = s.heap_free;
+    root["hw_rev"] = s.hw_rev;
+
+    // time_source: "ntp" when NTP has synced and ts is valid, else "uptime"
     if (s.ts == 0 || !g_ntp_synced) {
         root["time_source"] = "uptime";
     } else {
         root["time_source"] = "ntp";
     }
 
-    JsonObject dev = root["device"].to<JsonObject>();
-    dev["id"] = s.device.id;
-    dev["fw"] = s.device.fw;
-    dev["uptime_ms"] = s.device.uptime_ms;
+    JsonObject data = root["data"].to<JsonObject>();
 
-    JsonObject wifi = root["wifi"].to<JsonObject>();
-    wifi["rssi"] = s.wifi.rssi;
-    wifi["ip"] = s.wifi.ip;
-
-    JsonArray chans = root["channels"].to<JsonArray>();
+    // ── Channels ──────────────────────────────────────────────────────────
     for (uint8_t i = 0; i < s.channel_count; i++) {
         const TelemetryChannel& c = s.channels[i];
-        JsonObject co = chans.add<JsonObject>();
-        co["ch"] = c.ch;
-        write_float(co, "V", c.V);
-        write_float(co, "I", c.I);
-        write_float(co, "P", c.P);
-        write_float(co, "energy_Wh", c.energy_Wh);
-        write_float(co, "charge_mAh", c.charge_mAh);
+        char key[24];
+        snprintf(key, sizeof(key), "ch%u_V", i);
+        write_float(data, key, c.V);
+        snprintf(key, sizeof(key), "ch%u_I", i);
+        write_float(data, key, c.I);
+        snprintf(key, sizeof(key), "ch%u_P", i);
+        write_float(data, key, c.P);
+        snprintf(key, sizeof(key), "ch%u_energy_Wh", i);
+        write_float(data, key, c.energy_Wh);
+        snprintf(key, sizeof(key), "ch%u_charge_mAh", i);
+        write_float(data, key, c.charge_mAh);
     }
 
-    JsonArray sws = root["switches"].to<JsonArray>();
+    // ── Switches ──────────────────────────────────────────────────────────
     for (uint8_t i = 0; i < s.switch_count; i++) {
         const TelemetrySwitch& sw = s.switches[i];
-        JsonObject so = sws.add<JsonObject>();
-        so["idx"] = sw.idx;
-        so["type"] = sw.type;
-        so["state"] = sw.state;
-        so["auto"] = sw.auto_mode;
-        so["rule_tripped"] = sw.rule_tripped;
+        char key[24];
+        snprintf(key, sizeof(key), "sw%u_state", i);
+        data[key] = sw.state ? 1.0f : 0.0f;
+        snprintf(key, sizeof(key), "sw%u_type", i);
+        data[key] = sw.type;
+        snprintf(key, sizeof(key), "sw%u_auto", i);
+        data[key] = sw.auto_mode ? 1.0f : 0.0f;
+        snprintf(key, sizeof(key), "sw%u_rule_tripped", i);
+        data[key] = sw.rule_tripped ? 1.0f : 0.0f;
     }
 
-    JsonArray bats = root["battery"].to<JsonArray>();
+    // ── Batteries ─────────────────────────────────────────────────────────
     for (uint8_t i = 0; i < s.battery_count; i++) {
         const TelemetryBattery& b = s.battery[i];
-        JsonObject bo = bats.add<JsonObject>();
-        bo["ch"] = b.ch;
-        bo["profile_id"] = b.profile_id;
-        bo["chemistry"] = b.chemistry;
-        write_float(bo, "rated_Ah", b.rated_Ah);
-        write_float(bo, "soc_pct", b.soc_pct);
-        write_float(bo, "V", b.V);
-        write_float(bo, "I", b.I);
-        write_float(bo, "cumulative_Ah_in", b.cumulative_Ah_in);
-        write_float(bo, "cumulative_Ah_out", b.cumulative_Ah_out);
-        write_float(bo, "equivalent_full_cycles", b.equivalent_full_cycles);
-        write_float(bo, "soh_pct", b.soh_pct);
-        bo["soh_samples"] = b.soh_samples;
+        char key[32];
+        snprintf(key, sizeof(key), "bat%u_soc_pct", i);
+        write_float(data, key, b.soc_pct);
+        snprintf(key, sizeof(key), "bat%u_V", i);
+        write_float(data, key, b.V);
+        snprintf(key, sizeof(key), "bat%u_I", i);
+        write_float(data, key, b.I);
+        snprintf(key, sizeof(key), "bat%u_cumulative_Ah_in", i);
+        write_float(data, key, b.cumulative_Ah_in);
+        snprintf(key, sizeof(key), "bat%u_cumulative_Ah_out", i);
+        write_float(data, key, b.cumulative_Ah_out);
+        snprintf(key, sizeof(key), "bat%u_equivalent_full_cycles", i);
+        write_float(data, key, b.equivalent_full_cycles);
+        snprintf(key, sizeof(key), "bat%u_soh_pct", i);
+        write_float(data, key, b.soh_pct);
+        snprintf(key, sizeof(key), "bat%u_soh_samples", i);
+        data[key] = b.soh_samples;
     }
 
-    JsonObject log = root["log"].to<JsonObject>();
-    log["entries"] = s.log.entries;
-    log["overflow"] = s.log.overflow;
+    // ── Log metadata ─────────────────────────────────────────────────────
+    data["log_entries"] = s.log.entries;
+    data["log_overflow"] = s.log.overflow ? 1.0f : 0.0f;
 
-    root["heap_free"] = s.heap_free;
+    // ── System health ─────────────────────────────────────────────────────
+    data["min_free_heap"] = (double)s.min_free_heap;
+    data["reset_reason"] = s.reset_reason;
+    data["crash_count"] = (double)s.crash_count;
+    data["safe_mode"] = s.safe_mode ? 1.0f : 0.0f;
+    data["ntp_synced"] = s.ntp_synced ? 1.0f : 0.0f;
+    data["ble_active"] = s.ble_active ? 1.0f : 0.0f;
+    data["ble_connected"] = s.ble_connected ? 1.0f : 0.0f;
+    data["mqtt_connected"] = s.mqtt_connected ? 1.0f : 0.0f;
+    data["http_configured"] = s.http_configured ? 1.0f : 0.0f;
+    data["network_skipped"] = s.network_skipped ? 1.0f : 0.0f;
+    data["sd_present"] = s.sd_present ? 1.0f : 0.0f;
+    data["log_buffer_used_pct"] = s.log_buffer_used_pct;
+    data["sensors_calibrating"] = s.sensors_calibrating ? 1.0f : 0.0f;
+
+    // ── OTA status (numeric subset) ───────────────────────────────────────
+    data["ota_in_progress"] = s.ota.ota_in_progress ? 1.0f : 0.0f;
+    data["ota_progress_pct"] = s.ota.ota_progress_pct;
 }
 
 // Serialize the full snapshot into a caller-provided buffer. Returns the
@@ -1016,291 +1040,6 @@ static void publish_battery_profiles_heartbeat(const char* supabase_url,
 void telemetry_kick_battery_profiles() {
     g_last_profiles_pub_ms = 0;
     g_last_profiles_hash = 0;
-}
-
-static JsonDocument g_supa_doc;
-
-#define LOG_BATCH_SIZE 10
-// send_log_entry / flush_log_batch each construct their own local
-// StaticJsonDocument. The previous static g_log_doc was shared state that
-// every caller had to remember to .clear() — easy to miss, and a corruption
-// source if any path forgets. The local doc costs a small heap frame per
-// call but is bounded (~1 KB) and confined to the single network task.
-static uint8_t g_log_count = 0;
-static uint32_t g_log_last_ts = 0;
-// Count of log entries emitted while NTP was untrusted (recorded_at left to
-// the server default). Surfaced in telemetry so the operator can see how much
-// of the recent history lacks a device-side wall-clock stamp.
-static uint32_t g_log_ts_untrusted_count = 0;
-
-static void flush_log_batch(const char* supabase_url, const char* anon_key,
-    const char* device_key, const char* api_key) {
-    if (g_log_count == 0) return;
-
-    StaticJsonDocument<1024> doc;
-    JsonArray arr = doc.to<JsonArray>();
-
-    // g_log_last_ts == 0 means the entries were captured before NTP synced.
-    // Omit p_recorded_at so the Postgres column default (now()) applies;
-    // stamping 0 stored 1970-01-01 rows and polluted history.
-    bool trusted = (g_log_last_ts != 0);
-    for (uint8_t e = 0; e < g_log_count; e++) {
-        JsonObject elem = arr.add<JsonObject>();
-        elem["p_device_key"] = device_key;
-        elem["p_device_api_key"] = api_key;
-        if (trusted) elem["p_recorded_at"] = g_log_last_ts + e;
-        elem["p_metadata"] = JsonObject();
-    }
-
-    // Heap-allocated buffer to keep the network task's stack frame small.
-    // LOG_BATCH_SIZE entries * ~300 bytes each ≈ 3 KB worst case.
-    size_t needed = serializeJson(doc, nullptr, 0) + 16;
-    uint8_t* buffer = (uint8_t*)malloc(needed);
-    if (!buffer) {
-        LOG_PRINTLN("[LOG] OOM in flush_log_batch — dropping batch");
-        g_log_count = 0;
-        return;
-    }
-    size_t len = serializeJson(doc, buffer, needed);
-    telemetry_post("/rest/v1/rpc/insert_telemetry", (char*)buffer, len, supabase_url, anon_key);
-    free(buffer);
-    g_log_count = 0;
-}
-
-static void send_log_entry(uint32_t timestamp_ms, const int16_t* v, const int16_t* i, const int16_t* p,
-    const char* entry_type, const char* supabase_url, const char* anon_key,
-    const char* device_key, const char* api_key) {
-    if (!is_valid_uuid(api_key)) return;
-
-    // Build a single-row RPC payload with the full sensor data and POST
-    // it immediately. The old code accumulated entries in g_log_count and
-    // called flush_log_batch at LOG_BATCH_SIZE, but flush_log_batch sent
-    // only placeholder rows (device_key + empty metadata) — the actual
-    // sensor data built here was silently dropped. Each entry is ~300
-    // bytes; posting individually is fine for the log drain rate (≤1/s).
-    StaticJsonDocument<1024> doc;
-    JsonArray arr = doc.to<JsonArray>();
-
-    JsonObject elem = arr.add<JsonObject>();
-    elem["p_device_key"] = device_key;
-    elem["p_device_api_key"] = api_key;
-
-    JsonObject payload = elem["p_payload"].to<JsonObject>();
-    payload["source"] = "log";
-    payload["entry_type"] = entry_type;
-    payload["ina3221_v0"] = v[0] / 1000.0f;
-    payload["ina3221_v1"] = v[1] / 1000.0f;
-    payload["ina3221_v2"] = v[2] / 1000.0f;
-    payload["ina3221_i0"] = i[0] / 1000.0f;
-    payload["ina3221_i1"] = i[1] / 1000.0f;
-    payload["ina3221_i2"] = i[2] / 1000.0f;
-    payload["ch0_P"] = (v[0] * i[0]) / 1000000.0f;
-    payload["ch1_P"] = (v[1] * i[1]) / 1000000.0f;
-    payload["ch2_P"] = (v[2] * i[2]) / 1000000.0f;
-#if ENABLE_INA226
-    payload["ina226_v"] = v[3] / 1000.0f;
-    payload["ina226_i"] = i[3] / 1000.0f;
-    payload["ina226_p"] = p[3] / 1.0f;
-    payload["ch3_P"] = p[3] / 1.0f;
-#endif
-    payload["log_entries"] = log_entries_count();
-    payload["log_buffer_kb"] = log_buffer_capacity() / 1024;
-    payload["log_overflow"] = log_has_overflow_file();
-    payload["log_overflow_bytes"] = log_overflow_file_size();
-
-    for (uint8_t ch = 0; ch < 4; ch++) {
-        char key[16];
-        snprintf(key, sizeof(key), "relay%d", ch);
-        payload[key] = get_switch_state(ch);
-    }
-
-    {
-        time_t ts = log_to_epoch(timestamp_ms);
-        if (ts == (time_t)-1) {
-            g_log_last_ts = 0;
-            g_log_ts_untrusted_count++;
-        } else {
-            elem["p_recorded_at"] = (uint32_t)ts;
-            g_log_last_ts = (uint32_t)ts;
-        }
-    }
-
-    // POST immediately — no batching. The old batching path lost data.
-    size_t needed = serializeJson(doc, nullptr, 0) + 16;
-    uint8_t* buf = (uint8_t*)malloc(needed);
-    if (!buf) {
-        LOG_PRINTLN("[LOG] OOM in send_log_entry — dropping entry");
-        return;
-    }
-    size_t len = serializeJson(doc, buf, needed);
-    telemetry_post("/rest/v1/rpc/insert_telemetry", (char*)buf, len,
-                    supabase_url, anon_key);
-    free(buf);
-    g_log_count++;
-}
-
-static size_t decode_and_send_log_entries(const uint8_t* data, size_t len,
-    const char* supabase_url, const char* anon_key,
-    const char* device_key, const char* api_key,
-    int16_t* abs_v, int16_t* abs_i, int16_t* abs_p, uint32_t* abs_ts, bool* have_abs) {
-    size_t offset = 0;
-    while (offset < len) {
-        uint8_t type = data[offset];
-        if (type == ENTRY_BASE) {
-            if (offset + sizeof(BaseEntry) > len) break;
-            BaseEntry e;
-            memcpy(&e, data + offset, sizeof(e));
-            *abs_ts = e.timestamp_ms;
-            for (int ch = 0; ch < 4; ch++) {
-                abs_v[ch] = e.v[ch];
-                abs_i[ch] = e.i[ch];
-                abs_p[ch] = e.p[ch];
-            }
-            *have_abs = true;
-            send_log_entry(*abs_ts, abs_v, abs_i, abs_p, "base",
-                supabase_url, anon_key, device_key, api_key);
-            offset += sizeof(BaseEntry);
-        } else if (type == ENTRY_DELTA) {
-            if (offset + sizeof(DeltaEntry) > len) break;
-            // A delta with no preceding base cannot be reconstructed into
-            // absolute values. Skip the whole DeltaEntry (not 1 byte — that
-            // would desync the rest of the stream by sizeof(DeltaEntry)-1).
-            if (!*have_abs) { offset += sizeof(DeltaEntry); continue; }
-            DeltaEntry e;
-            memcpy(&e, data + offset, sizeof(e));
-            *abs_ts += e.dt_ms;
-            for (int ch = 0; ch < 4; ch++) {
-                abs_v[ch] += e.dv[ch];
-                abs_i[ch] += e.di[ch];
-                abs_p[ch] += e.dp[ch];
-            }
-            send_log_entry(*abs_ts, abs_v, abs_i, abs_p, "delta",
-                supabase_url, anon_key, device_key, api_key);
-            offset += sizeof(DeltaEntry);
-        } else {
-            offset++;
-        }
-    }
-    return offset;
-}
-
-void publish_log_batch_supabase() {
-    if (skip_network) return;
-    static unsigned long last_log_pub_ms = 0;
-    if (millis() - last_log_pub_ms < 1000) return; // rate limit: 1 call per second
-    last_log_pub_ms = millis();
-
-    // 8KB minimum — safe for g_supa_doc (~2KB) + stack buffers in this function
-    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_LOWFREQ) {
-        LOG_PRINTLN("[WARN] Low heap, skipping Supabase log publish");
-        return;
-    }
-    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
-    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
-    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
-    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
-    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
-    if (!is_valid_uuid(api_key)) return;
-
-    // Static state machine: drains entries per call to keep up with 1s sensor rate
-    static enum { ST_RAM, ST_FS, ST_DONE } state = ST_RAM;
-    static int16_t ram_v[4] = {0}, ram_i[4] = {0}, ram_p[4] = {0};
-    static uint32_t ram_ts = 0;
-    static bool ram_have = false;
-    static uint8_t ram_carry[sizeof(BaseEntry)];
-    static size_t ram_carry_len = 0;
-    static int16_t fs_v[4] = {0}, fs_i[4] = {0}, fs_p[4] = {0};
-    static uint32_t fs_ts = 0;
-    static bool fs_have = false;
-    static uint8_t fs_carry[sizeof(BaseEntry)];
-    static size_t fs_carry_len = 0;
-    static bool fs_file_open = false;
-
-    if (state == ST_RAM) {
-        // Drain up to 5 entries per call to outpace 1s sensor arrival rate
-        for (int sent = 0; sent < 5; sent++) {
-            uint8_t chunk[sizeof(BaseEntry)];
-            size_t n = log_pop_batch(chunk, sizeof(chunk));
-            if (n == 0) {
-                state = ST_FS;
-                break;
-            }
-            uint8_t work[sizeof(BaseEntry) * 2];
-            memcpy(work, ram_carry, ram_carry_len);
-            memcpy(work + ram_carry_len, chunk, n);
-            size_t work_len = ram_carry_len + n;
-
-            size_t consumed = decode_and_send_log_entries(work, work_len, supabase_url, anon_key, device_key, api_key,
-                ram_v, ram_i, ram_p, &ram_ts, &ram_have);
-
-            ram_carry_len = work_len - consumed;
-            if (ram_carry_len > 0) {
-                memcpy(ram_carry, work + consumed, ram_carry_len);
-            }
-        }
-        // Immediately transition to FS if RAM drained — no waiting for next tick
-        if (log_entries_count() == 0 && state == ST_RAM) {
-            state = ST_FS;
-        }
-    }
-
-    if (state == ST_FS) {
-        if (!fs_file_open) {
-            if (!log_open_overflow_for_read()) {
-                state = ST_DONE;
-                return;
-            }
-            fs_file_open = true;
-        }
-        // Drain up to 5 FS chunks per call
-        for (int sent = 0; sent < 5; sent++) {
-            uint8_t chunk[512];
-            size_t n = log_read_overflow_chunk(chunk, sizeof(chunk));
-            if (n == 0) {
-                if (fs_carry_len > 0) {
-                    decode_and_send_log_entries(fs_carry, fs_carry_len, supabase_url, anon_key, device_key, api_key,
-                        fs_v, fs_i, fs_p, &fs_ts, &fs_have);
-                    fs_carry_len = 0;
-                }
-                log_close_overflow();
-                fs_file_open = false;
-                state = ST_DONE;
-                break;
-            }
-            uint8_t work[512 + sizeof(BaseEntry)];
-            memcpy(work, fs_carry, fs_carry_len);
-            memcpy(work + fs_carry_len, chunk, n);
-            size_t work_len = fs_carry_len + n;
-
-            size_t consumed = decode_and_send_log_entries(work, work_len, supabase_url, anon_key, device_key, api_key,
-                fs_v, fs_i, fs_p, &fs_ts, &fs_have);
-
-            fs_carry_len = work_len - consumed;
-            if (fs_carry_len > 0) {
-                memcpy(fs_carry, work + consumed, fs_carry_len);
-            }
-        }
-        // Immediately transition to DONE if no more FS data — no waiting for next tick
-        if (state == ST_FS && fs_carry_len == 0 && !log_has_overflow_file()) {
-            state = ST_DONE;
-        }
-    }
-
-    if (state == ST_DONE) {
-        // send_log_entry now POSTs each entry immediately, so there are
-        // no pending entries to flush. g_log_count is just a counter.
-        if (g_log_count > 0) {
-            LOG_PRINT("[LOG] drain complete: %u entries sent\n", (unsigned)g_log_count);
-            g_log_count = 0;
-        }
-        if (log_entries_count() > 0 || log_has_overflow_file()) {
-            state = ST_RAM;
-            ram_have = false;
-            ram_carry_len = 0;
-            fs_have = false;
-            fs_carry_len = 0;
-        }
-    }
 }
 
 static JsonDocument g_pub_doc;
@@ -1430,102 +1169,19 @@ void publish_data(const SensorSnapshot& data, const TelemetrySnapshot& snap) {
         LOG_PRINTLN("[BLE] telemetry subset overflow — notify dropped (MTU too small for full payload)");
     }
     vTaskDelay(pdMS_TO_TICKS(25));  // space out notifies — avoids BLE stack crowding / UX jitter
-}
 
-void publish_data_supabase(const SensorSnapshot& data) {
-    if (skip_network) return;
-    // Build once and delegate so the Supabase path shares the same
-    // TelemetrySnapshot as the MQTT/HTTP/BLE path (see publish_data(data,snap)).
-    TelemetrySnapshot snap;
-    telemetry_build(snap);
-    publish_data_supabase(data, snap);
-}
-
-void publish_data_supabase(const SensorSnapshot& data, const TelemetrySnapshot& snap) {
-    (void)data;
-    if (skip_network) return;
-    if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_PUBLISH) {
-        static unsigned long last_warn = 0;
-        if (millis() - last_warn > 10000) {
-            LOG_PRINT("[WARN] Low heap (%d / largest=%d), skipping Supabase publish\n",
-                ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-            last_warn = millis();
-        }
-        return;
+    // Legacy Supabase side syncs with no backend-native replacement yet:
+    // battery-profile heartbeat and live calibration-progress. Both used to
+    // run inside the now-removed publish_data_supabase(); keep them firing
+    // for any device that still has Supabase configured so the dashboard
+    // doesn't lose these two views. publish_calibration_status() loads its
+    // own credentials and no-ops when nothing is configured or no
+    // calibration is active.
+    char supabase_url[128], supabase_anon_key[128];
+    if (settings_load_supabase_url(supabase_url, sizeof(supabase_url)) &&
+        settings_load_supabase_anon_key(supabase_anon_key, sizeof(supabase_anon_key))) {
+        publish_battery_profiles_heartbeat(supabase_url, supabase_anon_key);
     }
-
-    // The current path publishes one canonical TelemetrySnapshot per call —
-    // the legacy batching buffer (g_batch[]) and the `if (g_batch_count < 1)
-    // return;` dead-storage check were removed. The SensorSnapshot argument
-    // is accepted for caller compatibility (main.cpp pushes a 1Hz queue
-    // entry) but telemetry_build() pulls fresh data from sensor_manager /
-    // counters / NVS at the moment of publish, which is the right semantic
-    // for a 5-s publish tick.
-
-    char supabase_url[128], anon_key[128], device_key[64], api_key[64];
-    if (!settings_load_supabase_url(supabase_url, sizeof(supabase_url))) return;
-    if (!settings_load_supabase_anon_key(anon_key, sizeof(anon_key))) return;
-    if (!settings_load_supabase_device_key(device_key, sizeof(device_key))) return;
-    if (!settings_load_supabase_api_key(api_key, sizeof(api_key))) return;
-    if (!is_valid_uuid(api_key)) {
-        LOG_PRINTLN("[WARN] device_api_key is not a valid UUID — skip Supabase publish");
-        return;
-    }
-
-    // Build the canonical snapshot once and serialize it.
-    // (snap is provided by the caller — publish_data_supabase(data) — so the
-    // MQTT/HTTP/BLE and Supabase paths share one TelemetrySnapshot.)
-
-    // Wrap it in the Supabase RPC envelope: array of {p_device_key,
-    // p_device_api_key, p_payload, p_recorded_at}. One row per call keeps the
-    // server-side insert trivial.
-    g_supa_doc.clear();
-    JsonArray arr = g_supa_doc.to<JsonArray>();
-    JsonObject elem = arr.add<JsonObject>();
-    elem["p_device_key"] = device_key;
-    elem["p_device_api_key"] = api_key;
-    JsonObject payload = elem["p_payload"].to<JsonObject>();
-    serialize_telemetry_core(snap, payload);
-    elem["p_recorded_at"] = snap.ts;
-
-#if CORE_DEBUG_LEVEL >= 3
-    LOG_PRINT("[TELEM/SUPA] v=%u ts=%u %u bytes (heap=%u)\n",
-        snap.schema_version, snap.ts,
-        (unsigned)serializeJson(g_supa_doc, nullptr, 0), ESP.getFreeHeap());
-#endif
-
-    // Heap-allocated buffer to keep this function's stack frame small.
-    size_t needed = serializeJson(g_supa_doc, nullptr, 0) + 16;
-    if (needed > 16384) {
-        LOG_PRINT("[SUPA] payload too large: %u bytes — dropping\n", (unsigned)needed);
-        return;
-    }
-    char* buffer = (char*)malloc(needed);
-    if (!buffer) {
-        LOG_PRINTLN("[SUPA] OOM serializing telemetry — dropping publish");
-        return;
-    }
-    size_t len = serializeJson(g_supa_doc, buffer, needed);
-
-    int rc = telemetry_post("/rest/v1/rpc/insert_telemetry", buffer, len, supabase_url, anon_key);
-    if (rc == 200 || rc == 201 || rc == 204) {
-        // Live snapshot published. Do NOT close the LittleFS overflow file
-        // here: this RPC carries the current reading, not the backlog that was
-        // spilled while offline. The backlog is drained and the file closed by
-        // publish_log_batch_supabase(); deleting it here would destroy
-        // undrained historical data the moment connectivity returns.
-    } else {
-        print_http_error(g_supa_http, rc);
-        if (rc == 400) {
-            LOG_PRINTLN("Payload preview: ");
-            LOG_PRINTLN(buffer);
-        }
-    }
-    free(buffer);
-
-    // Slow path: battery profile heartbeat (60s) and eager on change.
-    publish_battery_profiles_heartbeat(supabase_url, anon_key);
-
     publish_calibration_status();
 }
 
